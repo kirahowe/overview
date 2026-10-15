@@ -1,0 +1,654 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"overview/internal/fleet"
+)
+
+// The palette is revdiff's default theme: a warm amber accent on the
+// terminal's own background.
+var (
+	accent   = lipgloss.Color("#D5895F")
+	border   = lipgloss.Color("#585858")
+	normal   = lipgloss.Color("#d0d0d0")
+	muted    = lipgloss.Color("#8a8a8a")
+	selFg    = lipgloss.Color("#ffffaf")
+	dimSelBg = lipgloss.Color("#3a3a3a")
+	statusFg = lipgloss.Color("#202020")
+	statusBg = lipgloss.Color("#C5794F")
+	addFg    = lipgloss.Color("#87d787")
+	removeFg = lipgloss.Color("#ff8787")
+	modifyFg = lipgloss.Color("#f5c542")
+)
+
+var (
+	fg      = func(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
+	bold    = lipgloss.NewStyle().Bold(true)
+	dim     = fg(muted)
+	italic  = lipgloss.NewStyle().Italic(true).Foreground(normal)
+	red     = fg(removeFg).Bold(true)
+	amber   = fg(modifyFg).Bold(true)
+	green   = fg(addFg)
+	heading = fg(accent).Bold(true)
+	codeFg  = fg(lipgloss.Color("#e5c07b"))
+)
+
+var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func pill(text string, bg lipgloss.Color) string {
+	return lipgloss.NewStyle().Background(bg).Foreground(statusFg).Bold(true).Padding(0, 1).Render(text)
+}
+
+// Layout. Every pane is a box with a one-cell border and a one-cell margin
+// inside it, and the status bar takes the last line.
+
+func (m model) boxHeight() int { return max(m.h-1, 3) }
+
+func (m model) innerHeight() int { return m.boxHeight() - 2 }
+
+// split returns the outer widths and heights of the list and detail boxes.
+// A narrow terminal stacks them.
+func (m model) split() (lw, lh, dw, dh int) {
+	h := m.boxHeight()
+	if m.w < 90 {
+		top := h / 2
+		return m.w, top, m.w, h - top
+	}
+	lw = max(38, min(m.w*2/5, 62))
+	return lw, h, m.w - lw, h
+}
+
+// detailSize is the content area of the detail box.
+func (m model) detailSize() (w, h int) {
+	_, _, dw, dh := m.split()
+	return dw - 4, dh - 2
+}
+
+func (m model) View() string {
+	if m.w == 0 {
+		return ""
+	}
+	var screen []string
+	if m.screen == digestScreen {
+		screen = m.digestView()
+	} else {
+		screen = m.sessionsView()
+	}
+	screen = pad(screen, m.boxHeight())
+	switch {
+	case m.help:
+		screen = centre(screen, m.helpBox(), m.w)
+	case m.confirm != "":
+		screen = centre(screen, m.confirmBox(), m.w)
+	}
+	return strings.Join(append(screen, m.statusBar()), "\n")
+}
+
+func (m model) sessionsView() []string {
+	rows := m.ordered()
+	row, _, ok := m.selected(rows)
+	lw, lh, dw, dh := m.split()
+
+	listInfo := ""
+	if m.filter != "" || m.filtering {
+		listInfo = fmt.Sprintf("/%s · %d", m.filter, len(rows))
+	}
+	list := box("sessions", listInfo, m.listLines(rows, row.SessionID, lw-4, lh-2), lw, lh, m.focus == listPane)
+
+	var detail []string
+	title, info := "detail", ""
+	if ok {
+		title = row.Name
+		cw, ch := m.detailSize()
+		lines := m.detail(row, cw)
+		start := max(0, min(m.scroll, len(lines)-ch))
+		if len(lines) > ch {
+			info = fmt.Sprintf("%d–%d of %d", start+1, min(start+ch, len(lines)), len(lines))
+		}
+		detail = lines[start:min(start+ch, len(lines))]
+	}
+	detailBox := box(title, info, detail, dw, dh, m.focus == detailPane)
+
+	if lw == m.w {
+		return append(list, detailBox...)
+	}
+	out := make([]string, len(list))
+	for i := range out {
+		out[i] = list[i] + detailBox[i]
+	}
+	return out
+}
+
+// box draws a bordered pane with the title set into its top edge and an
+// optional note in its bottom edge. The focused pane gets the accent colour.
+func box(title, info string, body []string, w, h int, focused bool) []string {
+	edge, name := fg(border), lipgloss.NewStyle().Foreground(normal)
+	if focused {
+		edge, name = fg(accent), heading
+	}
+	inner := w - 2
+	title = ansi.Truncate(title, max(inner-4, 1), "…")
+	top := edge.Render("┌─ ") + name.Render(title) + " "
+	top += edge.Render(strings.Repeat("─", max(inner-ansi.StringWidth(title)-3, 0)) + "┐")
+
+	bottom := edge.Render("└" + strings.Repeat("─", inner) + "┘")
+	if info != "" {
+		info = ansi.Truncate(info, max(inner-4, 1), "…")
+		bottom = edge.Render("└"+strings.Repeat("─", max(inner-ansi.StringWidth(info)-3, 0))) +
+			" " + dim.Render(info) + " " + edge.Render("─┘")
+	}
+
+	out := []string{top}
+	for i := 0; i < h-2; i++ {
+		line := ""
+		if i < len(body) {
+			line = body[i]
+		}
+		out = append(out, edge.Render("│")+" "+fit(line, inner-2)+" "+edge.Render("│"))
+	}
+	return append(out, bottom)
+}
+
+// listLines renders the grouped list and scrolls it so the cursor stays in
+// view.
+func (m model) listLines(rows []fleet.Row, sel string, w, h int) []string {
+	if !m.loaded {
+		return []string{dim.Render("reading sessions…")}
+	}
+	var lines []string
+	if m.rowsErr != nil {
+		lines = append(lines, red.Render(m.rowsErr.Error()), "")
+	}
+	if len(rows) == 0 {
+		msg := "no sessions running"
+		if m.filter != "" {
+			msg = "nothing matches /" + m.filter
+		}
+		return append(lines, dim.Render(msg))
+	}
+	counts := map[int]int{}
+	for _, r := range rows {
+		counts[group(r)]++
+	}
+	names := []string{"needs you", "working", "idle"}
+	styles := []lipgloss.Style{red, green.Bold(true), dim.Bold(true)}
+	selTop, selBottom, last := 0, 0, -1
+	for _, r := range rows {
+		if g := group(r); g != last {
+			if last != -1 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, styles[g].Render(names[g])+dim.Render(fmt.Sprintf(" %d", counts[g])))
+			last = g
+		}
+		if r.SessionID == sel {
+			selTop = len(lines)
+		}
+		lines = append(lines, m.rowLines(r, w, r.SessionID == sel)...)
+		if r.SessionID == sel {
+			selBottom = len(lines)
+		}
+	}
+	top := 0
+	if selBottom > h {
+		top = selBottom - h
+	}
+	return lines[min(top, selTop):]
+}
+
+// rowLines renders one session as two lines: name, place and age, then what
+// it is about. The selected row is a solid bar, which needs plain text
+// underneath, since every inner colour would reset its background.
+func (m model) rowLines(r fleet.Row, w int, selected bool) []string {
+	mark, when, sub := "○", Ago(r.Since), Subject(r)
+	style := dim
+	switch {
+	case r.State == fleet.Blocked:
+		mark, when, style = "!", "waiting "+Ago(r.Since), red
+		if sub == "" {
+			sub = "blocked"
+		}
+	case r.Asking():
+		mark, when, style = "?", "waiting "+Ago(r.LastReplyAt), amber
+		sub = question(r.LastReply)
+	case r.State == fleet.Working:
+		mark, style = spinner[m.frame%len(spinner)], green
+	}
+	right := project(r) + " · " + when
+	name := ansi.Truncate(r.Name, max(w-ansi.StringWidth(right)-4, 4), "…")
+	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
+
+	if selected {
+		bg := dimSelBg
+		if m.focus == listPane {
+			bg = accent
+		}
+		bar := lipgloss.NewStyle().Background(bg).Foreground(selFg).Bold(true)
+		return []string{
+			bar.Render(fit(mark+" "+name+gap+right, w)),
+			bar.Bold(false).Render(fit("  "+sub, w)),
+		}
+	}
+	line := style.Render(mark) + " " + fg(normal).Render(name) + gap + dim.Render(project(r)+" · ") + style.Render(when)
+	subStyle := dim
+	if r.NeedsYou() {
+		subStyle = style.Bold(false)
+	}
+	return []string{line, "  " + subStyle.Render(sub)}
+}
+
+// project is the short directory a session runs in, for the list.
+func project(r fleet.Row) string {
+	if user, _ := os.UserHomeDir(); r.Cwd == user {
+		return "~"
+	}
+	return fleet.ShortDir(r.Cwd)
+}
+
+type detailCache struct {
+	key   string
+	lines []string
+}
+
+// detail returns the detail pane's lines for a row, rebuilt only when
+// something it shows has changed.
+func (m model) detail(r fleet.Row, w int) []string {
+	var mod time.Time
+	if info, err := os.Stat(r.Transcript); err == nil {
+		mod = info.ModTime()
+	}
+	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], mod)
+	if m.cache != nil && m.cache.key == key {
+		return m.cache.lines
+	}
+	lines := m.detailLines(r, w)
+	if m.cache != nil {
+		m.cache.key, m.cache.lines = key, lines
+	}
+	return lines
+}
+
+// detailLines renders everything known about one session: where it is, what
+// it is waiting on, and its last few turns.
+func (m model) detailLines(r fleet.Row, w int) []string {
+	var out []string
+	add := func(s string) { out = append(out, wrap(s, w)...) }
+
+	var state string
+	switch {
+	case r.State == fleet.Blocked:
+		state = pill("blocked "+Ago(r.Since), removeFg)
+	case r.Asking():
+		state = pill("asking "+Ago(r.LastReplyAt), modifyFg)
+	case r.State == fleet.Working:
+		state = pill("working "+Ago(r.Since), addFg)
+	default:
+		state = pill("idle "+Ago(r.Since), muted)
+	}
+	kind := "interactive"
+	if r.Background() {
+		kind = "background " + r.ID
+	} else if tty := m.ttys[r.PID]; tty != "" {
+		kind += " · " + tty
+	}
+	add(state + "  " + dim.Render(kind))
+	out = append(out, "")
+
+	meta := []string{fleet.ShortDir(r.Cwd)}
+	if r.Label != "" {
+		meta = append(meta, r.Label)
+	}
+	meta = append(meta, "started "+Ago(time.UnixMilli(r.StartedAt))+" ago")
+	if !r.Hooked {
+		meta = append(meta, "no hook")
+	}
+	if r.Title != "" {
+		add(italic.Render(r.Title))
+	}
+	add(dim.Render(strings.Join(meta, " · ")))
+
+	callout := func(style lipgloss.Style, label, text string) {
+		out = append(out, "")
+		bar := style.Render("▌ ")
+		out = append(out, bar+style.Render(label))
+		for _, l := range wrap(text, w-2) {
+			out = append(out, bar+l)
+		}
+	}
+	switch {
+	case r.State == fleet.Blocked:
+		reason := r.Reason
+		if reason == "" {
+			reason = "Claude Code marks it as waiting on you. Attach to see what for."
+		}
+		callout(red, "blocked", reason)
+	case r.Asking():
+		callout(amber, "asking you", question(r.LastReply))
+	}
+
+	turns := fleet.RecentTurns(r.Transcript, recentTurns)
+	if len(turns) == 0 {
+		if r.LastPrompt != "" {
+			out = append(out, "", rule("last prompt", w))
+			add(heading.Render("› ") + r.LastPrompt)
+		}
+		return out
+	}
+	out = append(out, "", rule(fmt.Sprintf("last %d turns", len(turns)), w))
+	for i, t := range turns {
+		out = append(out, "")
+		prompt := wrap(heading.Render("› ")+bold.Foreground(normal).Render(oneLine(t.Prompt)), w)
+		if len(prompt) > 3 {
+			prompt = append(prompt[:3], dim.Render("  …"))
+		}
+		out = append(out, prompt...)
+		if t.Reply == "" {
+			out = append(out, dim.Render("  no reply yet"))
+			continue
+		}
+		lines := wrap(styleMarkdown(t.Reply), w)
+		// Earlier turns are context. Only the last one is shown in full.
+		if i < len(turns)-1 && len(lines) > 8 {
+			lines = append(lines[:8], dim.Render(fmt.Sprintf("  … %d more lines", len(lines)-8)))
+		}
+		out = append(out, lines...)
+	}
+	return out
+}
+
+// rule is a labelled divider: "── label ──────".
+func rule(label string, w int) string {
+	return fg(border).Render("── ") + heading.Render(label) + " " +
+		fg(border).Render(strings.Repeat("─", max(w-ansi.StringWidth(label)-4, 0)))
+}
+
+// clampScroll keeps the detail scroll inside its content, so scrolling back
+// up after overshooting the end responds at once.
+func (m model) clampScroll() int {
+	row, _, ok := m.selected(m.ordered())
+	if !ok {
+		return 0
+	}
+	w, h := m.detailSize()
+	return max(0, min(m.scroll, len(m.detail(row, w))-h))
+}
+
+func (m model) digestLines() []string {
+	if m.digest == "" {
+		return []string{dim.Render("No digest yet. Press D to write one, or start the orchestrator.")}
+	}
+	return wrap(styleDigest(m.digest), min(m.w-4, 100))
+}
+
+func (m model) digestView() []string {
+	lines := m.digestLines()
+	h := m.innerHeight()
+	start := max(0, min(m.digestScroll, len(lines)-h))
+	info := "none yet"
+	if len(m.digests) > 0 {
+		info = fmt.Sprintf("%s · %d of %d", m.digestAt.Format("Mon 15:04"), m.digestIdx+1, len(m.digests))
+	}
+	return box("digest", info, lines[start:min(start+h, len(lines))], m.w, m.boxHeight(), true)
+}
+
+// Overlays.
+
+func (m model) helpBox() []string {
+	type entry struct{ keys, what string }
+	section := func(title string, es ...entry) []string {
+		out := []string{heading.Render(title)}
+		for _, e := range es {
+			out = append(out, "  "+fg(accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(normal).Render(e.what))
+		}
+		return append(out, "")
+	}
+	left := append(section("sessions",
+		entry{"j k", "move"},
+		entry{"n N", "next / previous waiting"},
+		entry{"g G", "first / last"},
+		entry{"/", "filter, esc clears"},
+		entry{"tab l h", "switch pane"},
+	), section("act",
+		entry{"enter a", "attach (background)"},
+		entry{"x", "stop (background)"},
+		entry{"y", "copy attach command"},
+	)...)
+	right := append(section("detail",
+		entry{"J K", "scroll"},
+		entry{"ctrl+d u", "half page"},
+	), section("digest",
+		entry{"d", "show / hide digests"},
+		entry{"[ ]", "older / newer"},
+		entry{"D", "write one now"},
+	)...)
+	right = append(right, section("general",
+		entry{"r", "refresh"},
+		entry{"?", "this help"},
+		entry{"q", "quit"},
+	)...)
+	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
+		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle")
+
+	const col = 40
+	var body []string
+	for i := 0; i < max(len(left), len(right)); i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		body = append(body, fit(l, col)+r)
+	}
+	body = append(body, legend)
+	w := min(m.w-4, 2*col+6)
+	return box("keys", "esc closes", body, w, min(len(body)+2, m.boxHeight()), true)
+}
+
+func (m model) confirmBox() []string {
+	name := m.confirm
+	for _, r := range m.rows {
+		if r.SessionID == m.confirm {
+			name = r.Name
+		}
+	}
+	w := min(m.w-4, 56)
+	body := []string{bold.Foreground(normal).Render("Stop " + name + "?")}
+	body = append(body, wrap(dim.Render("Its conversation is kept, and claude attach brings it back."), w-4)...)
+	body = append(body, "", red.Render("y")+dim.Render(" stop   ")+dim.Render("any other key cancels"))
+	return box("stop session", "", body, w, len(body)+2, true)
+}
+
+// centre draws an overlay in the middle of the screen.
+func centre(screen, over []string, w int) []string {
+	ow := 0
+	for _, l := range over {
+		ow = max(ow, ansi.StringWidth(l))
+	}
+	x, y := max((w-ow)/2, 0), max((len(screen)-len(over))/2, 0)
+	out := append([]string(nil), screen...)
+	for i, l := range over {
+		if y+i >= len(out) {
+			break
+		}
+		bg := out[y+i]
+		out[y+i] = ansi.Truncate(bg, x, "") + "\x1b[0m" + l + "\x1b[0m" + ansi.TruncateLeft(bg, x+ansi.StringWidth(l), "")
+	}
+	return out
+}
+
+func (m model) statusBar() string {
+	base := lipgloss.NewStyle().Background(statusBg).Foreground(statusFg)
+	strong := base.Bold(true)
+
+	var left []string
+	switch {
+	case m.filtering:
+		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter keeps · esc clears")}
+	case m.note != "":
+		left = []string{strong.Render(m.note)}
+	default:
+		count := map[int]int{}
+		for _, r := range m.rows {
+			if r.Name != fleet.OrchestratorName {
+				count[group(r)]++
+			}
+		}
+		if c := count[0]; c > 0 {
+			left = append(left, strong.Render(fmt.Sprintf("%d need you", c)))
+		}
+		if c := count[1]; c > 0 {
+			left = append(left, base.Render(fmt.Sprintf("%d working", c)))
+		}
+		left = append(left, base.Render(fmt.Sprintf("%d idle", count[2])))
+		if m.loaded && m.rowsErr == nil {
+			switch h := m.home.HealthOf(m.rows); {
+			case !h.Running:
+				left = append(left, strong.Render("orchestrator off"))
+			case h.Stale:
+				left = append(left, strong.Render("orchestrator silent "+Ago(h.LastCheck)))
+			case m.digesting:
+				left = append(left, base.Render("writing a digest…"))
+			}
+		}
+	}
+	sep := base.Render(" │ ")
+	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
+
+	keys := "↵ attach · n next · d digest · ? help "
+	if m.screen == digestScreen {
+		keys = "[ ] older/newer · D write · d sessions · ? help "
+	}
+	r := base.Render(keys)
+	gap := m.w - ansi.StringWidth(l) - ansi.StringWidth(r)
+	if gap < 1 {
+		return fit(l, m.w)
+	}
+	return l + base.Render(strings.Repeat(" ", gap)) + r
+}
+
+// Text helpers.
+
+// fit cuts s to w cells and pads it to exactly w, so panes line up.
+func fit(s string, w int) string {
+	s = ansi.Truncate(s, w, "…")
+	return s + strings.Repeat(" ", max(w-ansi.StringWidth(s), 0))
+}
+
+func pad(lines []string, h int) []string {
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lines[:h]
+}
+
+func wrap(s string, w int) []string {
+	if w <= 0 {
+		return nil
+	}
+	return strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n")
+}
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// question pulls the asking part out of a reply: its last paragraph.
+func question(reply string) string {
+	paras := strings.Split(strings.TrimSpace(reply), "\n\n")
+	return oneLine(paras[len(paras)-1])
+}
+
+// Subject is the one line that says what a session is about: why it is
+// blocked, or else its title and last prompt.
+func Subject(r fleet.Row) string {
+	var s string
+	switch {
+	case r.Reason != "":
+		s = r.Reason
+	case r.Title != "" && r.LastPrompt != "":
+		s = r.Title + ": " + r.LastPrompt
+	default:
+		s = r.Title + r.LastPrompt
+	}
+	if r.Label != "" {
+		s = "[" + r.Label + "] " + s
+	}
+	return s
+}
+
+// Ago renders how long ago t was, in one unit.
+func Ago(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+var (
+	strong     = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	inlineCode = regexp.MustCompile("`([^`]+)`")
+)
+
+// styleMarkdown renders the little Markdown that replies lean on: headings,
+// bold, inline code and bullets. Fenced code is coloured rather than parsed.
+func styleMarkdown(md string) string {
+	text := fg(normal)
+	lines := strings.Split(strings.TrimSpace(md), "\n")
+	fenced := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			fenced = !fenced
+			lines[i] = dim.Render(l)
+			continue
+		}
+		if fenced {
+			lines[i] = codeFg.Render(l)
+			continue
+		}
+		t := strings.TrimLeft(l, " ")
+		indent := l[:len(l)-len(t)]
+		switch {
+		case strings.HasPrefix(t, "#"):
+			lines[i] = heading.Render(strings.TrimLeft(t, "# "))
+			continue
+		case strings.HasPrefix(t, "- "), strings.HasPrefix(t, "* "):
+			t = fg(accent).Render("•") + " " + t[2:]
+		}
+		t = strong.ReplaceAllStringFunc(t, func(s string) string { return bold.Foreground(normal).Render(s[2 : len(s)-2]) })
+		t = inlineCode.ReplaceAllStringFunc(t, func(s string) string { return codeFg.Render(s[1 : len(s)-1]) })
+		lines[i] = indent + text.Render(t)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// styleDigest renders a digest: the shared Markdown, with the section that
+// needs attention in red.
+func styleDigest(md string) string {
+	lines := strings.Split(strings.TrimSpace(md), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "## Needs") {
+			lines[i] = red.Render(strings.TrimPrefix(l, "## "))
+		} else {
+			lines[i] = styleMarkdown(l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}

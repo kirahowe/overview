@@ -46,8 +46,9 @@ runs, what it is waiting on, and its last few turns from the transcript.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, `enter`
 attaches to a background session, `x` stops one (it asks first), `y` copies
-the attach command, and `/` filters. `tab` switches to the digests, where `[`
-and `]` step through older ones and `D` writes a new one. `?` lists every key.
+the attach command, and `/` filters. `tab` moves between the two panes. `d`
+shows the digests, where `[` and `]` step through older ones and `D` writes a
+new one. `?` lists every key.
 
 Interactive sessions run in someone's terminal, so the view cannot attach to
 them. It shows the tty they run in instead.
