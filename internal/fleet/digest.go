@@ -249,3 +249,10 @@ func readTime(path string) time.Time {
 }
 
 func (h Home) saveCursor(t time.Time) error { return writeTime(h.cursorFile(), t) }
+
+// DigestFiles lists the digests on disk, oldest first.
+func (h Home) DigestFiles() []string {
+	files, _ := filepath.Glob(filepath.Join(h.digestsDir(), "*.md"))
+	sort.Strings(files)
+	return files
+}

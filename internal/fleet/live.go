@@ -6,19 +6,30 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 )
 
 // Live is one running session as Claude Code itself lists it.
 type Live struct {
-	PID       int    `json:"pid"`
+	PID int `json:"pid"`
+	// ID is the short id that attach, logs and stop take. Only background
+	// sessions have one.
+	ID        string `json:"id"`
 	Cwd       string `json:"cwd"`
 	Kind      string `json:"kind"`
 	StartedAt int64  `json:"startedAt"`
 	SessionID string `json:"sessionId"`
 	Name      string `json:"name"`
 	Status    string `json:"status"`
+	// BgState is Claude Code's own working, blocked or idle for a background
+	// session. Interactive sessions leave it empty.
+	BgState string `json:"state"`
 }
+
+// Background reports whether the session runs detached, which is what lets
+// the view attach to it or stop it.
+func (l Live) Background() bool { return l.Kind == "background" }
 
 func claudeBin() string {
 	if b := os.Getenv("OVERVIEW_CLAUDE"); b != "" {
@@ -59,6 +70,11 @@ type Row struct {
 	Label      string
 	Title      string
 	LastPrompt string
+	// LastReply is the last thing the session said, empty while it works on
+	// a prompt it has not answered yet.
+	LastReply   string
+	LastReplyAt time.Time
+	Transcript  string
 	// Hooked is false for a session that has not reported through the hook,
 	// which leaves only Claude Code's own busy or idle to go on.
 	Hooked bool
@@ -82,8 +98,10 @@ func (h Home) Rows() ([]Row, error) {
 		if path == "" {
 			path = h.FindTranscript(l.SessionID)
 		}
+		r.Transcript = path
 		if meta, ok := transcriptMeta(path); ok {
 			r.Title = meta.Title
+			r.LastReply, r.LastReplyAt = meta.LastReply, meta.ReplyAt
 			if r.LastPrompt == "" {
 				r.LastPrompt = meta.LastPrompt
 			}
@@ -114,6 +132,8 @@ func liveState(l Live, rec Session) (State, time.Time, string) {
 	switch {
 	case rec.State == Blocked:
 		return Blocked, rec.Since, rec.Reason
+	case l.BgState == "blocked":
+		return Blocked, time.Time{}, ""
 	case busy && rec.State == Working:
 		return Working, rec.Since, ""
 	case busy:
@@ -124,3 +144,28 @@ func liveState(l Live, rec Session) (State, time.Time, string) {
 		return Idle, time.Time{}, ""
 	}
 }
+
+// Asking reports whether an idle session ended its last reply with a
+// question, which means it is waiting on an answer rather than done.
+func (r Row) Asking() bool {
+	if r.State != Idle {
+		return false
+	}
+	reply := strings.TrimRight(r.LastReply, " \n\t*_`)")
+	return strings.HasSuffix(reply, "?")
+}
+
+// NeedsYou is true for a session that cannot go on without its owner.
+func (r Row) NeedsYou() bool { return r.State == Blocked || r.Asking() }
+
+// AttachCmd opens a background session in the terminal. The session is
+// resumed in place if it had stopped, so it keeps the hook: the command gets
+// none of the OVERVIEW_SKIP that overview's own runs carry.
+func (h Home) AttachCmd(l Live) *exec.Cmd {
+	cmd := exec.Command(claudeBin(), "attach", l.ID)
+	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h))
+	return cmd
+}
+
+// Stop stops a background session. Its conversation is kept.
+func (h Home) Stop(l Live) error { return h.stopSession(l) }

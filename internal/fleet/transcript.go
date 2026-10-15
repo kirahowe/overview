@@ -83,6 +83,8 @@ func (h Home) FindTranscript(sessionID string) string {
 type meta struct {
 	Title      string
 	LastPrompt string
+	LastReply  string
+	ReplyAt    time.Time
 	Modified   time.Time
 }
 
@@ -119,6 +121,17 @@ func transcriptMeta(path string) (meta, bool) {
 			m.Title = e.AiTitle
 		case "last-prompt":
 			m.LastPrompt = clip(e.LastPrompt, 300)
+		}
+		if e.IsSidechain || e.IsMeta {
+			return
+		}
+		// A new prompt makes the reply before it stale.
+		switch t := e.text(); {
+		case t == "":
+		case e.Type == "user":
+			m.LastReply, m.ReplyAt = "", time.Time{}
+		case e.Type == "assistant":
+			m.LastReply, m.ReplyAt = t, e.Timestamp
 		}
 	})
 	metaCache.Store(path, m)
@@ -198,3 +211,31 @@ func (h Home) Threads(since time.Time) []Thread {
 	sortThreads(out)
 	return out
 }
+
+type turnsCache struct {
+	modified time.Time
+	turns    []Turn
+}
+
+var recentCache sync.Map // path -> turnsCache
+
+// RecentTurns returns up to n of the last turns in a transcript, oldest
+// first. The view asks again every refresh, so the result is reused until the
+// file changes.
+func RecentTurns(path string, n int) []Turn {
+	info, err := os.Stat(path)
+	if path == "" || err != nil {
+		return nil
+	}
+	if c, ok := recentCache.Load(path); ok && c.(turnsCache).modified.Equal(info.ModTime()) {
+		return lastN(c.(turnsCache).turns, n)
+	}
+	th, err := readThread(path, time.Time{})
+	if err != nil {
+		return nil
+	}
+	recentCache.Store(path, turnsCache{info.ModTime(), th.Turns})
+	return lastN(th.Turns, n)
+}
+
+func lastN(ts []Turn, n int) []Turn { return ts[max(len(ts)-n, 0):] }

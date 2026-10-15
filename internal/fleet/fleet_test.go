@@ -118,8 +118,11 @@ func TestReadThreadKeepsOnlyTurnsInTheWindow(t *testing.T) {
 	}
 
 	m, ok := transcriptMeta(path)
-	if !ok || m.Title != "Add a test" || m.LastPrompt != "add a test" {
+	if !ok || m.Title != "Add a test" || m.LastPrompt != "add a test" || m.LastReply != "Test added and passing." {
 		t.Fatalf("unexpected meta: %+v", m)
+	}
+	if turns := RecentTurns(path, 5); len(turns) != 2 || turns[0].Prompt != "old prompt" {
+		t.Fatalf("unexpected recent turns: %+v", turns)
 	}
 
 	out := extract([]Thread{th}, []Row{{Live: Live{SessionID: "sess1234", Name: "app-1a"}, State: Blocked, Reason: "needs permission"}}, since, since.Add(2*time.Hour))
@@ -233,5 +236,25 @@ func TestHealthTellsASilentOrchestratorFromAHealthyOne(t *testing.T) {
 	args, _ := home.orchestratorArgs(time.Hour, "sonnet", "abc-1")
 	if j := strings.Join(args, " "); !strings.Contains(j, "--bg --resume abc-1") || !strings.Contains(j, "erased your tick schedule") {
 		t.Fatalf("resume command line: %s", j)
+	}
+}
+
+func TestNeedsYou(t *testing.T) {
+	for _, c := range []struct {
+		row  Row
+		want bool
+	}{
+		{Row{State: Blocked}, true},
+		{Row{State: Idle, LastReply: "Done. Should I push it?"}, true},
+		{Row{State: Idle, LastReply: "Want me to **commit**?**"}, true},
+		{Row{State: Idle, LastReply: "Committed and pushed."}, false},
+		{Row{State: Working, LastReply: "Should I push it?"}, false},
+	} {
+		if got := c.row.NeedsYou(); got != c.want {
+			t.Errorf("%+v: NeedsYou() = %v, want %v", c.row, got, c.want)
+		}
+	}
+	if st, _, _ := liveState(Live{Status: "idle", BgState: "blocked"}, Session{}); st != Blocked {
+		t.Errorf("a background session Claude Code reports blocked came out %s", st)
 	}
 }

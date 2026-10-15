@@ -36,8 +36,21 @@ session's prompts and final replies, and asks a model to sort them into
 change anything. When nothing happened, no model is called. Digests are kept
 in `<home>/overview/digests/`.
 
-The live view writes a digest every hour while it is open (`--every 30m` to
-change that, `--every 0` to turn it off). Press `d` to write one now.
+## The view
+
+`overview` opens a two-pane view. The left pane lists the sessions in three
+groups: those that need you, those that are working, and the idle rest. A
+session needs you when it is blocked, or when it is idle and its last reply
+ends with a question. The right pane shows the selected session: where it
+runs, what it is waiting on, and its last few turns from the transcript.
+
+Keys: `j`/`k` move, `n` jumps to the next session that needs you, `enter`
+attaches to a background session, `x` stops one (it asks first), `y` copies
+the attach command, and `/` filters. `tab` switches to the digests, where `[`
+and `]` step through older ones and `D` writes a new one. `?` lists every key.
+
+Interactive sessions run in someone's terminal, so the view cannot attach to
+them. It shows the tty they run in instead.
 
 ## Install
 
@@ -62,4 +75,5 @@ its `config.edn`, and those sessions are labelled with the member's id.
 - An interrupted turn fires no hook. The view falls back to Claude Code's own
   busy or idle in that case, but a session interrupted while blocked stays
   marked blocked until its next prompt.
-- The view is read only. It does not message or steer sessions.
+- The view never sends a session a message. Attaching hands you the session's
+  own terminal, and stopping keeps its conversation.
