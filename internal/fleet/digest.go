@@ -69,14 +69,7 @@ func lastActive(t Thread) time.Time {
 
 // LastDigestAt is the moment the last digest covered up to, or zero when
 // there has been none.
-func (h Home) LastDigestAt() time.Time {
-	b, err := os.ReadFile(h.cursorFile())
-	if err != nil {
-		return time.Time{}
-	}
-	t, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
-	return t
-}
+func (h Home) LastDigestAt() time.Time { return readTime(h.cursorFile()) }
 
 // LatestDigest returns the newest digest on disk.
 func (h Home) LatestDigest() (text string, at time.Time, ok bool) {
@@ -155,36 +148,74 @@ func ShortDir(dir string) string {
 	return dir
 }
 
-// RunDigest summarizes what the fleet did since the last digest and writes
-// the result under the home. The model gets the extract as its whole input
-// and no tools, so a digest run cannot touch anything.
-func (h Home) RunDigest(model string) (Digest, error) {
+// Activity returns the extract of everything the fleet did since the last
+// digest. It also notes the moment it looked, so that a digest published from
+// this extract moves the cursor to here and not past work that came later.
+func (h Home) Activity() (text string, since time.Time, quiet bool, err error) {
 	now := time.Now()
-	since := h.LastDigestAt()
+	// Every look counts as a sign of life, including one that finds nothing.
+	if err := writeTime(h.heartbeatFile(), now); err != nil {
+		return "", since, false, err
+	}
+	since = h.LastDigestAt()
 	if since.IsZero() {
 		since = now.Add(-firstWindow)
 	}
-	d := Digest{Since: since}
 	threads := h.Threads(since)
 	if len(threads) == 0 {
-		d.Quiet = true
-		return d, h.saveCursor(now)
+		return "", since, true, h.saveCursor(now)
 	}
 	rows, err := h.Rows()
 	if err != nil {
-		return d, err
+		return "", since, false, err
 	}
+	if err := writeTime(h.pendingFile(), now); err != nil {
+		return "", since, false, err
+	}
+	return extract(threads, rows, since, now), since, false, nil
+}
+
+// Publish saves a digest written from the last Activity extract and moves the
+// cursor up to that extract.
+func (h Home) Publish(body string) (Digest, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return Digest{}, errors.New("empty digest")
+	}
+	now := time.Now()
+	since, upTo := h.LastDigestAt(), readTime(h.pendingFile())
+	if upTo.IsZero() {
+		upTo = now
+	}
+	d := Digest{Since: since}
 	if err := os.MkdirAll(h.digestsDir(), 0o755); err != nil {
 		return d, err
+	}
+	d.Text = fmt.Sprintf("# %s\n\n%s\n", upTo.Local().Format("Mon 2 Jan 15:04"), body)
+	d.Path = filepath.Join(h.digestsDir(), now.Format("20060102-150405")+".md")
+	if err := os.WriteFile(d.Path, []byte(d.Text), 0o644); err != nil {
+		return d, err
+	}
+	os.Remove(h.pendingFile())
+	return d, h.saveCursor(upTo)
+}
+
+// RunDigest writes one digest without the orchestrator: a single headless
+// model run that gets the extract as its whole input and no tools, so it
+// cannot touch anything.
+func (h Home) RunDigest(model string) (Digest, error) {
+	text, since, quiet, err := h.Activity()
+	if err != nil || quiet {
+		return Digest{Since: since, Quiet: quiet}, err
 	}
 	cmd := h.claude("-p", "--model", model, "--tools", "", "--setting-sources", "",
 		"--no-session-persistence", "--system-prompt", digestInstructions)
 	cmd.Dir = h.dataDir()
-	cmd.Stdin = strings.NewReader(extract(threads, rows, since, now))
+	cmd.Stdin = strings.NewReader(text)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
-		return d, err
+		return Digest{Since: since}, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -196,19 +227,25 @@ func (h Home) RunDigest(model string) (Digest, error) {
 	}
 	body := strings.TrimSpace(stdout.String())
 	if err != nil || body == "" {
-		return d, fmt.Errorf("claude -p: %v: %s", err, clip(stderr.String()+" "+body, 300))
+		return Digest{Since: since}, fmt.Errorf("claude -p: %v: %s", err, clip(stderr.String()+" "+body, 300))
 	}
-	d.Text = fmt.Sprintf("# %s, since %s\n\n%s\n", now.Format("Mon 2 Jan 15:04"), since.Local().Format("15:04"), body)
-	d.Path = filepath.Join(h.digestsDir(), now.Format("20060102-150405")+".md")
-	if err := os.WriteFile(d.Path, []byte(d.Text), 0o644); err != nil {
-		return d, err
-	}
-	return d, h.saveCursor(now)
+	return h.Publish(body)
 }
 
-func (h Home) saveCursor(t time.Time) error {
-	if err := os.MkdirAll(h.dataDir(), 0o755); err != nil {
+func writeTime(path string, t time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(h.cursorFile(), []byte(t.UTC().Format(time.RFC3339)+"\n"), 0o644)
+	return os.WriteFile(path, []byte(t.UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
+
+func readTime(path string) time.Time {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	t, _ := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
+	return t
+}
+
+func (h Home) saveCursor(t time.Time) error { return writeTime(h.cursorFile(), t) }

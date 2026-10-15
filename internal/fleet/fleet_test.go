@@ -132,3 +132,106 @@ func TestReadThreadKeepsOnlyTurnsInTheWindow(t *testing.T) {
 		t.Fatalf("extract leaked text from outside the window or a subagent:\n%s", out)
 	}
 }
+
+func TestPublishMovesTheCursorToTheExtractNotPastIt(t *testing.T) {
+	home := Home(t.TempDir())
+	fake := filepath.Join(t.TempDir(), "claude")
+	os.WriteFile(fake, []byte("#!/bin/sh\necho '[]'\n"), 0o755)
+	t.Setenv("OVERVIEW_CLAUDE", fake)
+	t.Setenv("OVERVIEW_ORCHESTRATOR_DIR", "/p/orchestrator")
+
+	if _, _, quiet, err := home.Activity(); err != nil || !quiet {
+		t.Fatalf("empty home: quiet=%v err=%v", quiet, err)
+	}
+
+	write := func(project, cwd string) {
+		dir := filepath.Join(string(home), "projects", project)
+		os.MkdirAll(dir, 0o755)
+		now := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
+		line := `{"type":"user","timestamp":"` + now + `","cwd":"` + cwd + `","message":{"content":"ship it"}}` + "\n"
+		os.WriteFile(filepath.Join(dir, "sess5678.jsonl"), []byte(line), 0o644)
+	}
+	write("orch", "/p/orchestrator")
+	if _, _, quiet, _ := home.Activity(); !quiet {
+		t.Fatal("the orchestrator's own transcript counted as activity")
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	write("app", "/p/app")
+	text, _, quiet, err := home.Activity()
+	if err != nil || quiet || !strings.Contains(text, "Prompt: ship it") {
+		t.Fatalf("quiet=%v err=%v text=%q", quiet, err, text)
+	}
+	looked := readTime(home.pendingFile())
+	if !home.LastDigestAt().Before(looked) {
+		t.Fatal("cursor moved before anything was published")
+	}
+
+	d, err := home.Publish("## Finished\n- **app** (app): shipped\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !home.LastDigestAt().Equal(looked) {
+		t.Fatalf("cursor at %v, want the extract time %v", home.LastDigestAt(), looked)
+	}
+	if got, _, ok := home.LatestDigest(); !ok || got != d.Text || !strings.Contains(got, "shipped") {
+		t.Fatalf("latest digest: %q", got)
+	}
+	if _, err := home.Publish("  "); err == nil {
+		t.Fatal("an empty digest was accepted")
+	}
+}
+
+func TestOrchestratorCommandLine(t *testing.T) {
+	for every, want := range map[time.Duration]string{
+		15 * time.Minute: "*/15 * * * *", time.Hour: "7 * * * *", 3 * time.Hour: "7 */3 * * *",
+	} {
+		if got, err := cronFor(every); err != nil || got != want {
+			t.Fatalf("cronFor(%v) = %q, %v", every, got, err)
+		}
+	}
+	if _, err := cronFor(time.Minute); err == nil {
+		t.Fatal("a one minute tick was accepted")
+	}
+	args, err := Home("/h/.claude-kira").orchestratorArgs(time.Hour, "sonnet", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--bg", "--name overview-orchestrator", "--permission-mode dontAsk",
+		`"Bash(overview *)"`, `"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command line lacks %s:\n%s", want, joined)
+		}
+	}
+}
+
+func TestHealthTellsASilentOrchestratorFromAHealthyOne(t *testing.T) {
+	home := Home(t.TempDir())
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-5 * time.Hour)
+	live := []Live{{Name: OrchestratorName, SessionID: "abc-1", Status: "idle", StartedAt: started.UnixMilli()}}
+	home.saveOrchestratorState(orchestratorState{SessionID: "abc-1", Every: time.Hour, StartedAt: started})
+
+	if h := home.health(nil, now); h.Running || h.Stale {
+		t.Fatalf("no session: %+v", h)
+	}
+	writeTime(home.heartbeatFile(), now.Add(-30*time.Minute))
+	if h := home.health(live, now); !h.Running || h.Stale {
+		t.Fatalf("ticked half an hour ago: %+v", h)
+	}
+	writeTime(home.heartbeatFile(), now.Add(-3*time.Hour))
+	if h := home.health(live, now); !h.Stale {
+		t.Fatalf("last tick three hours ago on an hourly schedule: %+v", h)
+	}
+	// A session restarted a minute ago has not had time to tick yet.
+	live[0].StartedAt = now.Add(-time.Minute).UnixMilli()
+	if h := home.health(live, now); h.Stale {
+		t.Fatalf("just restarted: %+v", h)
+	}
+
+	args, _ := home.orchestratorArgs(time.Hour, "sonnet", "abc-1")
+	if j := strings.Join(args, " "); !strings.Contains(j, "--bg --resume abc-1") || !strings.Contains(j, "erased your tick schedule") {
+		t.Fatalf("resume command line: %s", j)
+	}
+}

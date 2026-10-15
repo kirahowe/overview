@@ -5,6 +5,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -16,15 +17,20 @@ const usage = `overview: watch the Claude Code sessions of one config directory
 
   overview [flags]            open the live view
   overview sessions [flags]   print the sessions once and exit
-  overview digest [flags]     summarize activity since the last digest
+  overview orchestrator start|stop|status|ensure [flags]
+                              run the background session that writes digests;
+                              ensure restarts it when it has gone silent
+  overview digest [flags]     write one digest now, without the orchestrator
+  overview activity [flags]   print what sessions did since the last digest
+  overview publish [file]     save a digest (from the file or stdin)
   overview hook               record a Claude Code hook event (reads stdin)
 
 Flags:
   --home <name|path>   config directory; "kira" means ~/.claude-kira.
                        Defaults to CLAUDE_CONFIG_DIR.
-  --every <duration>   how often the live view writes a digest (default 1h,
-                       0 to turn off)
-  --model <model>      model that writes the digest (default sonnet)
+  --every <duration>   how often the orchestrator writes a digest (default 1h)
+  --model <model>      model for the orchestrator or a one-off digest
+                       (default sonnet)
 `
 
 func main() {
@@ -43,7 +49,11 @@ func main() {
 	homeFlag := fs.String("home", "", "")
 	every := fs.Duration("every", time.Hour, "")
 	model := fs.String("model", "sonnet", "")
-	fs.Parse(args)
+	// Flags may come before or after a positional argument such as "start".
+	var rest []string
+	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
+		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
+	}
 
 	home, err := fleet.ResolveHome(*homeFlag)
 	if err != nil {
@@ -51,7 +61,7 @@ func main() {
 	}
 	switch cmd {
 	case "":
-		err = tui.Run(home, *every, *model)
+		err = tui.Run(home, *model)
 	case "sessions":
 		err = printSessions(home)
 	case "digest":
@@ -63,6 +73,32 @@ func main() {
 				fmt.Print(d.Text)
 			}
 		}
+	case "activity":
+		var text string
+		var since time.Time
+		var quiet bool
+		if text, since, quiet, err = home.Activity(); err == nil {
+			if quiet {
+				text = fmt.Sprintf("No session activity since %s.\n", since.Local().Format("Mon 15:04"))
+			}
+			fmt.Print(text)
+		}
+	case "publish":
+		in := os.Stdin
+		if len(rest) > 0 {
+			if in, err = os.Open(rest[0]); err != nil {
+				fail(err)
+			}
+		}
+		var body []byte
+		if body, err = io.ReadAll(in); err == nil {
+			var d fleet.Digest
+			if d, err = home.Publish(string(body)); err == nil {
+				fmt.Println("Saved", d.Path)
+			}
+		}
+	case "orchestrator":
+		err = orchestrator(home, rest, *every, *model)
 	default:
 		fs.Usage()
 		os.Exit(2)
@@ -70,6 +106,50 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+}
+
+func orchestrator(home fleet.Home, rest []string, every time.Duration, model string) error {
+	action := "status"
+	if len(rest) > 0 {
+		action = rest[0]
+	}
+	switch action {
+	case "start":
+		out, err := home.StartOrchestrator(every, model)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\nAttach with: claude attach %s\n", out, fleet.OrchestratorName)
+		return nil
+	case "stop":
+		return home.StopOrchestrator()
+	case "ensure":
+		out, err := home.EnsureOrchestrator(every, model)
+		if err != nil {
+			return err
+		}
+		fmt.Println(time.Now().Format("2006-01-02 15:04"), out)
+		return nil
+	case "status":
+		h, err := home.OrchestratorHealth()
+		if err != nil {
+			return err
+		}
+		last := "never"
+		if !h.LastCheck.IsZero() {
+			last = h.LastCheck.Local().Format("Mon 15:04")
+		}
+		switch {
+		case !h.Running:
+			fmt.Println("not running, last looked at the fleet:", last)
+		case h.Stale:
+			fmt.Println("running but silent, last looked at the fleet:", last)
+		default:
+			fmt.Printf("running, %s, last looked at the fleet: %s\n", h.Live.Status, last)
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown orchestrator action %q", action)
 }
 
 func printSessions(home fleet.Home) error {

@@ -37,26 +37,24 @@ type (
 )
 
 type model struct {
-	home  fleet.Home
-	every time.Duration
-	llm   string
+	home fleet.Home
+	llm  string
 
 	rows    []fleet.Row
 	rowsErr error
 
-	digest    string
-	digestAt  time.Time
-	attemptAt time.Time
-	running   bool
-	note      string
-	scroll    int
+	digest   string
+	digestAt time.Time
+	running  bool
+	note     string
+	scroll   int
 
 	w, h int
 }
 
 // Run opens the view and blocks until the user quits.
-func Run(home fleet.Home, every time.Duration, llm string) error {
-	m := model{home: home, every: every, llm: llm}
+func Run(home fleet.Home, llm string) error {
+	m := model{home: home, llm: llm}
 	m.digest, m.digestAt, _ = home.LatestDigest()
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -78,21 +76,8 @@ func (m model) runDigest() tea.Msg {
 	return digestMsg{d, err}
 }
 
-// digestDue reports whether the configured interval has passed since the
-// last digest, or since the last attempt when that one failed.
-func (m model) digestDue(now time.Time) bool {
-	if m.every <= 0 || m.running {
-		return false
-	}
-	last := m.home.LastDigestAt()
-	if m.attemptAt.After(last) {
-		last = m.attemptAt
-	}
-	return now.Sub(last) >= m.every
-}
-
 func (m model) startDigest() (model, tea.Cmd) {
-	m.running, m.attemptAt, m.note = true, time.Now(), ""
+	m.running, m.note = true, ""
 	return m, m.runDigest
 }
 
@@ -116,13 +101,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 		}
 	case tickMsg:
-		cmds := []tea.Cmd{m.refresh, tick()}
-		if m.digestDue(time.Time(msg)) {
-			var c tea.Cmd
-			m, c = m.startDigest()
-			cmds = append(cmds, c)
+		// The orchestrator publishes digests on its own schedule, so pick up
+		// whatever is newest on disk.
+		if text, at, ok := m.home.LatestDigest(); ok && !m.running && at.After(m.digestAt) {
+			m.digest, m.digestAt, m.scroll = text, at, 0
 		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(m.refresh, tick())
 	case rowsMsg:
 		m.rows, m.rowsErr = msg.rows, msg.err
 	case digestMsg:
@@ -134,6 +118,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = "no activity since " + msg.d.Since.Local().Format("15:04")
 		default:
 			m.digest, m.digestAt, m.scroll = msg.d.Text, time.Now(), 0
+			if _, at, ok := m.home.LatestDigest(); ok {
+				m.digestAt = at
+			}
 		}
 	}
 	return m, nil
@@ -188,6 +175,14 @@ func (m model) header() string {
 		parts = append(parts, green.Render(fmt.Sprintf("%d working", n)))
 	}
 	parts = append(parts, fmt.Sprintf("%d idle", count[fleet.Idle]))
+	if m.rows != nil {
+		switch h := m.home.HealthOf(m.rows); {
+		case !h.Running:
+			parts = append(parts, red.Render("orchestrator off")+dim.Render(" (overview orchestrator start)"))
+		case h.Stale:
+			parts = append(parts, red.Render("orchestrator silent since "+Ago(h.LastCheck))+dim.Render(" (overview orchestrator ensure)"))
+		}
+	}
 	return strings.Join(parts, dim.Render(" · "))
 }
 
@@ -200,15 +195,6 @@ func (m model) digestRule() string {
 		parts = append(parts, "no digest yet")
 	default:
 		parts = append(parts, "digest "+m.digestAt.Format("15:04"))
-	}
-	if m.every > 0 && !m.running {
-		last := m.home.LastDigestAt()
-		if m.attemptAt.After(last) {
-			last = m.attemptAt
-		}
-		if !last.IsZero() {
-			parts = append(parts, "next "+last.Add(m.every).Local().Format("15:04"))
-		}
 	}
 	if m.note != "" {
 		parts = append(parts, m.note)

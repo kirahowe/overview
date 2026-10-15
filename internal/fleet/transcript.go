@@ -190,7 +190,8 @@ func (h Home) Threads(since time.Time) []Thread {
 		if err != nil || !info.ModTime().After(since) {
 			continue
 		}
-		if th, err := readThread(f, since); err == nil && len(th.Turns) > 0 {
+		// The orchestrator reports on the fleet. Its own ticks are not news.
+		if th, err := readThread(f, since); err == nil && len(th.Turns) > 0 && th.Cwd != OrchestratorDir() {
 			out = append(out, th)
 		}
 	}
