@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The gate every change must pass before it is committed.
+#   scripts/check          full gate
+#   scripts/check --deep   also rerun property tests with 2000 cases each
+#                          (or set RAPID_CHECKS=<n> yourself)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export PATH="$PATH:$HOME/go/bin"
+
+[[ "${1:-}" == "--deep" ]] && RAPID_CHECKS=2000
+step() { printf '\n==> %s\n' "$*"; }
+
+step "gofmt"
+unformatted=$(gofmt -l .)
+if [[ -n "$unformatted" ]]; then
+  printf 'not gofmt-clean (run gofmt -w):\n%s\n' "$unformatted" >&2
+  exit 1
+fi
+
+step "go vet"
+go vet ./...
+
+step "staticcheck"
+if command -v staticcheck >/dev/null; then
+  staticcheck ./...
+else
+  echo "skipped: staticcheck not installed (go install honnef.co/go/tools/cmd/staticcheck@latest)"
+fi
+
+step "go test -race"
+go test -race -count=1 ./...
+if [[ -n "${RAPID_CHECKS:-}" ]]; then
+  # Only packages that import rapid accept -rapid.checks.
+  pkgs=$(grep -rl --include='*_test.go' 'pgregory.net/rapid' . | xargs -n1 dirname | sort -u)
+  step "property tests, $RAPID_CHECKS cases"
+  # shellcheck disable=SC2086
+  go test -race -count=1 $pkgs -rapid.checks="$RAPID_CHECKS"
+fi
+
+step "go build"
+go build -o bin/overview .
+
+echo; echo "check: ok"
