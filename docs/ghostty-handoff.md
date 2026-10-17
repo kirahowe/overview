@@ -3,6 +3,55 @@
 Written 2026-10-17 at the end of a planning session in the `agents` repo.
 Pick it up in a fresh session started from this repo.
 
+## Status, 2026-10-17: built
+
+The plan below has been built, with three changes. The rest of this file
+is the original plan, kept for its reasoning.
+
+- **The tab bar stays visible.** Stock Ghostty 1.3.1 on macOS cannot hide
+  it: `window-show-tab-bar` is GTK-only, and `macos-titlebar-style =
+  hidden` turns tabs off, so Cmd+T opens a window. Kira chose a compact
+  tab bar (`macos-titlebar-style = tabs`) with new tabs at the end and
+  overview started in tab 1 by `initial-command`. The config is in
+  `~/code/configs/ghostty/config.ghostty`, and the live config file is a
+  symlink to it.
+- **The TUI finds the terminal, not the hook.** The TUI already knows
+  each interactive session's tty, so on Enter it writes the title token
+  to that tty, asks Ghostty which terminal shows it, restores the old
+  title, and caches the id. The hook is unchanged. Sessions started before
+  this change can be jumped to as well. See `internal/ghostty` and
+  `internal/tui/jump.go`.
+- **Only Ghostty sessions are touched.** Before writing to a tty, overview
+  walks the session's process ancestry and writes nothing unless Ghostty
+  is an ancestor. tmux, iTerm and Terminal.app sessions get the old tty
+  note.
+
+The original plan's open questions came out like this:
+
+- Hooks get `CLAUDE_PID` in their environment. The hook itself has no
+  tty. This no longer matters, because the hook doesn't do the lookup.
+- Ghostty coalesces titles. A token overwritten within about 50 ms is
+  never visible, so Locate rewrites it on each polling round.
+- One osascript call costs about 75 ms. A first jump takes 0.4 to 0.55 s,
+  and a cached one about 130 ms.
+- Ghostty has no xterm title stack (`CSI 22/23 t`). Restoring the old
+  title can therefore freeze a title that Ghostty derived itself.
+- `focus terminal id` selects the tab, focuses the split and raises the
+  window. In QA, focusing a main-window terminal from the quick terminal
+  hid the dropdown in 6 runs out of 7. If Kira sees it stay open,
+  overview should hide it explicitly.
+- Two overview instances are safe. The TUI never runs digests on a timer.
+  Only `D` runs one by hand.
+
+Still to do by hand: grant Ghostty Accessibility access for the global
+`ctrl+backquote` hotkey, restart Ghostty, and start overview in the quick
+terminal once.
+
+Verification: `scripts/check` gates every commit, and `scripts/check
+--deep` runs the property tests at 2000 cases. `OVERVIEW_E2E=1
+scripts/e2e-ghostty` drives a real overview in throwaway Ghostty windows
+and checks which terminal gets focus.
+
 ## Decision
 
 Kira is moving off the Agents app. The new setup:
