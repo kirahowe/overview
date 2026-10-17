@@ -15,12 +15,21 @@ import (
 
 // fakeJumper records what the view asked Ghostty to do.
 type fakeJumper struct {
+	checks  []int // pids asked about
 	locates []string
 	focuses []string
+
+	outside  map[int]bool // pids not under Ghostty
+	checkErr error
 
 	next      int
 	locateErr error
 	focusErr  map[string]error // by terminal id
+}
+
+func (f *fakeJumper) InGhostty(_ context.Context, pid int) (bool, error) {
+	f.checks = append(f.checks, pid)
+	return !f.outside[pid], f.checkErr
 }
 
 func (f *fakeJumper) Locate(_ context.Context, tty string) (string, error) {
@@ -309,5 +318,27 @@ func TestEscOutsideTheFilterSelectsAShownRow(t *testing.T) {
 	m, _ = press(m, "esc")
 	if m.filter != "" || m.sel != "s1" {
 		t.Fatalf("filter %q sel %q", m.filter, m.sel)
+	}
+}
+
+// A session outside Ghostty (tmux, another terminal app) has a tty too, but
+// Locate must never write to it.
+func TestNoLocateOutsideGhostty(t *testing.T) {
+	for _, j := range []*fakeJumper{
+		{outside: map[int]bool{11: true}},
+		{checkErr: errors.New("ps: boom")},
+	} {
+		m := newTestModel(t, j, row("s1", "red", "auth", 11))
+		m, cmd := press(m, "enter")
+		m = settle(t, m, cmd)
+		if len(j.checks) != 1 || j.checks[0] != 11 || len(j.locates) != 0 || len(j.focuses) != 0 {
+			t.Fatalf("checks %v locates %v focuses %v", j.checks, j.locates, j.focuses)
+		}
+		if !strings.Contains(m.note, "ttys1") {
+			t.Fatalf("note %q", m.note)
+		}
+		if j.checkErr == nil && !strings.Contains(m.note, "not in Ghostty") {
+			t.Fatalf("note %q", m.note)
+		}
 	}
 }

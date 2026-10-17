@@ -514,7 +514,7 @@ func (m model) act(row fleet.Row, jump bool) (tea.Model, tea.Cmd) {
 		return m.say(ttyNote(row.Name, tty, "")), nil
 	}
 	key := row.SessionID + "\x00" + tty
-	return m, jumpCmd(m.jump, row.Name, key, tty, m.terms[key])
+	return m, jumpCmd(m.jump, row.Name, key, tty, row.PID, m.terms[key])
 }
 
 func (m model) digestKey(k string) model {

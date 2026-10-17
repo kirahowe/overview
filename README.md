@@ -67,9 +67,12 @@ Jumping needs stock Ghostty 1.3 or later and its Automation permission.
 Interactive sessions run in someone's terminal, so overview finds the
 terminal by writing a short-lived title to the session's tty and asking
 Ghostty which terminal shows it, then selects that tab and focuses the
-terminal. It remembers the terminal for the next jump. When Ghostty is not
-running or the terminal cannot be found, the status line shows the tty
-instead, and you switch to that tab yourself.
+terminal. It remembers the terminal for the next jump. It writes that title
+only when the session's process runs under Ghostty. A session in tmux or in
+another terminal app is left alone, so its title is never touched. When
+Ghostty is not running, the session is not in Ghostty, or the terminal cannot
+be found, the status line shows the tty instead, and you switch to that tab
+yourself.
 
 ## Install
 

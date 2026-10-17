@@ -19,6 +19,7 @@ const (
 
 // jumper is the part of ghostty.Client the view needs. Tests fake it.
 type jumper interface {
+	InGhostty(ctx context.Context, pid int) (bool, error)
 	Locate(ctx context.Context, tty string) (string, error)
 	Focus(ctx context.Context, id string) error
 }
@@ -49,9 +50,10 @@ func jumpReason(err error) string {
 }
 
 // jumpCmd focuses the terminal for tty. With a cached id it tries that first
-// and, if Ghostty has forgotten it, locates once more. It returns a jumpMsg
-// and never touches the model.
-func jumpCmd(j jumper, name, key, tty, cached string) tea.Cmd {
+// and, if Ghostty has forgotten it, locates once more. Locate writes to the
+// tty, so it runs only for a session whose process pid runs under Ghostty.
+// It returns a jumpMsg and never touches the model.
+func jumpCmd(j jumper, name, key, tty string, pid int, cached string) tea.Cmd {
 	return func() tea.Msg {
 		call := func(timeout time.Duration, f func(ctx context.Context) error) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -71,8 +73,16 @@ func jumpCmd(j jumper, name, key, tty, cached string) tea.Cmd {
 			}
 			msg.drop = true
 		}
-		var err error
-		err = call(locateTimeout, func(ctx context.Context) (e error) { id, e = j.Locate(ctx, tty); return })
+		var inside bool
+		err := call(focusTimeout, func(ctx context.Context) (e error) { inside, e = j.InGhostty(ctx, pid); return })
+		if err == nil && !inside {
+			msg.drop = true
+			msg.note = ttyNote(name, tty, "not in Ghostty")
+			return msg
+		}
+		if err == nil {
+			err = call(locateTimeout, func(ctx context.Context) (e error) { id, e = j.Locate(ctx, tty); return })
+		}
 		if err == nil {
 			err = call(focusTimeout, func(ctx context.Context) error { return j.Focus(ctx, id) })
 		}
