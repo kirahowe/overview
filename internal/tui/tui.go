@@ -21,6 +21,10 @@ const (
 	frameEvery   = 120 * time.Millisecond
 	noteFor      = 6 * time.Second
 	recentTurns  = 6
+	// doubleClick is how close two clicks on a row must be to act on it.
+	doubleClick = 400 * time.Millisecond
+	// wheelLines is how far one wheel notch scrolls a pane.
+	wheelLines = 3
 )
 
 type screen int
@@ -58,6 +62,8 @@ type (
 		drop bool   // forget the cached id
 		note string // what to tell the user when it failed
 	}
+	// noteMsg is something to tell the user.
+	noteMsg string
 	// doneMsg reports how an action on a session went.
 	doneMsg struct {
 		note string
@@ -78,6 +84,7 @@ type model struct {
 	focus     pane
 	sel       string // session id under the cursor, kept across refreshes
 	scroll    int    // detail pane
+	listTop   int    // first list line shown, kept so clicks do not shift it
 	filter    string
 	filtering bool
 	confirm   string // session id waiting on a yes to stop it
@@ -110,6 +117,10 @@ type model struct {
 	// the terminal's real title.
 	jumping, jumpSeq int
 
+	// The last click on a list row, to tell a double click.
+	clickID string
+	clickAt time.Time
+
 	w, h int
 }
 
@@ -119,7 +130,7 @@ func Run(home fleet.Home, llm string, theme Theme) error {
 	m := newModel(home, llm)
 	m.jump = ghostty.New()
 	m = m.loadDigests()
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -259,11 +270,29 @@ func (m model) moveTo(rows []fleet.Row, i int) model {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	m = next.(model)
+	// Keep the list where it is, scrolled only as far as the cursor needs.
+	if m.w > 0 && m.screen == sessionsScreen {
+		row, _, _ := m.selected(m.ordered())
+		_, lh, _, _ := m.split()
+		_, owners := m.listLines(m.sections(), row.SessionID, 1)
+		m.listTop = m.listStart(owners, row.SessionID, lh-2)
+	}
+	return m, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tea.KeyMsg:
-		return m.key(msg)
+		return m.handle(m.keyActions(msg))
+	case tea.MouseMsg:
+		// The input's time is read here, at the door, so apply stays pure.
+		return m.handle(m.mouseActions(msg, now()))
+	case noteMsg:
+		m = m.say(string(msg))
 	case frameMsg:
 		m.frame++
 		return m, nextFrame()
@@ -322,178 +351,135 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := msg.String()
-	if m.filtering {
-		before := m.filter
-		switch msg.Type {
-		case tea.KeyEsc:
-			// The cursor's row is still shown once the filter is gone.
-			m.filter, m.filtering = "", false
-			return m.keepSel(), nil
-		case tea.KeyEnter:
-			m.filtering = false
-			rows := m.ordered()
-			if row, _, ok := m.selected(rows); ok && len(rows) > 0 {
-				// Act on the match under the cursor, then show everything
-				// again so coming back finds the full list.
-				m.filter = ""
-				m.sel = row.SessionID
-				return m.act(row, true)
-			}
-			return m, nil
-		case tea.KeyUp, tea.KeyCtrlP, tea.KeyDown, tea.KeyCtrlN:
-			rows := m.ordered()
-			_, i, _ := m.selected(rows)
-			if msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP {
-				return m.moveTo(rows, i-1), nil
-			}
-			return m.moveTo(rows, i+1), nil
-		case tea.KeyBackspace:
-			if r := []rune(m.filter); len(r) > 0 {
-				m.filter = string(r[:len(r)-1])
-			}
-		case tea.KeyRunes, tea.KeySpace:
-			m.filter += printable(string(msg.Runes))
-		case tea.KeyCtrlC:
-			return m, tea.Quit
-		}
-		// New filter text puts the cursor on the first match. Keys that left
-		// the text alone must not undo where the user arrowed to.
-		if m.filter != before {
-			return m.moveTo(m.ordered(), 0), nil
-		}
-		return m.keepSel(), nil
+// handle translates one input into actions and applies them in order.
+func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for _, a := range actions {
+		var cmd tea.Cmd
+		m, cmd = m.apply(a)
+		cmds = append(cmds, cmd)
 	}
-	if m.confirm != "" {
+	// Whatever happened, the cursor stays on a row that is shown.
+	return m.keepSel(), tea.Batch(cmds...)
+}
+
+// apply carries out one action. It is the only place input changes the
+// model, and it runs nothing itself: any work comes back as a Cmd.
+func (m model) apply(a action) (model, tea.Cmd) {
+	rows := m.ordered()
+	row, i, ok := m.selected(rows)
+	switch a.do {
+	case quit:
+		return m, tea.Quit
+	case openHelp:
+		m.help = true
+	case dismiss:
+		if m.confirm != "" {
+			m.confirm = ""
+			return m.say("left it running"), nil
+		}
+		m.help = false
+	case confirmStop:
 		id := m.confirm
 		m.confirm = ""
-		if k == "y" {
-			for _, r := range m.rows {
-				if r.SessionID == id {
-					home, l := m.home, r.Live
-					return m.say("stopping " + r.Name + "…"), func() tea.Msg {
-						return doneMsg{"stopped " + l.Name, home.Stop(l)}
-					}
+		for _, r := range m.rows {
+			if r.SessionID == id {
+				home, l := m.home, r.Live
+				return m.say("stopping " + r.Name + "…"), func() tea.Msg {
+					return doneMsg{"stopped " + l.Name, home.Stop(l)}
 				}
 			}
 		}
 		return m.say("left it running"), nil
-	}
-	if m.help {
-		m.help = false
-		return m, nil
-	}
-	// Several runes in one message are a paste or a fast burst, not
-	// keystrokes. They can start a filter but never trigger an action.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 {
-		if msg.Runes[0] == '/' && m.screen == sessionsScreen {
-			m.filter, m.filtering, m.focus = printable(string(msg.Runes[1:])), true, listPane
-			return m.moveTo(m.ordered(), 0), nil
-		}
-		return m, nil
-	}
-
-	switch k {
-	case "q", "ctrl+c":
-		return m, tea.Quit
-	case "?":
-		m.help = true
-		return m, nil
-	case "d":
+	case showScreen:
+		m.screen = screen(a.n)
+	case toggleScreen:
 		m.screen = 1 - m.screen
-		return m, nil
-	case "1":
-		m.screen = sessionsScreen
-		return m, nil
-	case "2":
-		m.screen = digestScreen
-		return m, nil
-	case "D":
+	case writeDigest:
 		if m.digesting {
 			return m, nil
 		}
 		m.digesting = true
 		return m.say("writing a digest…"), m.runDigest
-	case "r":
+	case refresh:
 		return m, m.refresh
-	}
-	if m.screen == digestScreen {
-		return m.digestKey(k), nil
-	}
-
-	rows := m.ordered()
-	row, i, ok := m.selected(rows)
-	page := max(m.h/2, 1)
-	if m.focus == detailPane {
-		switch k {
-		case "j", "down":
-			m.scroll++
-		case "k", "up":
-			m.scroll--
-		case "g", "home":
-			m.scroll = 0
-		case "G", "end":
-			m.scroll = 1 << 30
-		case "esc", "h", "left", "tab", "shift+tab":
-			m.focus = listPane
-			return m, nil
-		}
-	} else {
-		switch k {
-		case "j", "down":
-			return m.moveTo(rows, i+1), nil
-		case "k", "up":
-			return m.moveTo(rows, i-1), nil
-		case "g", "home":
-			return m.moveTo(rows, 0), nil
-		case "G", "end":
-			return m.moveTo(rows, len(rows)-1), nil
-		case "l", "right", "tab", "shift+tab":
-			m.focus = detailPane
-			return m, nil
-		case "esc":
-			m.filter = ""
-			return m.keepSel(), nil
-		}
-	}
-
-	switch k {
-	case "n", "N":
-		// Jump to the next (or previous) session that needs you, wrapping.
-		step := 1
-		if k == "N" {
-			step = -1
-		}
+	case move:
+		return m.moveTo(rows, i+a.n), nil
+	case moveTo:
+		return m.moveTo(rows, a.n), nil
+	case nextNeedy:
+		// Wraps round the list.
 		for d := 1; d <= len(rows); d++ {
-			j := ((i+step*d)%len(rows) + len(rows)) % len(rows)
+			j := ((i+a.n*d)%len(rows) + len(rows)) % len(rows)
 			if rows[j].NeedsYou() {
 				m.focus = listPane
 				return m.moveTo(rows, j), nil
 			}
 		}
 		return m.say("nothing needs you"), nil
-	case "J", "ctrl+e":
-		m.scroll++
-	case "K", "ctrl+y":
-		m.scroll--
-	case "ctrl+d", "pgdown", " ":
-		m.scroll += page
-	case "ctrl+u", "pgup":
-		m.scroll -= page
-	case "/":
+	case focus:
+		m.focus = pane(a.n)
+	case scroll, scrollTo:
+		if a.do == scroll {
+			a.n += m.scroll
+		}
+		m.scroll = a.n
+		m.scroll = m.clampScroll()
+	case scrollDigest, scrollDigestTo:
+		if a.do == scrollDigest {
+			a.n += m.digestScroll
+		}
+		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.innerHeight()))
+	case stepDigest:
+		m = m.showDigest(m.digestIdx + a.n)
+	case search:
 		m.filtering, m.focus = true, listPane
-	case "enter", "a":
+	case typeText, backspace:
+		before := m.filter
+		if a.do == typeText {
+			m.filter += a.text
+		} else if r := []rune(m.filter); len(r) > 0 {
+			m.filter = string(r[:len(r)-1])
+		}
+		// New search text puts the cursor on the first match.
+		if m.filter != before {
+			return m.moveTo(m.ordered(), 0), nil
+		}
+	case cancelSearch:
+		m.filter, m.filtering = "", false
+	case clearFilter:
+		m.filter = ""
+	case open, attach:
+		if m.filtering {
+			// Act on the match under the cursor, then show everything
+			// again so coming back finds the full list.
+			m.filtering = false
+			if ok {
+				m.filter = ""
+			}
+		}
 		if !ok {
 			return m, nil
 		}
-		return m.act(row, k == "enter")
-	case "x":
+		return m.act(row, a.do == open)
+	case click:
+		double := a.id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
+		m.clickID, m.clickAt = a.id, a.at
+		for j, r := range rows {
+			if r.SessionID == a.id {
+				m = m.moveTo(rows, j)
+			}
+		}
+		if double {
+			m.clickID = ""
+			return m.apply(action{do: open})
+		}
+	case stop:
 		if !ok || !row.Background() {
 			return m.say("only background sessions can be stopped from here"), nil
 		}
 		m.confirm = row.SessionID
-	case "y":
+	case copyID:
 		if !ok {
 			return m, nil
 		}
@@ -501,21 +487,32 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row.Background() {
 			text = "claude attach " + row.ID
 		}
-		cmd := exec.Command("pbcopy")
-		cmd.Stdin = strings.NewReader(text)
-		if err := cmd.Run(); err != nil {
-			return m.say("copy failed: " + err.Error()), nil
-		}
-		return m.say("copied " + text), nil
+		return m, func() tea.Msg { return copied(text, copyText(text)) }
 	}
-	m.scroll = m.clampScroll()
 	return m, nil
+}
+
+// now is the clock that stamps mouse input. Tests replace it.
+var now = time.Now
+
+// copyText puts text on the clipboard. Tests replace it.
+var copyText = func(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
+func copied(text string, err error) tea.Msg {
+	if err != nil {
+		return noteMsg("copy failed: " + err.Error())
+	}
+	return noteMsg("copied " + text)
 }
 
 // act does what enter means for a row. A background session is attached. An
 // interactive one is jumped to in Ghostty when jump is set (enter), and
 // otherwise only reported with its tty (the `a` key).
-func (m model) act(row fleet.Row, jump bool) (tea.Model, tea.Cmd) {
+func (m model) act(row fleet.Row, jump bool) (model, tea.Cmd) {
 	if row.Background() {
 		return m, tea.ExecProcess(m.home.AttachCmd(row.Live), func(err error) tea.Msg {
 			return doneMsg{"back from " + row.Name, err}
@@ -547,30 +544,4 @@ func (m model) hasJumpKey(key string) bool {
 		}
 	}
 	return false
-}
-
-func (m model) digestKey(k string) model {
-	page := max(m.h/2, 1)
-	switch k {
-	case "j", "down", "J":
-		m.digestScroll++
-	case "k", "up", "K":
-		m.digestScroll--
-	case "ctrl+d", "pgdown", " ":
-		m.digestScroll += page
-	case "ctrl+u", "pgup":
-		m.digestScroll -= page
-	case "g", "home":
-		m.digestScroll = 0
-	case "G", "end":
-		m.digestScroll = 1 << 30
-	case "[", "h", "left":
-		m = m.showDigest(m.digestIdx - 1)
-	case "]", "l", "right":
-		m = m.showDigest(m.digestIdx + 1)
-	case "esc", "tab":
-		m.screen = sessionsScreen
-	}
-	m.digestScroll = max(0, min(m.digestScroll, len(m.digestLines())-m.innerHeight()))
-	return m
 }

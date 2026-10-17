@@ -62,6 +62,12 @@ attach command. `tab` moves between the two panes. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `?` lists
 every key.
 
+The mouse works too, and does what the keys do. A click selects a session
+or focuses the detail pane, a double click acts on a session as `enter`
+does, and the wheel moves through the list and scrolls the detail pane and
+digests. A click also closes help and cancels a stop. While the view has the
+mouse, most terminals, Ghostty included, select text when you hold shift.
+
 Jumping needs stock Ghostty 1.3 or later and its Automation permission.
 Interactive sessions run in someone's terminal, so overview finds the
 terminal by writing a short-lived title to the session's tty and asking

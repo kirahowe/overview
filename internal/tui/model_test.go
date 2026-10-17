@@ -434,3 +434,147 @@ func TestSearchWithTabStaysWithinWidth(t *testing.T) {
 		}
 	}
 }
+
+func mouseClick(m model, x, y int) (model, tea.Cmd) {
+	next, cmd := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	return next.(model), cmd
+}
+
+func wheel(m model, x, y int, down bool) model {
+	b := tea.MouseButtonWheelUp
+	if down {
+		b = tea.MouseButtonWheelDown
+	}
+	return update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: b})
+}
+
+// screenY is the screen line of a session's first list line, or -1.
+func screenY(m model, id string) int {
+	cur, _, _ := m.selected(m.ordered())
+	_, owners := m.listView(m.sections(), cur.SessionID)
+	for i, o := range owners {
+		if o == id {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+func manyRows(n int) []fleet.Row {
+	var rows []fleet.Row
+	for i := 0; i < n; i++ {
+		rows = append(rows, row(fmt.Sprintf("s%d", i), fmt.Sprintf("n%d", i), "work", 10+i))
+	}
+	return rows
+}
+
+func TestClickSelectsAndDoubleClickJumps(t *testing.T) {
+	j := &fakeJumper{}
+	m := newTestModel(t, j, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m, _ = press(m, "tab")
+	y := screenY(m, "s2")
+	m, cmd := mouseClick(m, 5, y+1) // the row's second line
+	if m.sel != "s2" || m.focus != listPane || cmd != nil {
+		t.Fatalf("sel %q focus %v cmd %v", m.sel, m.focus, cmd != nil)
+	}
+	m, cmd = mouseClick(m, 5, y)
+	m = settle(t, m, cmd)
+	if len(j.locates) != 1 || j.locates[0] != "ttys2" {
+		t.Fatalf("double click should jump to s2: locates %v", j.locates)
+	}
+}
+
+func TestSlowSecondClickOnlySelects(t *testing.T) {
+	j := &fakeJumper{}
+	m := newTestModel(t, j, row("s1", "red", "auth", 11))
+	m, _ = mouseClick(m, 5, screenY(m, "s1"))
+	m.clickAt = m.clickAt.Add(-time.Second)
+	if _, cmd := mouseClick(m, 5, screenY(m, "s1")); cmd != nil {
+		t.Fatal("two slow clicks acted")
+	}
+}
+
+func TestClickOffARowDoesNothing(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	before := m.sel
+	for _, y := range []int{0, 1, 28, 29} { // top edge, a heading, bottom edge, status bar
+		m, _ = mouseClick(m, 5, y)
+		if m.sel != before {
+			t.Fatalf("click at line %d moved the cursor to %q", y, m.sel)
+		}
+	}
+}
+
+// Clicking a row above the cursor once scrolled it to the bottom of the
+// pane, out from under the pointer.
+func TestClickDoesNotScrollTheList(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{}, manyRows(8)...)
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 12})
+	m, _ = press(m, "G")
+	rows := m.ordered()
+	for _, r := range rows {
+		y := screenY(m, r.SessionID)
+		if y < 1 || y+1 > 9 {
+			continue // not wholly shown
+		}
+		m, _ = mouseClick(m, 5, y)
+		if m.sel != r.SessionID || screenY(m, r.SessionID) != y {
+			t.Fatalf("clicked %s at line %d: sel %q, now at line %d", r.SessionID, y, m.sel, screenY(m, r.SessionID))
+		}
+		m.clickID = ""
+	}
+}
+
+func TestWheel(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	first := m.sel
+	m = wheel(m, 5, 5, true)
+	if m.sel == first {
+		t.Fatal("wheel down over the list did not move the cursor")
+	}
+	if m = wheel(m, 5, 5, false); m.sel != first {
+		t.Fatal("wheel up did not move back")
+	}
+	m, _ = mouseClick(m, 80, 5)
+	if m.focus != detailPane {
+		t.Fatal("click on the detail pane did not focus it")
+	}
+	m = wheel(m, 80, 5, false)
+	if m.scroll != 0 || m.sel != first {
+		t.Fatalf("wheel up at the top: scroll %d sel %q", m.scroll, m.sel)
+	}
+}
+
+func TestClickClosesOverlays(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	m, _ = press(m, "?")
+	if m = wheel(m, 5, 5, true); !m.help {
+		t.Fatal("wheel closed help")
+	}
+	if m, _ = mouseClick(m, 5, 5); m.help {
+		t.Fatal("click left help open")
+	}
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
+	m = newTestModel(t, &fakeJumper{}, bg)
+	m, _ = press(m, "x")
+	if m.confirm == "" {
+		t.Fatal("x did not ask")
+	}
+	if m, cmd := mouseClick(m, 5, screenY(m, "b1")); m.confirm != "" || cmd != nil {
+		t.Fatal("click did not cancel the stop")
+	}
+}
+
+func TestCopyRunsAsACommand(t *testing.T) {
+	var got string
+	defer func(old func(string) error) { copyText = old }(copyText)
+	copyText = func(s string) error { got = s; return nil }
+	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	m, cmd := press(m, "y")
+	if got != "" || cmd == nil {
+		t.Fatal("y copied inside Update")
+	}
+	if m = update(m, cmd()); got != "s1" || m.note != "copied s1" {
+		t.Fatalf("copied %q, note %q", got, m.note)
+	}
+}

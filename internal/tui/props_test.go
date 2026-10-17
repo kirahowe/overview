@@ -440,3 +440,29 @@ func TestPropPartialThemeKeepsBase(t *testing.T) {
 		}
 	})
 }
+
+// The list window shows the cursor's row, stays inside the list, and does
+// not move while the row is already in view.
+func TestPropWindow(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		n := rapid.IntRange(0, 60).Draw(t, "n")
+		h := rapid.IntRange(1, 30).Draw(t, "h")
+		selTop := rapid.IntRange(0, n).Draw(t, "selTop")
+		selBottom := rapid.IntRange(selTop, n).Draw(t, "selBottom")
+		top := rapid.IntRange(0, 80).Draw(t, "top")
+		got := window(top, selTop, selBottom, n, h)
+
+		if got < 0 || got > max(n-h, 0) {
+			t.Fatalf("window %d outside [0, %d]", got, max(n-h, 0))
+		}
+		if selBottom-selTop <= h && (got > selTop || selBottom > got+h) {
+			t.Fatalf("window %d hides [%d, %d)", got, selTop, selBottom)
+		}
+		if selBottom-selTop > h && got != selTop {
+			t.Fatalf("a tall row should show its top: %d, want %d", got, selTop)
+		}
+		if top <= max(n-h, 0) && top <= selTop && selBottom <= top+h && got != top {
+			t.Fatalf("window moved from %d to %d with the row in view", top, got)
+		}
+	})
+}

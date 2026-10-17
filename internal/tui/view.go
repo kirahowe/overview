@@ -103,7 +103,8 @@ func (m model) sessionsView() []string {
 	if m.filter != "" || m.filtering {
 		listInfo = fmt.Sprintf("/%s · %d", m.filter, len(rows))
 	}
-	list := box("sessions", listInfo, m.listLines(secs, row.SessionID, lw-4, lh-2), lw, lh, m.focus == listPane)
+	lines, _ := m.listView(secs, row.SessionID)
+	list := box("sessions", listInfo, lines, lw, lh, m.focus == listPane)
 
 	var detail []string
 	title, info := "detail", ""
@@ -159,47 +160,78 @@ func box(title, info string, body []string, w, h int, focused bool) []string {
 	return append(out, bottom)
 }
 
-// listLines renders the sections and scrolls so the cursor stays in view.
-func (m model) listLines(secs []section, sel string, w, h int) []string {
-	if !m.loaded {
-		return []string{dim.Render("reading sessions…")}
+// listLines renders the whole list, unscrolled, with the session each line
+// belongs to ("" for headings, gaps and messages). Clicks read the owners.
+func (m model) listLines(secs []section, sel string, w int) (lines, owners []string) {
+	add := func(owner string, ls ...string) {
+		lines = append(lines, ls...)
+		for range ls {
+			owners = append(owners, owner)
+		}
 	}
-	var lines []string
+	if !m.loaded {
+		add("", dim.Render("reading sessions…"))
+		return lines, owners
+	}
 	if m.rowsErr != nil {
-		lines = append(lines, red.Render(m.rowsErr.Error()), "")
+		add("", red.Render(m.rowsErr.Error()), "")
 	}
 	if len(secs) == 0 {
 		msg := "no sessions running"
 		if m.filter != "" {
 			msg = "nothing matches /" + m.filter
 		}
-		return append(lines, dim.Render(msg))
+		add("", dim.Render(msg))
+		return lines, owners
 	}
-	selTop, selBottom := 0, 0
 	for i, sec := range secs {
 		if i > 0 {
-			lines = append(lines, "")
+			add("", "")
 		}
 		style := heading
 		if sec.NeedsYou {
 			style = red
 		}
-		lines = append(lines, style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", len(sec.Rows))))
+		add("", style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", len(sec.Rows))))
 		for _, r := range sec.Rows {
-			if r.SessionID == sel {
-				selTop = len(lines)
-			}
-			lines = append(lines, m.rowLines(r, w, r.SessionID == sel, sec.NeedsYou)...)
-			if r.SessionID == sel {
-				selBottom = len(lines)
-			}
+			add(r.SessionID, m.rowLines(r, w, r.SessionID == sel, sec.NeedsYou)...)
 		}
 	}
-	top := 0
-	if selBottom > h {
+	return lines, owners
+}
+
+// listStart is the first list line shown: the last one, moved just enough
+// to show the cursor's row whole.
+func (m model) listStart(owners []string, sel string, h int) int {
+	selTop, selBottom := 0, 0
+	for i, o := range owners {
+		if o == sel && sel != "" {
+			if selBottom == 0 {
+				selTop = i
+			}
+			selBottom = i + 1
+		}
+	}
+	return window(m.listTop, selTop, selBottom, len(owners), h)
+}
+
+// window keeps a window of h lines over n as close to top as it can while
+// it shows [selTop, selBottom), and the top of that span when it is taller
+// than the window. It never leaves empty lines below the end.
+func window(top, selTop, selBottom, n, h int) int {
+	top = min(top, max(n-h, 0))
+	if selBottom > top+h {
 		top = selBottom - h
 	}
-	return lines[min(top, selTop):]
+	return max(min(top, selTop), 0)
+}
+
+// listView is the shown part of the list and its owners.
+func (m model) listView(secs []section, sel string) (lines, owners []string) {
+	lw, lh, _, _ := m.split()
+	lines, owners = m.listLines(secs, sel, lw-4)
+	start := m.listStart(owners, sel, lh-2)
+	return lines[start:], owners[start:]
 }
 
 // rowLines renders one session as two lines: name, place and age, then what
@@ -428,6 +460,10 @@ func (m model) helpBox() []string {
 		entry{"d", "show / hide digests"},
 		entry{"[ ]", "older / newer"},
 		entry{"D", "write one now"},
+	)...)
+	right = append(right, section("mouse",
+		entry{"click", "select, twice to act"},
+		entry{"wheel", "move / scroll"},
 	)...)
 	right = append(right, section("general",
 		entry{"r", "refresh"},

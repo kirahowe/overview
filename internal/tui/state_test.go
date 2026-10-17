@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -12,10 +14,9 @@ import (
 	"overview/internal/fleet"
 )
 
-// keyPool is every key the sessions screen answers to, minus the ones that
-// run programs from inside Update (y copies with pbcopy).
+// keyPool is every key the view answers to, and one it does not.
 var keyPool = []string{
-	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "a", "x", "d", "1", "2", "?",
+	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "a", "x", "y", "d", "1", "2", "?",
 	"tab", "l", "h", "r", "D", "J", "K", "ctrl+d", "ctrl+u", " ", "backspace", "down", "up",
 	"[", "]", "z",
 }
@@ -57,8 +58,8 @@ func checkInvariants(t *rapid.T, m model) {
 			t.Fatalf("selected() disagrees with sel %q", m.sel)
 		}
 	}
-	if m.filtering && m.screen != sessionsScreen {
-		t.Fatal("filtering on the digest screen")
+	if m.filtering && (m.screen != sessionsScreen || m.focus != listPane) {
+		t.Fatalf("filtering on screen %d, pane %d", m.screen, m.focus)
 	}
 	if m.jumping < 0 || m.jumping > m.jumpSeq {
 		t.Fatalf("jump %d in flight, only %d started", m.jumping, m.jumpSeq)
@@ -73,6 +74,46 @@ func checkInvariants(t *rapid.T, m model) {
 		}
 		seen[r.SessionID] = true
 	}
+}
+
+// observed is what input can change, short of notes and their times.
+type observed struct {
+	sel, filter, confirm          string
+	focus                         pane
+	screen                        screen
+	filtering, help               bool
+	scroll, listTop, digestScroll int
+	digestIdx, jumping, jumpSeq   int
+}
+
+func observe(m model) observed {
+	return observed{m.sel, m.filter, m.confirm, m.focus, m.screen, m.filtering, m.help,
+		m.scroll, m.listTop, m.digestScroll, m.digestIdx, m.jumping, m.jumpSeq}
+}
+
+func sameAs(t *rapid.T, what string, got, want model) {
+	if g, w := observe(got), observe(want); !reflect.DeepEqual(g, w) {
+		t.Fatalf("%s:\n got %+v\nwant %+v", what, g, w)
+	}
+}
+
+// mouseAt sends a mouse press through Update, stamped at at.
+func mouseAt(m model, b tea.MouseButton, x, y int, at time.Time) model {
+	defer func(old func() time.Time) { now = old }(now)
+	now = func() time.Time { return at }
+	return update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: b})
+}
+
+// shownLine is the screen line of a session's first list line, or -1.
+func shownLine(m model, id string) int {
+	cur, _, _ := m.selected(m.ordered())
+	_, owners := m.listView(m.sections(), cur.SessionID)
+	for i, o := range owners {
+		if o == id {
+			return i + 1
+		}
+	}
+	return -1
 }
 
 func TestStateMachine(t *testing.T) {
@@ -151,6 +192,90 @@ func TestStateMachine(t *testing.T) {
 				if got := m.terms[msg.key]; got != want {
 					t.Fatalf("cache for %q is %q, want %q (live %v, shown %v)", msg.key, got, want, live, before.hasJumpKey(msg.key))
 				}
+			},
+			"click": func(t *rapid.T) {
+				x := rapid.IntRange(0, m.w-1).Draw(t, "x")
+				y := rapid.IntRange(0, m.h-1).Draw(t, "y")
+				// Often soon after the last click, so double clicks happen.
+				at := m.clickAt.Add(time.Duration(rapid.IntRange(0, 800).Draw(t, "ms")) * time.Millisecond)
+				before := m
+				m = mouseAt(m, tea.MouseButtonLeft, x, y, at)
+
+				var ref model
+				switch lw, lh, _, _ := before.split(); {
+				case before.confirm != "" || before.help:
+					// A click closes an overlay as esc does.
+					ref, _ = press(before, "esc")
+				case before.screen == digestScreen, y >= before.boxHeight():
+					ref = before
+				case x >= lw || y >= lh:
+					ref, _ = press(before, "tab")
+					if before.focus == detailPane || before.filtering {
+						ref = before
+					}
+				default:
+					// A click on a row is the cursor moved there, and a second
+					// one on it is enter.
+					ref = before
+					ref.focus = listPane
+					cur, _, _ := before.selected(before.ordered())
+					_, owners := before.listView(before.sections(), cur.SessionID)
+					line := y - 1
+					if line < 0 || line >= min(len(owners), lh-2) || owners[line] == "" {
+						break
+					}
+					id := owners[line]
+					rows := before.ordered()
+					for j, r := range rows {
+						if r.SessionID == id {
+							ref = ref.moveTo(rows, j)
+						}
+					}
+					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys}) // settles listTop
+					if m.sel != id {
+						t.Fatalf("click on %s left the cursor on %s", id, m.sel)
+					}
+					if id == before.clickID && at.Sub(before.clickAt) < doubleClick {
+						ref, _ = press(ref, "enter")
+					} else if got := shownLine(m, id); got != y && got != y-1 {
+						t.Fatalf("clicked %s at line %d, now at line %d", id, y, got)
+					}
+				}
+				sameAs(t, fmt.Sprintf("click at %d,%d", x, y), m, ref)
+			},
+			"wheel": func(t *rapid.T) {
+				x := rapid.IntRange(0, m.w-1).Draw(t, "x")
+				y := rapid.IntRange(0, m.h-1).Draw(t, "y")
+				down := rapid.Bool().Draw(t, "down")
+				b, step, line := tea.MouseButtonWheelUp, "up", "K"
+				if down {
+					b, step, line = tea.MouseButtonWheelDown, "down", "J"
+				}
+				before := m
+				m = mouseAt(m, b, x, y, t0)
+
+				// The wheel over the list is up or down there, and over the
+				// detail pane or digests it is three lines of scrolling, even
+				// while searching, when J and K would type.
+				ref := before
+				lw, lh, _, _ := before.split()
+				switch {
+				case before.confirm != "" || before.help, before.screen == sessionsScreen && y >= before.boxHeight():
+				case before.screen == digestScreen:
+					ref, _ = press(ref, "j", "j", "j")
+					if !down {
+						ref, _ = press(before, "k", "k", "k")
+					}
+				case x < lw && y < lh:
+					ref.focus = listPane
+					ref, _ = press(ref, step)
+					ref.focus = before.focus
+				default:
+					ref.filtering = false
+					ref, _ = press(ref, line, line, line)
+					ref.filtering = before.filtering
+				}
+				sameAs(t, fmt.Sprintf("wheel at %d,%d", x, y), m, ref)
 			},
 			"view": func(t *rapid.T) {
 				for _, w := range []int{40, 41, 63, 89, 90, 91, 120, 200} {
