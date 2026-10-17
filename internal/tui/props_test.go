@@ -32,6 +32,14 @@ func fakeProject(cwd string) string {
 	return path.Base(cwd)
 }
 
+// fakeHost puts an interactive session with pid 3 inside an app, Notes.
+func fakeHost(r fleet.Row) (string, bool) {
+	if r.Background() || r.PID != 3 {
+		return "", false
+	}
+	return "Notes", true
+}
+
 func phrase(t *rapid.T, label string) string {
 	n := rapid.IntRange(0, 3).Draw(t, label+"n")
 	ws := make([]string, n)
@@ -53,6 +61,7 @@ func genRow(t *rapid.T, id string) fleet.Row {
 	r.SessionID = id
 	r.Name = rapid.SampledFrom([]string{"red-fox", "Blue-owl", "overview-orchestrator", "quiet-elk", ""}).Draw(t, "name")
 	r.Cwd = rapid.SampledFrom(cwds).Draw(t, "cwd")
+	r.PID = rapid.IntRange(0, 3).Draw(t, "pid")
 	if rapid.IntRange(0, 9).Draw(t, "kind") == 0 {
 		r.Kind = "background"
 	}
@@ -154,7 +163,7 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 		if rapid.Bool().Draw(t, "qupper") {
 			q = strings.ToUpper(q)
 		}
-		got := ids(buildList(rows, q, fakeProject))
+		got := ids(buildList(rows, q, fakeProject, fakeHost))
 		sort.Strings(want)
 		sort.Strings(got)
 		if strings.Join(want, ",") != strings.Join(got, ",") {
@@ -165,7 +174,7 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 
 func TestPropSectionsHoldTheRightRows(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		secs := buildList(genRows(t), genQuery(t), fakeProject)
+		secs := buildList(genRows(t), genQuery(t), fakeProject, fakeHost)
 		seen := map[string]bool{}
 		var prev *section
 		for i := range secs {
@@ -184,7 +193,11 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 				if r.NeedsYou() != s.NeedsYou {
 					t.Fatalf("%s: NeedsYou=%v in section needs=%v", r.SessionID, r.NeedsYou(), s.NeedsYou)
 				}
-				if !s.NeedsYou && fakeProject(r.Cwd) != s.Title {
+				_, away := fakeHost(r)
+				if !s.NeedsYou && away != s.Away {
+					t.Fatalf("%s: away=%v in section away=%v", r.SessionID, away, s.Away)
+				}
+				if !s.NeedsYou && !s.Away && fakeProject(r.Cwd) != s.Title {
 					t.Fatalf("%s (project %q) is under %q", r.SessionID, fakeProject(r.Cwd), s.Title)
 				}
 				if j == 0 {
@@ -206,7 +219,10 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 					}
 				}
 			}
-			if !s.NeedsYou {
+			if s.Away && (i != len(secs)-1 || s.Title != awayTitle) {
+				t.Fatalf("away section at %d of %d titled %q, want last and %q", i, len(secs), s.Title, awayTitle)
+			}
+			if !s.NeedsYou && !s.Away {
 				if prev != nil && !nameLess(prev.Title, s.Title) {
 					t.Fatalf("projects out of order: %q then %q", prev.Title, s.Title)
 				}
@@ -220,12 +236,12 @@ func TestPropIndependentOfInputOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, q := genRows(t), genQuery(t)
 		shuffled := rapid.Permutation(rows).Draw(t, "perm")
-		a := buildList(rows, q, fakeProject)
-		b := buildList(shuffled, q, fakeProject)
+		a := buildList(rows, q, fakeProject, fakeHost)
+		b := buildList(shuffled, q, fakeProject, fakeHost)
 		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
 			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
 		}
-		if !reflect.DeepEqual(ids(a), ids(buildList(rows, q, fakeProject))) {
+		if !reflect.DeepEqual(ids(a), ids(buildList(rows, q, fakeProject, fakeHost))) {
 			t.Fatal("not deterministic")
 		}
 	})
@@ -241,7 +257,7 @@ func TestPropEmptyQueryIsEverything(t *testing.T) {
 				want++
 			}
 		}
-		if got := len(ids(buildList(rows, q, fakeProject))); got != want {
+		if got := len(ids(buildList(rows, q, fakeProject, fakeHost))); got != want {
 			t.Fatalf("got %d rows, want %d", got, want)
 		}
 	})
@@ -252,10 +268,10 @@ func TestPropLongerQueryNeverAddsRows(t *testing.T) {
 		rows, q := genRows(t), genQuery(t)
 		extra := rapid.SampledFrom([]string{"a", "x", "e", " fix", " ", "  api", "\tzz"}).Draw(t, "extra")
 		base := map[string]bool{}
-		for _, id := range ids(buildList(rows, q, fakeProject)) {
+		for _, id := range ids(buildList(rows, q, fakeProject, fakeHost)) {
 			base[id] = true
 		}
-		for _, id := range ids(buildList(rows, q+extra, fakeProject)) {
+		for _, id := range ids(buildList(rows, q+extra, fakeProject, fakeHost)) {
 			if !base[id] {
 				t.Fatalf("%q matches %s but %q does not", q+extra, id, q)
 			}
@@ -274,14 +290,14 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 			{LastPrompt: a, Label: b},
 		} {
 			r.SessionID = "x"
-			if len(buildList([]fleet.Row{r}, term, func(string) string { return "" })) != 0 {
+			if len(buildList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost)) != 0 {
 				t.Fatalf("%q matched across fields %q|%q", term, a, b)
 			}
 		}
 		// Whitespace splits terms, so a "term" with a space is two terms and
 		// each may match a different field.
 		r := fleet.Row{SessionID: "x", Title: a, LastPrompt: b}
-		if len(buildList([]fleet.Row{r}, a+" "+b, func(string) string { return "" })) != 1 {
+		if len(buildList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost)) != 1 {
 			t.Fatalf("%q %q should match as two terms", a, b)
 		}
 	})
@@ -293,7 +309,7 @@ func TestMatchingIsPerFieldAndCaseInsensitive(t *testing.T) {
 		"billing": true, "AUTH": true, "fix auth": true, "auth billing": true,
 		"authrotate": false, "fixauth": false, "keys fix": true, "nope": false,
 	} {
-		got := len(buildList([]fleet.Row{r}, q, fakeProject)) == 1
+		got := len(buildList([]fleet.Row{r}, q, fakeProject, fakeHost)) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}

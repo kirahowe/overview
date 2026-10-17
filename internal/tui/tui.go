@@ -5,7 +5,6 @@ package tui
 import (
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -45,9 +44,10 @@ type (
 	tickMsg  time.Time
 	frameMsg time.Time
 	rowsMsg  struct {
-		rows []fleet.Row
-		ttys map[int]string
-		err  error
+		rows  []fleet.Row
+		ttys  map[int]string
+		hosts map[int]host
+		err   error
 	}
 	digestMsg struct {
 		d   fleet.Digest
@@ -77,6 +77,7 @@ type model struct {
 
 	rows    []fleet.Row
 	ttys    map[int]string
+	hosts   map[int]host // interactive sessions with no terminal, by pid
 	rowsErr error
 	loaded  bool
 
@@ -112,6 +113,8 @@ type model struct {
 	// copies of the model share it, and only Update writes to it.
 	jump  jumper
 	terms map[string]string
+	// reveal brings an app to the front. Tests replace it.
+	reveal func(path string) error
 	// jumping is the seq of the jump in flight, 0 if none. Only one runs at
 	// a time: two Locates on one tty would each take the other's token for
 	// the terminal's real title.
@@ -136,8 +139,10 @@ func Run(home fleet.Home, llm string, theme Theme) error {
 
 func newModel(home fleet.Home, llm string) model {
 	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
-		terms: map[string]string{}}
+		terms: map[string]string{}, reveal: openApp}
 }
+
+func openApp(path string) error { return exec.Command("open", path).Run() }
 
 // loadDigests picks up the digest list and shows the newest one.
 func (m model) loadDigests() model {
@@ -170,31 +175,9 @@ func nextFrame() tea.Cmd {
 
 func (m model) refresh() tea.Msg {
 	rows, err := m.home.Rows()
-	return rowsMsg{rows, terminals(rows), err}
-}
-
-// terminals finds the tty each interactive session runs in, which is the
-// only way to tell which terminal tab to go to.
-func terminals(rows []fleet.Row) map[int]string {
-	var pids []string
-	for _, r := range rows {
-		if !r.Background() && r.PID > 0 {
-			pids = append(pids, strconv.Itoa(r.PID))
-		}
-	}
-	out := map[int]string{}
-	if len(pids) == 0 {
-		return out
-	}
-	b, _ := exec.Command("ps", "-o", "pid=,tty=", "-p", strings.Join(pids, ",")).Output()
-	for _, line := range strings.Split(string(b), "\n") {
-		if f := strings.Fields(line); len(f) == 2 {
-			if pid, err := strconv.Atoi(f[0]); err == nil && f[1] != "??" {
-				out[pid] = f[1]
-			}
-		}
-	}
-	return out
+	out, _ := psTable()
+	ttys, hosts := places(parseProcs(string(out)), rows)
+	return rowsMsg{rows, ttys, hosts, err}
 }
 
 func (m model) runDigest() tea.Msg {
@@ -209,7 +192,16 @@ func (m model) say(note string) model {
 
 // sections is the list as shown, with the filter applied.
 func (m model) sections() []section {
-	return buildList(m.rows, m.filter, m.projects.name)
+	return buildList(m.rows, m.filter, m.projects.name, m.hostOf)
+}
+
+// hostOf names the app a session runs inside, for one that has no terminal.
+func (m model) hostOf(r fleet.Row) (string, bool) {
+	if r.Background() {
+		return "", false
+	}
+	h, ok := m.hosts[r.PID]
+	return h.label(), ok
 }
 
 // ordered is the list flattened in the order the cursor walks it.
@@ -311,7 +303,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.refresh, tick())
 	case rowsMsg:
-		m.rows, m.ttys, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.err, true
+		m.rows, m.ttys, m.hosts, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.err, true
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.keepSel()
 	case jumpMsg:
@@ -475,6 +467,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.apply(action{do: open})
 		}
 	case stop:
+		if app, away := m.hostOf(row); ok && away {
+			return m.say(row.Name + " belongs to " + app + ". Close it there."), nil
+		}
 		if !ok || !row.Background() {
 			return m.say("only background sessions can be stopped from here"), nil
 		}
@@ -511,12 +506,22 @@ func copied(text string, err error) tea.Msg {
 
 // act does what enter means for a row. A background session is attached. An
 // interactive one is jumped to in Ghostty when jump is set (enter), and
-// otherwise only reported with its tty (the `a` key).
+// otherwise only reported with its tty (the `a` key). One that runs inside
+// another app brings that app forward, since that is where it is used.
 func (m model) act(row fleet.Row, jump bool) (model, tea.Cmd) {
 	if row.Background() {
 		return m, tea.ExecProcess(m.home.AttachCmd(row.Live), func(err error) tea.Msg {
 			return doneMsg{"back from " + row.Name, err}
 		})
+	}
+	if h, away := m.hosts[row.PID]; away {
+		if !jump || h.Path == "" || m.reveal == nil {
+			return m.say(awayNote(row.Name, h)), nil
+		}
+		reveal := m.reveal
+		return m.say("opening " + h.Name + "…"), func() tea.Msg {
+			return doneMsg{row.Name + " is in " + h.Name, reveal(h.Path)}
+		}
 	}
 	tty := m.ttys[row.PID]
 	if !jump || m.jump == nil || tty == "" {

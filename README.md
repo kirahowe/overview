@@ -45,22 +45,27 @@ longest wait comes first. Every other session sits in a section for its
 project, which is the nearest parent directory with a `.jj` or `.git` in it,
 or the session's own directory when there is none. Projects are in
 alphabetical order. Inside one, working sessions come before idle ones, and
-the latest activity comes first. A session appears once, and each row shows
-its state. The right pane shows the selected session: where it runs, what it
-is waiting on, and its last few turns from the transcript.
+the latest activity comes first. A session that another app started, such as
+an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
+in a last section, "in other apps", dimmed and named after the app that runs
+it. A session appears once, and each row shows its state. The right pane shows
+the selected session: where it runs, what it is waiting on, and its last few
+turns from the transcript.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
-searches. Search looks at the project, title, last prompt, name and label,
-ignoring case. Each space-separated word has to match one of those fields,
-and a word never matches across two of them. The cursor moves to the first
-match, `up` and `down` step through the matches, and `esc` clears the search.
-`enter` acts on the selected session: it jumps to an interactive session's
-Ghostty terminal and attaches to a background one. While you are searching,
-`enter` acts on the selected match and clears the search. `a` attaches to a
-background session, `x` stops one (it asks first), and `y` copies the
-attach command. `tab` moves between the two panes. `d` shows the digests,
-where `[` and `]` step through older ones and `D` writes a new one. `?` lists
-every key.
+searches. Search looks at the project, title, last prompt, name and label, and
+the app's name for a session in another app, ignoring case. Each
+space-separated word has to match one of those fields, and a word never
+matches across two of them. The cursor moves to the first match, `up` and
+`down` step through the matches, and `esc` clears the search. `enter` acts on
+the selected session: it jumps to an interactive session's Ghostty terminal,
+attaches to a background one, and brings the app to the front for a session in
+another app. While you are searching, `enter` acts on the selected match and
+clears the search. `a` attaches to a background session, `x` stops one (it
+asks first), and `y` copies the attach command. To end a session in another app,
+close it in that app. `tab` moves between the two panes. `d` shows the
+digests, where `[` and `]` step through older ones and `D` writes a new one.
+`?` lists every key.
 
 The mouse works too, and does what the keys do. A click selects a session
 or focuses the detail pane, a double click acts on a session as `enter`

@@ -37,6 +37,14 @@ func ttyNote(name, tty, why string) string {
 	return name + " is interactive, in " + where + why + ". Switch to that tab to answer it."
 }
 
+// awayNote says where a session that runs inside another app is.
+func awayNote(name string, h host) string {
+	if h.Name == "" {
+		return name + " runs without a terminal, so there is nowhere to jump to."
+	}
+	return name + " runs inside " + h.Name + ". Switch to " + h.Name + " to use it."
+}
+
 func jumpReason(err error) string {
 	switch {
 	case errors.Is(err, ghostty.ErrNotRunning):

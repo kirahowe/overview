@@ -189,8 +189,11 @@ func (m model) listLines(secs []section, sel string, w int) (lines, owners []str
 			add("", "")
 		}
 		style := heading
-		if sec.NeedsYou {
+		switch {
+		case sec.NeedsYou:
 			style = red
+		case sec.Away:
+			style = dim.Bold(true)
 		}
 		add("", style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", len(sec.Rows))))
 		for _, r := range sec.Rows {
@@ -253,9 +256,15 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 		mark, style = spinner[m.frame%len(spinner)], green
 	}
 	// Under a project heading the project is already known, so say the state
-	// instead. In the pinned section the project is what is missing.
+	// instead. In the pinned section the project is what is missing. A
+	// session inside another app is placed by that app, wherever it is, and
+	// is dimmed, since it is not one of the user's own.
 	place, placed := m.projects.name(r.Cwd), ""
-	if !pinned {
+	app, away := m.hostOf(r)
+	switch {
+	case away:
+		place = app
+	case !pinned:
 		place = string(r.State)
 		if place == "" {
 			place = "idle"
@@ -263,6 +272,10 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 	}
 	placed = place + " · "
 	right := placed + when
+	nameStyle := fg(pal.Text)
+	if away && !r.NeedsYou() {
+		nameStyle = dim
+	}
 	name := ansi.Truncate(r.Name, max(w-ansi.StringWidth(right)-4, 4), "…")
 	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
 
@@ -276,7 +289,7 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 			bar.Bold(false).Render(fit("  "+sub, w)),
 		}
 	}
-	line := style.Render(mark) + " " + fg(pal.Text).Render(name) + gap + dim.Render(placed) + style.Render(when)
+	line := style.Render(mark) + " " + nameStyle.Render(name) + gap + dim.Render(placed) + style.Render(when)
 	subStyle := dim
 	if r.NeedsYou() {
 		subStyle = style.Bold(false)
@@ -296,7 +309,7 @@ func (m model) detail(r fleet.Row, w int) []string {
 	if info, err := os.Stat(r.Transcript); err == nil {
 		mod = info.ModTime()
 	}
-	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], mod)
+	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], m.hosts[r.PID], mod)
 	if m.cache != nil && m.cache.key == key {
 		return m.cache.lines
 	}
@@ -325,10 +338,16 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		state = pill("idle "+Ago(r.Since), pal.Muted)
 	}
 	kind := "interactive"
-	if r.Background() {
+	h, away := m.hosts[r.PID]
+	switch {
+	case r.Background():
 		kind = "background " + r.ID
-	} else if tty := m.ttys[r.PID]; tty != "" {
-		kind += " · " + tty
+	case away && h.Name != "":
+		kind += " · inside " + h.Name
+	case away:
+		kind += " · no terminal"
+	case m.ttys[r.PID] != "":
+		kind += " · " + m.ttys[r.PID]
 	}
 	add(state + "  " + dim.Render(kind))
 	out = append(out, "")
@@ -345,6 +364,14 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		add(italic.Render(r.Title))
 	}
 	add(dim.Render(strings.Join(meta, " · ")))
+	if away && !r.Background() {
+		out = append(out, "")
+		if h.Name != "" {
+			add(dim.Render(h.Name + " started this session and runs it without a terminal. enter brings " + h.Name + " forward. To end it, close it there."))
+		} else {
+			add(dim.Render("Something other than a terminal started this session, so there is nowhere to jump to."))
+		}
+	}
 
 	callout := func(style lipgloss.Style, label, text string) {
 		out = append(out, "")
@@ -448,7 +475,7 @@ func (m model) helpBox() []string {
 		entry{"/", "search, esc clears"},
 		entry{"tab l h", "switch pane"},
 	), section("act",
-		entry{"enter", "jump to terminal / attach"},
+		entry{"enter", "jump / attach / open app"},
 		entry{"a", "attach (background)"},
 		entry{"x", "stop (background)"},
 		entry{"y", "copy attach command"},

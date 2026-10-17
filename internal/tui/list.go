@@ -9,15 +9,19 @@ import (
 	"overview/internal/fleet"
 )
 
-// needsYouTitle heads the pinned section. Project sections are headed by the
-// project's display name.
-const needsYouTitle = "needs you"
+// needsYouTitle heads the pinned section and awayTitle the last one. Project
+// sections are headed by the project's display name.
+const (
+	needsYouTitle = "needs you"
+	awayTitle     = "in other apps"
+)
 
-// section is one block of the list: either the pinned "needs you" block or
-// the sessions of one project.
+// section is one block of the list: the pinned "needs you" block, the
+// sessions of one project, or the sessions other apps run.
 type section struct {
 	Title    string
 	NeedsYou bool
+	Away     bool
 	Rows     []fleet.Row
 }
 
@@ -27,24 +31,31 @@ type section struct {
 // It drops the orchestrator and every row the query does not match, pins the
 // rows that need you in a first section (longest wait first), and puts the
 // rest into one section per project. Projects are ordered by display name.
-// Within a project, working sessions come before the rest, then the newest
-// activity first, then the session id. The result depends only on the set of
-// rows, never on their order.
-func buildList(rows []fleet.Row, query string, project func(cwd string) string) []section {
+// A session that runs inside another app, as host reports, is not one the
+// user drives from a project, so unless it needs them it goes in a last
+// section of its own instead. Within a project or that section, working
+// sessions come before the rest, then the newest activity first, then the
+// session id. The result depends only on the set of rows, never on their
+// order.
+func buildList(rows []fleet.Row, query string, project func(cwd string) string, host func(fleet.Row) (string, bool)) []section {
 	terms := strings.Fields(strings.ToLower(query))
-	var needs []fleet.Row
+	var needs, away []fleet.Row
 	byProject := map[string][]fleet.Row{}
 	for _, r := range rows {
 		if r.Name == fleet.OrchestratorName {
 			continue
 		}
 		p := project(r.Cwd)
-		if !matches(r, p, terms) {
+		app, isAway := host(r)
+		if !matches(r, p, app, terms) {
 			continue
 		}
-		if r.NeedsYou() {
+		switch {
+		case r.NeedsYou():
 			needs = append(needs, r)
-		} else {
+		case isAway:
+			away = append(away, r)
+		default:
 			byProject[p] = append(byProject[p], r)
 		}
 	}
@@ -66,19 +77,29 @@ func buildList(rows []fleet.Row, query string, project func(cwd string) string) 
 	sort.Slice(names, func(i, j int) bool { return nameLess(names[i], names[j]) })
 	for _, p := range names {
 		rs := byProject[p]
-		sort.Slice(rs, func(i, j int) bool {
-			wi, wj := rs[i].State == fleet.Working, rs[j].State == fleet.Working
-			if wi != wj {
-				return wi
-			}
-			if !rs[i].Since.Equal(rs[j].Since) {
-				return rs[i].Since.After(rs[j].Since)
-			}
-			return rs[i].SessionID < rs[j].SessionID
-		})
+		sortActive(rs)
 		out = append(out, section{Title: p, Rows: rs})
 	}
+	if len(away) > 0 {
+		sortActive(away)
+		out = append(out, section{Title: awayTitle, Away: true, Rows: away})
+	}
 	return out
+}
+
+// sortActive puts working sessions first, then the newest activity, then
+// orders by session id.
+func sortActive(rs []fleet.Row) {
+	sort.Slice(rs, func(i, j int) bool {
+		wi, wj := rs[i].State == fleet.Working, rs[j].State == fleet.Working
+		if wi != wj {
+			return wi
+		}
+		if !rs[i].Since.Equal(rs[j].Since) {
+			return rs[i].Since.After(rs[j].Since)
+		}
+		return rs[i].SessionID < rs[j].SessionID
+	})
 }
 
 // nameLess orders project names alphabetically, ignoring case, with the
@@ -92,12 +113,13 @@ func nameLess(a, b string) bool {
 }
 
 // matches reports whether every term is found in at least one field. A term
-// is matched against one field at a time, so it can never straddle two.
-func matches(r fleet.Row, project string, terms []string) bool {
+// is matched against one field at a time, so it can never straddle two. app
+// is the host app's name, "" for a session in a terminal.
+func matches(r fleet.Row, project, app string, terms []string) bool {
 	if len(terms) == 0 {
 		return true
 	}
-	fields := [...]string{project, r.Title, r.LastPrompt, r.Name, r.Label}
+	fields := [...]string{project, r.Title, r.LastPrompt, r.Name, r.Label, app}
 	lower := make([]string, len(fields))
 	for i, f := range fields {
 		lower[i] = strings.ToLower(f)
@@ -209,5 +231,5 @@ func counts(secs []section) (need, working, idle int) {
 }
 
 func (m model) counts() (need, working, idle int) {
-	return counts(buildList(m.rows, "", m.projects.name))
+	return counts(buildList(m.rows, "", m.projects.name, m.hostOf))
 }
