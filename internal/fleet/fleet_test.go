@@ -258,3 +258,18 @@ func TestNeedsYou(t *testing.T) {
 		t.Errorf("a background session Claude Code reports blocked came out %s", st)
 	}
 }
+
+func TestSaveSessionCleansUpWhenRenameFails(t *testing.T) {
+	h := Home(filepath.Join(t.TempDir(), "home"))
+	// A directory where the record belongs makes the rename fail.
+	if err := os.MkdirAll(h.sessionFile("s1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.saveSession(Session{ID: "s1"}); err == nil {
+		t.Fatal("expected the rename to fail")
+	}
+	left, _ := filepath.Glob(filepath.Join(h.sessionsDir(), ".tmp-*"))
+	if len(left) != 0 {
+		t.Fatalf("temp files left behind: %v", left)
+	}
+}

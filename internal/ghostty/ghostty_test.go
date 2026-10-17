@@ -89,8 +89,11 @@ func TestLocateGivesUp(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "ttys001") {
 		t.Fatalf("err = %v", err)
 	}
-	if len(f.writes) != rounds {
-		t.Errorf("writes = %d, want %d", len(f.writes), rounds)
+	if len(f.writes) != rounds+1 {
+		t.Fatalf("writes = %d, want %d", len(f.writes), rounds+1)
+	}
+	if last := f.writes[rounds]; last != [2]string{"/dev/ttys001", "\x1b]2;\x07"} {
+		t.Errorf("final write = %q, want an empty title", last)
 	}
 }
 

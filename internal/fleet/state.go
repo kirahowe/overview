@@ -134,7 +134,11 @@ func (h Home) saveSession(s Session) error {
 		return err
 	}
 	tmp.Close()
-	return os.Rename(tmp.Name(), h.sessionFile(s.ID))
+	if err := os.Rename(tmp.Name(), h.sessionFile(s.ID)); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // Sessions returns every recorded session by id.

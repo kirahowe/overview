@@ -220,6 +220,9 @@ func (c Client) Locate(ctx context.Context, tty string) (string, error) {
 			return "", fmt.Errorf("ghostty: token matched %d terminals", len(ids))
 		}
 	}
+	// Best effort: the tab would otherwise keep showing the token. An empty
+	// title lets the terminal fall back to its own.
+	_ = c.Write(path, OSCTitle(""))
 	return "", fmt.Errorf("%w (tty %s, %d rounds)", ErrNotFound, tty, rounds)
 }
 
