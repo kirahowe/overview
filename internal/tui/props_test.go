@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
@@ -381,4 +382,61 @@ func TestProjectsCachePerCwd(t *testing.T) {
 	if calls != n {
 		t.Fatalf("second lookup hit the filesystem %d more times", calls-n)
 	}
+}
+
+func drawColor(t *rapid.T, label string) lipgloss.Color {
+	if rapid.Bool().Draw(t, label+"ansi") {
+		return lipgloss.Color(fmt.Sprint(rapid.IntRange(0, 255).Draw(t, label)))
+	}
+	digits := rapid.SampledFrom([]int{3, 6}).Draw(t, label+"len")
+	hex := rapid.StringMatching(fmt.Sprintf("[0-9a-fA-F]{%d}", digits)).Draw(t, label)
+	return lipgloss.Color("#" + hex)
+}
+
+// A theme printed with Format reads back as the same theme, whatever base
+// it is read over, because Format writes every colour.
+func TestPropThemeFormatRoundTrips(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		var th Theme
+		th.Name = "x"
+		for _, k := range themeKeys {
+			*k.get(&th) = drawColor(t, k.key)
+		}
+		base, _ := builtinTheme(rapid.SampledFrom(builtinNames()).Draw(t, "base"))
+		got, err := ParseTheme("x", th.Format(), base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != th {
+			t.Fatalf("got %+v\nwant %+v", got, th)
+		}
+	})
+}
+
+// A partial theme changes exactly the colours it names and keeps the rest of
+// its base.
+func TestPropPartialThemeKeepsBase(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base, _ := builtinTheme(rapid.SampledFrom(builtinNames()).Draw(t, "base"))
+		want := base
+		want.Name = "x"
+		var src strings.Builder
+		for _, k := range themeKeys {
+			if rapid.Bool().Draw(t, "set "+k.key) {
+				c := drawColor(t, k.key)
+				*k.get(&want) = c
+				fmt.Fprintf(&src, "%s%s = %s\n", strings.Repeat(" ", rapid.IntRange(0, 2).Draw(t, "pad")), k.key, c)
+			}
+			if rapid.Bool().Draw(t, "comment") {
+				src.WriteString("# comment = #fff\n\n")
+			}
+		}
+		got, err := ParseTheme("x", src.String(), base)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, src.String())
+		}
+		if got != want {
+			t.Fatalf("got %+v\nwant %+v\n%s", got, want, src.String())
+		}
+	})
 }

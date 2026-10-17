@@ -74,6 +74,45 @@ Ghostty is not running, the session is not in Ghostty, or the terminal cannot
 be found, the status line shows the tty instead, and you switch to that tab
 yourself.
 
+## Themes
+
+The view comes with two themes: `revdiff`, the default, with revdiff's amber
+accent, and `one-dark`, after Atom's One Dark. `--theme` picks one for a
+run. Without the flag, overview uses `OVERVIEW_THEME`, then a `theme =` line
+in `~/.config/overview/config` (or under `$XDG_CONFIG_HOME`), then `revdiff`:
+
+```
+theme = one-dark
+```
+
+A theme is a file of `key = colour` lines. A colour is `#rgb`, `#rrggbb` or
+an ANSI 256-colour index, and lines starting with `#` are comments.
+`overview themes` lists the themes and marks the one in use, and
+`overview themes <name>` prints one with all its keys, which is the easiest
+way to start your own:
+
+```
+overview themes one-dark > ~/.config/overview/themes/mine.theme
+```
+
+A file in `~/.config/overview/themes/` is found by its name without the
+`.theme`, and it replaces a built-in of the same name. `--theme` also takes a
+path. A theme only needs the colours it changes. The rest come from
+`revdiff`, or from the built-in named on a `base =` line:
+
+```
+base   = one-dark
+accent = #c678dd
+```
+
+The keys are `accent` (focused borders, headings, keys in the help),
+`border`, `text`, `muted`, `cursor-fg` and `cursor-bg` (the selected row in
+the focused pane), `cursor-dim-fg` and `cursor-dim-bg` (the selected row
+otherwise), `status-fg` and `status-bg` (the bottom bar), `pill-fg` (text on
+the state badge in the detail pane), `blocked`, `asking`, `working`, and
+`code`. An unknown key or a bad colour is an error, so a typo does not
+silently fall back to the default.
+
 ## Install
 
 ```

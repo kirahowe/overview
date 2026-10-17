@@ -1,0 +1,16 @@
+# Atom's One Dark: a blue accent, its muted greys, and a quiet status bar.
+accent        = #61afef
+border        = #4b5263
+text          = #abb2bf
+muted         = #7f848e
+cursor-fg     = #282c34
+cursor-bg     = #61afef
+cursor-dim-fg = #d7dae0
+cursor-dim-bg = #3e4451
+status-fg     = #abb2bf
+status-bg     = #3e4451
+pill-fg       = #282c34
+blocked       = #e06c75
+asking        = #e5c07b
+working       = #98c379
+code          = #56b6c2

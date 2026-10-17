@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"overview/internal/fleet"
@@ -24,6 +25,7 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview activity [flags]   print what sessions did since the last digest
   overview publish [file]     save a digest (from the file or stdin)
   overview hook               record a Claude Code hook event (reads stdin)
+  overview themes [name]      list the themes, or print one as a file to edit
 
 Flags:
   --home <name|path>   config directory; "kira" means ~/.claude-kira.
@@ -31,6 +33,9 @@ Flags:
   --every <duration>   how often the orchestrator writes a digest (default 1h)
   --model <model>      model for the orchestrator or a one-off digest
                        (default sonnet)
+  --theme <name|path>  colours for the live view. Defaults to OVERVIEW_THEME,
+                       then the theme line in ~/.config/overview/config,
+                       then revdiff.
 `
 
 func main() {
@@ -49,10 +54,18 @@ func main() {
 	homeFlag := fs.String("home", "", "")
 	every := fs.Duration("every", time.Hour, "")
 	model := fs.String("model", "sonnet", "")
+	themeFlag := fs.String("theme", "", "")
 	// Flags may come before or after a positional argument such as "start".
 	var rest []string
 	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
 		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
+	}
+
+	if cmd == "themes" {
+		if err := themes(*themeFlag, rest); err != nil {
+			fail(err)
+		}
+		return
 	}
 
 	home, err := fleet.ResolveHome(*homeFlag)
@@ -61,7 +74,10 @@ func main() {
 	}
 	switch cmd {
 	case "":
-		err = tui.Run(home, *model)
+		var theme tui.Theme
+		if theme, err = loadTheme(*themeFlag); err == nil {
+			err = tui.Run(home, *model, theme)
+		}
 	case "sessions":
 		err = printSessions(home)
 	case "digest":
@@ -150,6 +166,51 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 		return nil
 	}
 	return fmt.Errorf("unknown orchestrator action %q", action)
+}
+
+func loadTheme(flag string) (tui.Theme, error) {
+	dir, err := tui.ConfigDir()
+	if err != nil {
+		return tui.Theme{}, err
+	}
+	name, err := tui.ChooseTheme(flag, dir)
+	if err != nil {
+		return tui.Theme{}, err
+	}
+	return tui.LoadTheme(name, dir)
+}
+
+// themes lists the themes, marking the one in use, or prints the named one
+// in full.
+func themes(flag string, rest []string) error {
+	dir, err := tui.ConfigDir()
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		t, err := tui.LoadTheme(rest[0], dir)
+		if err != nil {
+			return err
+		}
+		fmt.Print(t.Format())
+		return nil
+	}
+	current, err := tui.ChooseTheme(flag, dir)
+	if err != nil {
+		return err
+	}
+	for _, t := range tui.Themes(dir) {
+		mark, where := " ", "built in"
+		if t.Name == current {
+			mark = "*"
+		}
+		if t.Path != "" {
+			where = t.Path
+		}
+		fmt.Printf("%s %-12s %s\n", mark, t.Name, where)
+	}
+	fmt.Printf("\nYour themes go in %s.\n", filepath.Join(dir, "themes"))
+	return nil
 }
 
 func printSessions(home fleet.Home) error {

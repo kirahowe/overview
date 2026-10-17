@@ -113,8 +113,9 @@ type model struct {
 	w, h int
 }
 
-// Run opens the view and blocks until the user quits.
-func Run(home fleet.Home, llm string) error {
+// Run opens the view in the given theme and blocks until the user quits.
+func Run(home fleet.Home, llm string, theme Theme) error {
+	useTheme(theme)
 	m := newModel(home, llm)
 	m.jump = ghostty.New()
 	m = m.loadDigests()

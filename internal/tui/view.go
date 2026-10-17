@@ -13,38 +13,39 @@ import (
 	"overview/internal/fleet"
 )
 
-// The palette is revdiff's default theme: a warm amber accent on the
-// terminal's own background.
+// pal is the palette in use, and the styles below are built from it.
+// useTheme sets both, once, before the view starts.
 var (
-	accent   = lipgloss.Color("#D5895F")
-	border   = lipgloss.Color("#585858")
-	normal   = lipgloss.Color("#d0d0d0")
-	muted    = lipgloss.Color("#8a8a8a")
-	selFg    = lipgloss.Color("#ffffaf")
-	dimSelBg = lipgloss.Color("#3a3a3a")
-	statusFg = lipgloss.Color("#202020")
-	statusBg = lipgloss.Color("#C5794F")
-	addFg    = lipgloss.Color("#87d787")
-	removeFg = lipgloss.Color("#ff8787")
-	modifyFg = lipgloss.Color("#f5c542")
+	pal                                             Theme
+	bold                                            = lipgloss.NewStyle().Bold(true)
+	dim, italic, red, amber, green, heading, codeFg lipgloss.Style
 )
 
-var (
-	fg      = func(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
-	bold    = lipgloss.NewStyle().Bold(true)
-	dim     = fg(muted)
-	italic  = lipgloss.NewStyle().Italic(true).Foreground(normal)
-	red     = fg(removeFg).Bold(true)
-	amber   = fg(modifyFg).Bold(true)
-	green   = fg(addFg)
-	heading = fg(accent).Bold(true)
-	codeFg  = fg(lipgloss.Color("#e5c07b"))
-)
+func fg(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
+
+func useTheme(t Theme) {
+	pal = t
+	dim = fg(t.Muted)
+	italic = lipgloss.NewStyle().Italic(true).Foreground(t.Text)
+	red = fg(t.Blocked).Bold(true)
+	amber = fg(t.Asking).Bold(true)
+	green = fg(t.Working)
+	heading = fg(t.Accent).Bold(true)
+	codeFg = fg(t.Code)
+}
+
+func init() {
+	t, err := builtinTheme(DefaultTheme)
+	if err != nil {
+		panic(err)
+	}
+	useTheme(t)
+}
 
 var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func pill(text string, bg lipgloss.Color) string {
-	return lipgloss.NewStyle().Background(bg).Foreground(statusFg).Bold(true).Padding(0, 1).Render(text)
+	return lipgloss.NewStyle().Background(bg).Foreground(pal.PillFg).Bold(true).Padding(0, 1).Render(text)
 }
 
 // Layout. Every pane is a box with a one-cell border and a one-cell margin
@@ -131,9 +132,9 @@ func (m model) sessionsView() []string {
 // box draws a bordered pane with the title set into its top edge and an
 // optional note in its bottom edge. The focused pane gets the accent colour.
 func box(title, info string, body []string, w, h int, focused bool) []string {
-	edge, name := fg(border), lipgloss.NewStyle().Foreground(normal)
+	edge, name := fg(pal.Border), lipgloss.NewStyle().Foreground(pal.Text)
 	if focused {
-		edge, name = fg(accent), heading
+		edge, name = fg(pal.Accent), heading
 	}
 	inner := w - 2
 	title = ansi.Truncate(title, max(inner-4, 1), "…")
@@ -234,17 +235,16 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
 
 	if selected {
-		bg := dimSelBg
+		bar := lipgloss.NewStyle().Background(pal.CursorDimBg).Foreground(pal.CursorDimFg).Bold(true)
 		if m.focus == listPane {
-			bg = accent
+			bar = bar.Background(pal.CursorBg).Foreground(pal.CursorFg)
 		}
-		bar := lipgloss.NewStyle().Background(bg).Foreground(selFg).Bold(true)
 		return []string{
 			bar.Render(fit(mark+" "+name+gap+right, w)),
 			bar.Bold(false).Render(fit("  "+sub, w)),
 		}
 	}
-	line := style.Render(mark) + " " + fg(normal).Render(name) + gap + dim.Render(placed) + style.Render(when)
+	line := style.Render(mark) + " " + fg(pal.Text).Render(name) + gap + dim.Render(placed) + style.Render(when)
 	subStyle := dim
 	if r.NeedsYou() {
 		subStyle = style.Bold(false)
@@ -284,13 +284,13 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 	var state string
 	switch {
 	case r.State == fleet.Blocked:
-		state = pill("blocked "+Ago(r.Since), removeFg)
+		state = pill("blocked "+Ago(r.Since), pal.Blocked)
 	case r.Asking():
-		state = pill("asking "+Ago(r.LastReplyAt), modifyFg)
+		state = pill("asking "+Ago(r.LastReplyAt), pal.Asking)
 	case r.State == fleet.Working:
-		state = pill("working "+Ago(r.Since), addFg)
+		state = pill("working "+Ago(r.Since), pal.Working)
 	default:
-		state = pill("idle "+Ago(r.Since), muted)
+		state = pill("idle "+Ago(r.Since), pal.Muted)
 	}
 	kind := "interactive"
 	if r.Background() {
@@ -344,7 +344,7 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 	out = append(out, "", rule(fmt.Sprintf("last %d turns", len(turns)), w))
 	for i, t := range turns {
 		out = append(out, "")
-		prompt := wrap(heading.Render("› ")+bold.Foreground(normal).Render(oneLine(t.Prompt)), w)
+		prompt := wrap(heading.Render("› ")+bold.Foreground(pal.Text).Render(oneLine(t.Prompt)), w)
 		if len(prompt) > 3 {
 			prompt = append(prompt[:3], dim.Render("  …"))
 		}
@@ -365,8 +365,8 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 
 // rule is a labelled divider: "── label ──────".
 func rule(label string, w int) string {
-	return fg(border).Render("── ") + heading.Render(label) + " " +
-		fg(border).Render(strings.Repeat("─", max(w-ansi.StringWidth(label)-4, 0)))
+	return fg(pal.Border).Render("── ") + heading.Render(label) + " " +
+		fg(pal.Border).Render(strings.Repeat("─", max(w-ansi.StringWidth(label)-4, 0)))
 }
 
 // clampScroll keeps the detail scroll inside its content, so scrolling back
@@ -405,7 +405,7 @@ func (m model) helpBox() []string {
 	section := func(title string, es ...entry) []string {
 		out := []string{heading.Render(title)}
 		for _, e := range es {
-			out = append(out, "  "+fg(accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(normal).Render(e.what))
+			out = append(out, "  "+fg(pal.Accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(pal.Text).Render(e.what))
 		}
 		return append(out, "")
 	}
@@ -462,7 +462,7 @@ func (m model) confirmBox() []string {
 		}
 	}
 	w := min(m.w-4, 56)
-	body := []string{bold.Foreground(normal).Render("Stop " + name + "?")}
+	body := []string{bold.Foreground(pal.Text).Render("Stop " + name + "?")}
 	body = append(body, wrap(dim.Render("Its conversation is kept, and claude attach brings it back."), w-4)...)
 	body = append(body, "", red.Render("y")+dim.Render(" stop   ")+dim.Render("any other key cancels"))
 	return box("stop session", "", body, w, len(body)+2, true)
@@ -487,7 +487,7 @@ func centre(screen, over []string, w int) []string {
 }
 
 func (m model) statusBar() string {
-	base := lipgloss.NewStyle().Background(statusBg).Foreground(statusFg)
+	base := lipgloss.NewStyle().Background(pal.StatusBg).Foreground(pal.StatusFg)
 	strong := base.Bold(true)
 
 	var left []string
@@ -605,7 +605,7 @@ var (
 // styleMarkdown renders the little Markdown that replies lean on: headings,
 // bold, inline code and bullets. Fenced code is coloured rather than parsed.
 func styleMarkdown(md string) string {
-	text := fg(normal)
+	text := fg(pal.Text)
 	lines := strings.Split(strings.TrimSpace(md), "\n")
 	fenced := false
 	for i, l := range lines {
@@ -625,9 +625,9 @@ func styleMarkdown(md string) string {
 			lines[i] = heading.Render(strings.TrimLeft(t, "# "))
 			continue
 		case strings.HasPrefix(t, "- "), strings.HasPrefix(t, "* "):
-			t = fg(accent).Render("•") + " " + t[2:]
+			t = fg(pal.Accent).Render("•") + " " + t[2:]
 		}
-		t = strong.ReplaceAllStringFunc(t, func(s string) string { return bold.Foreground(normal).Render(s[2 : len(s)-2]) })
+		t = strong.ReplaceAllStringFunc(t, func(s string) string { return bold.Foreground(pal.Text).Render(s[2 : len(s)-2]) })
 		t = inlineCode.ReplaceAllStringFunc(t, func(s string) string { return codeFg.Render(s[1 : len(s)-1]) })
 		lines[i] = indent + text.Render(t)
 	}

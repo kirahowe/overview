@@ -1,0 +1,17 @@
+# revdiff's default theme: a warm amber accent on the terminal's own
+# background.
+accent        = #D5895F
+border        = #585858
+text          = #d0d0d0
+muted         = #8a8a8a
+cursor-fg     = #ffffaf
+cursor-bg     = #D5895F
+cursor-dim-fg = #ffffaf
+cursor-dim-bg = #3a3a3a
+status-fg     = #202020
+status-bg     = #C5794F
+pill-fg       = #202020
+blocked       = #ff8787
+asking        = #f5c542
+working       = #87d787
+code          = #e5c07b
