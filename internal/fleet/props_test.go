@@ -176,64 +176,33 @@ func genLive() *rapid.Generator[Live] {
 	})
 }
 
+// Precedence is pinned by TestLiveStatePrecedence. This checks what holds
+// for every input: the state is one of three, a reason only comes with a
+// block, and the time is either the record's or unknown.
 func TestPropLiveState(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		l, rec := genLive().Draw(t, "live"), genSession().Draw(t, "rec")
 		st, since, reason := liveState(l, rec)
-		st2, since2, reason2 := liveState(l, rec)
-		if st != st2 || !since.Equal(since2) || reason != reason2 {
-			t.Fatal("liveState is not deterministic")
-		}
-
-		switch {
-		case rec.State == Blocked:
-			if st != Blocked || !since.Equal(rec.Since) || reason != rec.Reason {
-				t.Fatalf("a recorded block must win: got %s %v %q", st, since, reason)
-			}
-		case l.BgState == "blocked":
-			if st != Blocked || !since.IsZero() || reason != "" {
-				t.Fatalf("Claude's own block: got %s %v %q", st, since, reason)
-			}
-		case l.Status != "idle":
-			if st != Working {
-				t.Fatalf("busy and unblocked must be working, got %s", st)
-			}
-		default:
-			if st != Idle {
-				t.Fatalf("idle and unblocked must be idle, got %s", st)
-			}
-		}
 		if st != Working && st != Blocked && st != Idle {
 			t.Fatalf("liveState returned %q", st)
 		}
 		if st != Blocked && reason != "" {
 			t.Fatalf("reason %q on a %s row", reason, st)
 		}
-		// Claude Code reporting idle overrides a stale Working record, so an
-		// interrupted turn does not look busy forever.
-		if l.Status == "idle" && l.BgState != "blocked" && rec.State != Blocked && st != Idle {
-			t.Fatalf("idle session shown as %s", st)
+		if !since.IsZero() && !since.Equal(rec.Since) {
+			t.Fatalf("since %v is neither zero nor the record's %v", since, rec.Since)
 		}
 	})
 }
 
-func TestPropAskingAndNeedsYou(t *testing.T) {
+func TestPropAsking(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		r := Row{
 			State:     genState().Draw(t, "state"),
 			LastReply: text().Draw(t, "reply"),
 		}
-		if r.Asking() != r.Asking() || r.NeedsYou() != r.NeedsYou() {
-			t.Fatal("not deterministic")
-		}
 		if r.Asking() && r.State != Idle {
 			t.Fatalf("a %s row cannot be asking", r.State)
-		}
-		if r.Asking() && r.State == Blocked {
-			t.Fatal("blocked and asking overlap")
-		}
-		if r.NeedsYou() != (r.State == Blocked || r.Asking()) {
-			t.Fatalf("NeedsYou disagrees with its definition for %+v", r)
 		}
 		if r.State == Working && r.NeedsYou() {
 			t.Fatal("a working row needs nobody")

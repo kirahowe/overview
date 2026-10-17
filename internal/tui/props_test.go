@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path"
 	"reflect"
 	"sort"
@@ -81,21 +82,6 @@ func genQuery(t *rapid.T) string {
 	return strings.Join(terms, rapid.SampledFrom([]string{" ", "  ", "\t"}).Draw(t, "sep"))
 }
 
-// refMatch is an independent statement of the matching rule.
-func refMatch(r fleet.Row, query string) bool {
-	fields := []string{fakeProject(r.Cwd), r.Title, r.LastPrompt, r.Name, r.Label}
-	for _, term := range strings.Fields(strings.ToLower(query)) {
-		hit := false
-		for _, f := range fields {
-			hit = hit || strings.Contains(strings.ToLower(f), term)
-		}
-		if !hit {
-			return false
-		}
-	}
-	return true
-}
-
 func ids(secs []section) []string {
 	var out []string
 	for _, r := range flatten(secs) {
@@ -104,21 +90,74 @@ func ids(secs []section) []string {
 	return out
 }
 
+// vocab words share no substring a whole-word term could hit by accident,
+// and a term never holds a space, so a term matches a field exactly when
+// the field was built with that word. The expected matches are known from
+// how each row was made, not recomputed by a second matcher.
+var vocab = []string{"amber", "birch", "cedar", "dune", "fjord", "kiwi"}
+
+// tokenRow builds a row whose searchable fields are made of vocab words in
+// random case. It returns the words it used.
+func tokenRow(t *rapid.T, id string) (fleet.Row, map[string]bool) {
+	used := map[string]bool{}
+	field := func(label string) string {
+		n := rapid.IntRange(0, 2).Draw(t, label+"n")
+		ws := make([]string, n)
+		for i := range ws {
+			w := rapid.SampledFrom(vocab).Draw(t, label)
+			used[w] = true
+			if rapid.Bool().Draw(t, label+"upper") {
+				w = strings.ToUpper(w)
+			}
+			ws[i] = w
+		}
+		return strings.Join(ws, " ")
+	}
+	r := genRow(t, id)
+	r.Title, r.LastPrompt, r.Label = field("title"), field("prompt"), field("label")
+	r.Name = field("name")
+	// fakeProject names the project after the last path element: one word
+	// or none ("?").
+	r.Cwd = ""
+	if rapid.Bool().Draw(t, "hasproject") {
+		w := rapid.SampledFrom(vocab).Draw(t, "project")
+		used[w] = true
+		r.Cwd = "/w/" + w
+	}
+	return r, used
+}
+
 func TestPropEveryMatchAppearsOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, q := genRows(t), genQuery(t)
+		var rows []fleet.Row
 		var want []string
-		for _, r := range rows {
-			if r.Name != fleet.OrchestratorName && refMatch(r, q) {
+		var terms []string
+		for i := rapid.IntRange(0, 3).Draw(t, "terms"); i > 0; i-- {
+			terms = append(terms, rapid.SampledFrom(append(vocab, "zebra")).Draw(t, "term"))
+		}
+		for i := rapid.IntRange(0, 10).Draw(t, "n"); i > 0; i-- {
+			r, used := tokenRow(t, fmt.Sprintf("s%02d", i))
+			if rapid.IntRange(0, 9).Draw(t, "orch") == 0 {
+				r.Name = fleet.OrchestratorName
+			}
+			hit := r.Name != fleet.OrchestratorName
+			for _, term := range terms {
+				hit = hit && used[term]
+			}
+			if hit {
 				want = append(want, r.SessionID)
 			}
+			rows = append(rows, r)
+		}
+		q := strings.Join(terms, " ")
+		if rapid.Bool().Draw(t, "qupper") {
+			q = strings.ToUpper(q)
 		}
 		got := ids(buildList(rows, q, fakeProject))
 		sort.Strings(want)
-		g := append([]string(nil), got...)
-		sort.Strings(g)
-		if !reflect.DeepEqual(append([]string{}, want...), append([]string{}, g...)) {
-			t.Fatalf("query %q: got %v want %v", q, g, want)
+		sort.Strings(got)
+		if strings.Join(want, ",") != strings.Join(got, ",") {
+			t.Fatalf("query %q: got %v want %v", q, got, want)
 		}
 	})
 }
@@ -133,8 +172,8 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 			if len(s.Rows) == 0 {
 				t.Fatalf("empty section %q", s.Title)
 			}
-			if s.NeedsYou != (i == 0 && s.Title == needsYouTitle && s.NeedsYou) {
-				t.Fatalf("section %d %q: NeedsYou=%v", i, s.Title, s.NeedsYou)
+			if s.NeedsYou && (i != 0 || s.Title != needsYouTitle) {
+				t.Fatalf("needs-you section at %d titled %q, want first and %q", i, s.Title, needsYouTitle)
 			}
 			for j, r := range s.Rows {
 				if seen[r.SessionID] {
@@ -234,9 +273,6 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 			{LastPrompt: a, Label: b},
 		} {
 			r.SessionID = "x"
-			if refMatch(r, term) != (strings.Contains(a, term) || strings.Contains(b, term)) {
-				t.Fatal("test oracle broken")
-			}
 			if len(buildList([]fleet.Row{r}, term, func(string) string { return "" })) != 0 {
 				t.Fatalf("%q matched across fields %q|%q", term, a, b)
 			}

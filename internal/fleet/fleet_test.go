@@ -259,6 +259,37 @@ func TestNeedsYou(t *testing.T) {
 	}
 }
 
+// liveState joins Claude Code's view of a session with the hook's record.
+// Each case is one step of the precedence: a recorded block, then Claude
+// Code's own block, then busy or idle, keeping the record's time only when
+// the record agrees.
+func TestLiveStatePrecedence(t *testing.T) {
+	at := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name   string
+		live   Live
+		rec    Session
+		state  State
+		since  time.Time
+		reason string
+	}{
+		{"recorded block beats busy", Live{Status: "busy"}, Session{State: Blocked, Since: at, Reason: "Bash"}, Blocked, at, "Bash"},
+		{"recorded block beats idle", Live{Status: "idle", BgState: "idle"}, Session{State: Blocked, Since: at, Reason: "r"}, Blocked, at, "r"},
+		{"Claude Code's block", Live{Status: "idle", BgState: "blocked"}, Session{State: Idle, Since: at}, Blocked, time.Time{}, ""},
+		{"busy with a working record", Live{Status: "busy"}, Session{State: Working, Since: at}, Working, at, ""},
+		{"busy with an idle record", Live{Status: "busy"}, Session{State: Idle, Since: at}, Working, time.Time{}, ""},
+		{"no status counts as busy", Live{}, Session{}, Working, time.Time{}, ""},
+		{"idle overrides a stale working record", Live{Status: "idle"}, Session{State: Working, Since: at}, Idle, time.Time{}, ""},
+		{"idle with an idle record", Live{Status: "idle"}, Session{State: Idle, Since: at}, Idle, at, ""},
+		{"idle with an ended record", Live{Status: "idle"}, Session{State: Ended, Since: at}, Idle, time.Time{}, ""},
+	} {
+		st, since, reason := liveState(c.live, c.rec)
+		if st != c.state || !since.Equal(c.since) || reason != c.reason {
+			t.Errorf("%s: got %s %v %q, want %s %v %q", c.name, st, since, reason, c.state, c.since, c.reason)
+		}
+	}
+}
+
 func TestSaveSessionCleansUpWhenRenameFails(t *testing.T) {
 	h := Home(filepath.Join(t.TempDir(), "home"))
 	// A directory where the record belongs makes the rename fail.
