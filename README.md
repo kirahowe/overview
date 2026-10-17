@@ -38,20 +38,38 @@ in `<home>/overview/digests/`.
 
 ## The view
 
-`overview` opens a two-pane view. The left pane lists the sessions in three
-groups: those that need you, those that are working, and the idle rest. A
-session needs you when it is blocked, or when it is idle and its last reply
-ends with a question. The right pane shows the selected session: where it
-runs, what it is waiting on, and its last few turns from the transcript.
+`overview` opens a two-pane view. The left pane lists the sessions. A section
+at the top holds the ones that need you: a session needs you when it is
+blocked, or when it is idle and its last reply ends with a question, and the
+longest wait comes first. Every other session sits in a section for its
+project, which is the nearest parent directory with a `.jj` or `.git` in it,
+or the session's own directory when there is none. Projects are in
+alphabetical order. Inside one, working sessions come before idle ones, and
+the latest activity comes first. A session appears once, and each row shows
+its state. The right pane shows the selected session: where it runs, what it
+is waiting on, and its last few turns from the transcript.
 
-Keys: `j`/`k` move, `n` jumps to the next session that needs you, `enter`
-attaches to a background session, `x` stops one (it asks first), `y` copies
-the attach command, and `/` filters. `tab` moves between the two panes. `d`
-shows the digests, where `[` and `]` step through older ones and `D` writes a
-new one. `?` lists every key.
+Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
+searches. Search looks at the project, title, last prompt, name and label,
+ignoring case. Each space-separated word has to match one of those fields,
+and a word never matches across two of them. The cursor moves to the first
+match, `up` and `down` step through the matches, and `esc` clears the search.
+`enter` acts on the selected session: it jumps to an interactive session's
+Ghostty terminal and attaches to a background one. While you are searching,
+`enter` acts on the selected match and clears the search. `a` attaches to a
+background session, `x` stops one (it asks first), and `y` copies the
+attach command. `tab` moves between the two panes. `d` shows the digests,
+where `[` and `]` step through older ones and `D` writes a new one. `?` lists
+every key. The keys are the same whether overview runs in a tab or in
+Ghostty's quick terminal.
 
-Interactive sessions run in someone's terminal, so the view cannot attach to
-them. It shows the tty they run in instead.
+Jumping needs stock Ghostty 1.3 or later and its Automation permission.
+Interactive sessions run in someone's terminal, so overview finds the
+terminal by writing a short-lived title to the session's tty and asking
+Ghostty which terminal shows it, then selects that tab and focuses the
+terminal. It remembers the terminal for the next jump. When Ghostty is not
+running or the terminal cannot be found, the status line shows the tty
+instead, and you switch to that tab yourself.
 
 ## Install
 

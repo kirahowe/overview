@@ -413,10 +413,11 @@ func (m model) helpBox() []string {
 		entry{"j k", "move"},
 		entry{"n N", "next / previous waiting"},
 		entry{"g G", "first / last"},
-		entry{"/", "filter, esc clears"},
+		entry{"/", "search, esc clears"},
 		entry{"tab l h", "switch pane"},
 	), section("act",
-		entry{"enter a", "attach (background)"},
+		entry{"enter", "jump to terminal / attach"},
+		entry{"a", "attach (background)"},
 		entry{"x", "stop (background)"},
 		entry{"y", "copy attach command"},
 	)...)
@@ -492,7 +493,7 @@ func (m model) statusBar() string {
 	var left []string
 	switch {
 	case m.filtering:
-		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter keeps · esc clears")}
+		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter jumps · esc clears")}
 	case m.note != "":
 		left = []string{strong.Render(m.note)}
 	default:
@@ -518,7 +519,7 @@ func (m model) statusBar() string {
 	sep := base.Render(" │ ")
 	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
 
-	keys := "↵ attach · n next · d digest · ? help "
+	keys := "↵ jump · / search · n next · d digest · ? help "
 	if m.screen == digestScreen {
 		keys = "[ ] older/newer · D write · d sessions · ? help "
 	}
