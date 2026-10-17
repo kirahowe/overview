@@ -34,10 +34,15 @@ var (
 )
 
 const (
-	rounds    = 8                     // write-and-query attempts, about 1 s in all
-	settle    = 60 * time.Millisecond // Ghostty shows a new title after 40-60 ms
-	maxTitle  = 200                   // runes kept when restoring a title
-	tokenBits = 8                     // random bytes in a token, 16 hex chars
+	rounds    = 8                             // write-and-query attempts, about 1 s in all
+	settle    = 60 * time.Millisecond         // Ghostty shows a new title after 40-60 ms
+	roundCost = settle + 150*time.Millisecond // a round: settle, then a find (70-150 ms)
+	maxTitle  = 200                           // runes kept when restoring a title
+	tokenBits = 8                             // random bytes in a token, 16 hex chars
+
+	// LocateBudget is how long a Locate that runs every round can take.
+	// Give Locate at least this much; with less it runs fewer rounds.
+	LocateBudget = 200*time.Millisecond + rounds*roundCost
 )
 
 // Runner runs a program and returns its stdout. On failure the error carries
@@ -171,6 +176,15 @@ func (c Client) jxa(ctx context.Context, script string, args ...string) ([]byte,
 // terminal names, writes a token title to the tty, polls for the terminal that
 // shows it (rewriting the token each round, since the program running there
 // may retitle over it), then restores the terminal's previous title.
+//
+// Once a token has reached the tty, every return puts a title back: the
+// snapshot's name for the terminal that was found, or an empty title, which
+// lets the terminal fall back to its own. The restore is a plain write, so it
+// runs even when ctx has expired. Ghostty 1.3.1 ignores the xterm title stack
+// (CSI 22 t / CSI 23 t), which is why the snapshot is needed at all.
+//
+// Locate starts a round only if ctx leaves time to finish it, so running out
+// of rounds or of time both end in ErrNotFound.
 func (c Client) Locate(ctx context.Context, tty string) (string, error) {
 	path, err := TTYPath(tty)
 	if err != nil {
@@ -193,10 +207,18 @@ func (c Client) Locate(ctx context.Context, tty string) (string, error) {
 
 	token := c.Token()
 	frame := OSCTitle(token)
-	for i := 0; i < rounds; i++ {
+	dirty, restore := false, ""
+	defer func() {
+		if dirty {
+			_ = c.Write(path, OSCTitle(restore)) // best effort
+		}
+	}()
+	n := 0
+	for ; n < rounds && roomFor(ctx, roundCost); n++ {
 		if err := c.Write(path, frame); err != nil {
 			return "", fmt.Errorf("ghostty: write title: %w", err)
 		}
+		dirty = true
 		if err := c.Sleep(ctx, settle); err != nil {
 			return "", err
 		}
@@ -204,27 +226,38 @@ func (c Client) Locate(ctx context.Context, tty string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("ghostty: find: %w", err)
 		}
+		out = bytes.TrimSpace(out)
+		if string(out) == "null" {
+			return "", ErrNotRunning // Ghostty quit meanwhile
+		}
 		var ids []string
-		if err := json.Unmarshal(bytes.TrimSpace(out), &ids); err != nil {
-			return "", ErrNotRunning // findJS answers null when Ghostty quit meanwhile
+		if err := json.Unmarshal(out, &ids); err != nil {
+			return "", fmt.Errorf("ghostty: find: %w", err)
 		}
 		switch len(ids) {
 		case 0:
 			continue
 		case 1:
-			if prev := snap.Names[ids[0]]; SanitizeTitle(prev) != "" {
-				_ = c.Write(path, OSCTitle(prev)) // best effort; the id is what matters
+			// A name holding a token belongs to a Locate still in flight
+			// (another overview, say); putting it back would pin it.
+			if prev := snap.Names[ids[0]]; !tokenRE.MatchString(prev) {
+				restore = prev
 			}
 			return ids[0], nil
 		default:
 			return "", fmt.Errorf("ghostty: token matched %d terminals", len(ids))
 		}
 	}
-	// Best effort: the tab would otherwise keep showing the token. An empty
-	// title lets the terminal fall back to its own.
-	_ = c.Write(path, OSCTitle(""))
-	return "", fmt.Errorf("%w (tty %s, %d rounds)", ErrNotFound, tty, rounds)
+	return "", fmt.Errorf("%w (tty %s, %d rounds)", ErrNotFound, tty, n)
 }
+
+// roomFor reports whether ctx leaves at least d before its deadline.
+func roomFor(ctx context.Context, d time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) >= d
+}
+
+var tokenRE = regexp.MustCompile(`ov-[0-9a-f]{16}`)
 
 // Focus selects the tab holding terminal id, focuses it and raises its window.
 // It returns ErrStale if Ghostty has no such terminal and ErrNotRunning if

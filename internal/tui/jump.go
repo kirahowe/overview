@@ -10,9 +10,12 @@ import (
 	"overview/internal/ghostty"
 )
 
-// jumpTimeout bounds each call to Ghostty, so a stuck osascript cannot hang
-// a jump for long.
-const jumpTimeout = 1500 * time.Millisecond
+// focusTimeout and locateTimeout bound each call to Ghostty, so a stuck
+// osascript cannot hang a jump for long. Locate gets room for all its rounds.
+const (
+	focusTimeout  = 1500 * time.Millisecond
+	locateTimeout = ghostty.LocateBudget + 300*time.Millisecond
+)
 
 // jumper is the part of ghostty.Client the view needs. Tests fake it.
 type jumper interface {
@@ -39,6 +42,8 @@ func jumpReason(err error) string {
 		return "Ghostty is not running"
 	case errors.Is(err, ghostty.ErrNotFound):
 		return "terminal not found"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "Ghostty did not answer"
 	}
 	return "jump failed"
 }
@@ -48,15 +53,15 @@ func jumpReason(err error) string {
 // and never touches the model.
 func jumpCmd(j jumper, name, key, tty, cached string) tea.Cmd {
 	return func() tea.Msg {
-		call := func(f func(ctx context.Context) error) error {
-			ctx, cancel := context.WithTimeout(context.Background(), jumpTimeout)
+		call := func(timeout time.Duration, f func(ctx context.Context) error) error {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			return f(ctx)
 		}
 		msg := jumpMsg{key: key}
 		id := cached
 		if id != "" {
-			err := call(func(ctx context.Context) error { return j.Focus(ctx, id) })
+			err := call(focusTimeout, func(ctx context.Context) error { return j.Focus(ctx, id) })
 			if err == nil {
 				return msg
 			}
@@ -67,9 +72,9 @@ func jumpCmd(j jumper, name, key, tty, cached string) tea.Cmd {
 			msg.drop = true
 		}
 		var err error
-		err = call(func(ctx context.Context) (e error) { id, e = j.Locate(ctx, tty); return })
+		err = call(locateTimeout, func(ctx context.Context) (e error) { id, e = j.Locate(ctx, tty); return })
 		if err == nil {
-			err = call(func(ctx context.Context) error { return j.Focus(ctx, id) })
+			err = call(focusTimeout, func(ctx context.Context) error { return j.Focus(ctx, id) })
 		}
 		if err != nil {
 			msg.drop = true

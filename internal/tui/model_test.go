@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -188,6 +189,7 @@ func TestFailureFallsBackToTTYNote(t *testing.T) {
 	}{
 		{ghostty.ErrNotRunning, "not running"},
 		{ghostty.ErrNotFound, "not found"},
+		{fmt.Errorf("ghostty: find: %w", context.DeadlineExceeded), "did not answer"},
 		{errors.New("boom"), "jump failed"},
 	} {
 		j := &fakeJumper{locateErr: tc.err}

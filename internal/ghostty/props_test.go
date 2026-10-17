@@ -1,9 +1,14 @@
 package ghostty
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"pgregory.net/rapid"
@@ -127,4 +132,83 @@ func TestValidIDProps(t *testing.T) {
 // rawBytes draws arbitrary bytes, so invalid UTF-8 gets exercised too.
 func rawBytes() *rapid.Generator[string] {
 	return rapid.Map(rapid.SliceOf(rapid.Byte()), func(b []byte) string { return string(b) })
+}
+
+// Every way out of Locate leaves the tty's title restored or reset, never the
+// token. Each round draws its own outcome: the token write fails, the sleep
+// sees the context expire, or the find answers no match, one match, two,
+// null (Ghostty quit), garbage, or an error.
+func TestPropLocateNeverLeavesTheToken(t *testing.T) {
+	const tok = "ov-00112233aabbccdd"
+	tokenFrame := string(OSCTitle(tok))
+	rapid.Check(t, func(t *rapid.T) {
+		prev := rapid.SampledFrom([]string{"", "my title", "ov-0123456789abcdef", "x ov-0123456789abcdef y", "\x1b]evil"}).Draw(t, "prev")
+		names, _ := json.Marshal(map[string]string{id1: prev})
+		answers := []string{"[]", `["` + id1 + `"]`, `["a","b"]`, "null", "garbage", "error"}
+
+		var frames []string // successful writes
+		round, found := 0, false
+		outcome := func() string { return rapid.SampledFrom(answers).Draw(t, fmt.Sprintf("find%d", round)) }
+		c := Client{
+			Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				if args[3] == snapshotJS {
+					return []byte(`{"running":true,"names":` + string(names) + `}`), nil
+				}
+				a := outcome()
+				round++
+				switch a {
+				case "error":
+					return nil, errors.New("osascript: exit status 1")
+				case `["` + id1 + `"]`:
+					found = true
+				}
+				return []byte(a), nil
+			},
+			Write: func(path string, b []byte) error {
+				if string(b) == tokenFrame && rapid.IntRange(0, 9).Draw(t, "writefail") == 0 {
+					return errors.New("EIO")
+				}
+				frames = append(frames, string(b))
+				return nil
+			},
+			Sleep: func(ctx context.Context, d time.Duration) error {
+				if rapid.IntRange(0, 9).Draw(t, "expire") == 0 {
+					return context.DeadlineExceeded
+				}
+				return nil
+			},
+			Token: func() string { return tok },
+		}
+		id, err := c.Locate(context.Background(), "ttys7")
+
+		tokens, others := 0, 0
+		for _, f := range frames {
+			if f == tokenFrame {
+				tokens++
+			} else {
+				others++
+			}
+		}
+		if tokens > 0 && (others != 1 || frames[len(frames)-1] == tokenFrame) {
+			t.Fatalf("frames %q: want exactly one restore, last", frames)
+		}
+		if tokens == 0 && others != 0 {
+			t.Fatalf("restored a title that was never changed: %q", frames)
+		}
+		if (err == nil) != found || (found && id != id1) {
+			t.Fatalf("found=%v but Locate = %q, %v", found, id, err)
+		}
+		if found {
+			want := prev
+			if strings.Contains(prev, "ov-0123456789abcdef") {
+				want = ""
+			}
+			if got := frames[len(frames)-1]; got != string(OSCTitle(want)) {
+				t.Fatalf("restored %q, want the title %q", got, want)
+			}
+		}
+		if errors.Is(err, ErrNotFound) && round != rounds {
+			t.Fatalf("ErrNotFound after %d of %d rounds", round, rounds)
+		}
+	})
 }

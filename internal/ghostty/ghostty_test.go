@@ -122,10 +122,63 @@ func TestLocateAmbiguousAndWriteError(t *testing.T) {
 	if _, err := f.client().Locate(context.Background(), "ttys1"); err == nil || !strings.Contains(err.Error(), "2 terminals") {
 		t.Errorf("err = %v", err)
 	}
-	c := (&fake{snap: `{"running":true,"names":{}}`}).client()
+	if last := f.writes[len(f.writes)-1][1]; last != "\x1b]2;\x07" {
+		t.Errorf("ambiguous match left %q as the last write", last)
+	}
+	f = &fake{snap: `{"running":true,"names":{}}`}
+	c := f.client()
 	c.Write = func(string, []byte) error { return fmt.Errorf("EIO") }
 	if _, err := c.Locate(context.Background(), "ttys1"); err == nil || !strings.Contains(err.Error(), "EIO") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestLocateFindAnswers(t *testing.T) {
+	f := &fake{snap: `{"running":true,"names":{}}`, finds: []string{"null"}}
+	if _, err := f.client().Locate(context.Background(), "ttys1"); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("null answer: err = %v", err)
+	}
+	f = &fake{snap: `{"running":true,"names":{}}`, finds: []string{"<html>"}}
+	if _, err := f.client().Locate(context.Background(), "ttys1"); err == nil || errors.Is(err, ErrNotRunning) || !strings.Contains(err.Error(), "find") {
+		t.Errorf("garbage answer: err = %v", err)
+	}
+}
+
+// A previous name that holds a token is another Locate's leftover. Putting
+// it back would pin it, so the title is reset instead.
+func TestLocateDoesNotRestoreAToken(t *testing.T) {
+	f := &fake{
+		snap:  `{"running":true,"names":{"` + id1 + `":"ov-0123456789abcdef"}}`,
+		finds: []string{`["` + id1 + `"]`},
+	}
+	if _, err := f.client().Locate(context.Background(), "ttys1"); err != nil {
+		t.Fatal(err)
+	}
+	if last := f.writes[len(f.writes)-1][1]; last != "\x1b]2;\x07" {
+		t.Errorf("restored %q", last)
+	}
+}
+
+// With a deadline too close for every round, Locate runs the rounds that fit
+// and reports ErrNotFound rather than a context error.
+func TestLocateFitsRoundsToTheDeadline(t *testing.T) {
+	f := &fake{snap: `{"running":true,"names":{}}`}
+	c := f.client()
+	c.Sleep = func(ctx context.Context, d time.Duration) error {
+		time.Sleep(100 * time.Millisecond)
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*roundCost)
+	defer cancel()
+	_, err := c.Locate(ctx, "ttys1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if n := len(f.writes) - 1; n < 1 || n >= rounds {
+		t.Fatalf("%d rounds ran", n)
+	}
+	if last := f.writes[len(f.writes)-1][1]; last != "\x1b]2;\x07" {
+		t.Errorf("last write %q", last)
 	}
 }
 
@@ -135,6 +188,9 @@ func TestLocateHonoursContext(t *testing.T) {
 	cancel()
 	if _, err := f.client().Locate(ctx, "ttys1"); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v", err)
+	}
+	if last := f.writes[len(f.writes)-1][1]; last != "\x1b]2;\x07" {
+		t.Errorf("cancelled Locate left %q as the last write", last)
 	}
 }
 
