@@ -67,6 +67,11 @@ func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
+		// A killed process reports "signal: killed", not the context's
+		// error. Wrap the context error so callers can tell a timeout.
+		if cerr := ctx.Err(); cerr != nil {
+			err = fmt.Errorf("%w: %w", cerr, err)
+		}
 		return out.Bytes(), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(errb.String()))
 	}
 	return out.Bytes(), nil

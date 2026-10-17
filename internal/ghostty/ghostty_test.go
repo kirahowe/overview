@@ -244,3 +244,14 @@ func TestScriptsGuardLaunch(t *testing.T) {
 		}
 	}
 }
+
+// A process killed by its context reports "signal: killed"; the error must
+// still say the deadline passed, or callers cannot tell a timeout.
+func TestExecRunTimeoutWrapsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := execRun(ctx, "sleep", "2")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
+	}
+}
