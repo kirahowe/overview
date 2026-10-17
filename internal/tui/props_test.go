@@ -53,7 +53,7 @@ func genRow(t *rapid.T, id string) fleet.Row {
 	r := fleet.Row{
 		State:      rapid.SampledFrom(states).Draw(t, "state"),
 		Since:      t0.Add(time.Duration(rapid.IntRange(0, 4).Draw(t, "since")) * time.Minute),
-		Label:      rapid.SampledFrom([]string{"", "", "staff-7", "Ops"}).Draw(t, "label"),
+		Label:      rapid.SampledFrom([]string{"", "", "crew-7", "Ops"}).Draw(t, "label"),
 		Title:      phrase(t, "title"),
 		LastPrompt: phrase(t, "prompt"),
 		LastReply:  rapid.SampledFrom(replies).Draw(t, "reply"),
@@ -81,7 +81,7 @@ func genQuery(t *rapid.T) string {
 	n := rapid.IntRange(0, 3).Draw(t, "terms")
 	var terms []string
 	for i := 0; i < n; i++ {
-		w := strings.ToLower(rapid.SampledFrom(append(words, "fox", "OWL", "alpha", "beta", "staff", "q")).Draw(t, "term"))
+		w := strings.ToLower(rapid.SampledFrom(append(words, "fox", "OWL", "alpha", "beta", "crew", "q")).Draw(t, "term"))
 		// A prefix, or the whole word in odd case.
 		w = w[:rapid.IntRange(1, len(w)).Draw(t, "cut")]
 		if rapid.Bool().Draw(t, "upper") {

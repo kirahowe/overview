@@ -140,8 +140,9 @@ already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 ```
 
 Sessions that do not read `settings.json` have to be given the hook by their
-launcher. `staff` does this for its members when `:overview-bin` is set in
-its `config.edn`, and those sessions are labelled with the member's id.
+launcher. A launcher can also set `OVERVIEW_LABEL` in a session's
+environment, and overview shows that label on the session's row and
+searches it.
 
 Digests come from a background session, the orchestrator. `overview
 orchestrator start` starts it, and `stop` stands it down. Its schedule lives

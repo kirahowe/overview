@@ -60,14 +60,6 @@ func hookHome(ev HookEvent) Home {
 	return ""
 }
 
-// hookLabel names who the session is working as, when its launcher says so.
-// staff sets STAFF_AGENT for every member it starts.
-func hookLabel() string {
-	if l := os.Getenv("OVERVIEW_LABEL"); l != "" {
-		return l
-	}
-	if id := os.Getenv("STAFF_AGENT"); id != "" {
-		return "staff/" + id
-	}
-	return ""
-}
+// hookLabel names who the session is working as, when its launcher says so
+// through OVERVIEW_LABEL.
+func hookLabel() string { return os.Getenv("OVERVIEW_LABEL") }

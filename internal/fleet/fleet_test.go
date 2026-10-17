@@ -50,13 +50,12 @@ func TestHookWritesOnlyUnderItsOwnHome(t *testing.T) {
 	kira, seeq := t.TempDir(), t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", kira)
 	t.Setenv("OVERVIEW_SKIP", "")
-	t.Setenv("OVERVIEW_LABEL", "")
-	t.Setenv("STAFF_AGENT", "cto")
+	t.Setenv("OVERVIEW_LABEL", "reviewer")
 	Hook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/x","prompt":"hello"}`))
 	Hook(strings.NewReader(`{"hook_event_name":"Stop","session_id":"s1","agent_id":"sub"}`))
 
 	got := Home(kira).Sessions()["s1"]
-	if got.State != Working || got.Label != "staff/cto" || got.LastPrompt != "hello" {
+	if got.State != Working || got.Label != "reviewer" || got.LastPrompt != "hello" {
 		t.Fatalf("unexpected record: %+v", got)
 	}
 	if n := len(Home(seeq).Sessions()); n != 0 {
