@@ -20,7 +20,9 @@ See README.md for behaviour and docs/ for design notes.
   code or the property is wrong before changing either.
 - rapid saves a failing case as a `.fail` file under `testdata/rapid/` and
   replays every file there on each run, so they are regression seeds. Commit
-  one only once the bug is fixed and it passes.
+  one only once the bug is fixed and it passes. Seeds go stale when a
+  generator changes (the draws shift and the seed stops replaying its bug), so
+  prefer a named regression test for anything worth keeping.
 - External commands (claude, ps, osascript, pbcopy) sit behind small seams:
   a function variable or an interface, set by tests. Logic must be testable
   without those programs installed or running.
