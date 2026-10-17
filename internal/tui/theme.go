@@ -17,7 +17,7 @@ import (
 )
 
 // DefaultTheme is the theme used when nothing chooses another.
-const DefaultTheme = "revdiff"
+const DefaultTheme = "one-dark"
 
 //go:embed themes/*.theme
 var builtinThemes embed.FS

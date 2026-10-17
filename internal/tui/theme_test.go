@@ -101,7 +101,8 @@ func TestLoadTheme(t *testing.T) {
 			t.Errorf("%s: accent %s, want %s", name, th.Accent, accent)
 		}
 	}
-	if calm, _ := LoadTheme("calm", dir); calm.Border != revdiff.Border {
+	def, _ := builtinTheme(DefaultTheme)
+	if calm, _ := LoadTheme("calm", dir); calm.Border != def.Border {
 		t.Errorf("calm should inherit the default's border, got %s", calm.Border)
 	}
 	if _, err := LoadTheme("missing", dir); err == nil || !strings.Contains(err.Error(), "one-dark") {

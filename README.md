@@ -75,13 +75,14 @@ yourself.
 
 ## Themes
 
-The view comes with two themes: `revdiff`, the default, with revdiff's amber
-accent, and `one-dark`, after Atom's One Dark. `--theme` picks one for a
+The view comes with two themes: `one-dark`, the default, after Atom's One
+Dark, and `revdiff`, with revdiff's amber accent. `--theme` picks one for a
 run. Without the flag, overview uses `OVERVIEW_THEME`, then a `theme =` line
-in `~/.config/overview/config` (or under `$XDG_CONFIG_HOME`), then `revdiff`:
+in `~/.config/overview/config` (or under `$XDG_CONFIG_HOME`), then
+`one-dark`:
 
 ```
-theme = one-dark
+theme = revdiff
 ```
 
 A theme is a file of `key = colour` lines. A colour is `#rgb`, `#rrggbb` or
@@ -97,10 +98,10 @@ overview themes one-dark > ~/.config/overview/themes/mine.theme
 A file in `~/.config/overview/themes/` is found by its name without the
 `.theme`, and it replaces a built-in of the same name. `--theme` also takes a
 path. A theme only needs the colours it changes. The rest come from
-`revdiff`, or from the built-in named on a `base =` line:
+`one-dark`, or from the built-in named on a `base =` line:
 
 ```
-base   = one-dark
+base   = revdiff
 accent = #c678dd
 ```
 

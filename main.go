@@ -35,7 +35,7 @@ Flags:
                        (default sonnet)
   --theme <name|path>  colours for the live view. Defaults to OVERVIEW_THEME,
                        then the theme line in ~/.config/overview/config,
-                       then revdiff.
+                       then one-dark.
 `
 
 func main() {
