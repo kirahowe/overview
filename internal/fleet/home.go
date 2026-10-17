@@ -10,22 +10,22 @@ import (
 	"strings"
 )
 
-// Home is one Claude Code config directory, such as ~/.claude-kira. Everything
+// Home is one Claude Code config directory, such as ~/.claude-work. Everything
 // overview reads or writes sits under a single Home, so sessions from another
 // config directory never show up beside it.
 type Home string
 
 // ResolveHome picks the config directory: the flag when given, otherwise
-// CLAUDE_CONFIG_DIR. A bare name such as "kira" means ~/.claude-kira. There is
-// no default, because bare ~/.claude is not in use on this machine and
-// guessing would show an empty fleet.
+// CLAUDE_CONFIG_DIR. A bare name such as "work" means ~/.claude-work. There is
+// no default: someone with several config directories would see an empty
+// fleet from a guess, with nothing saying why.
 func ResolveHome(flag string) (Home, error) {
 	dir := flag
 	if dir == "" {
 		dir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}
 	if dir == "" {
-		return "", errors.New("no config directory: pass --home <name|path> or set CLAUDE_CONFIG_DIR")
+		return "", errors.New("no config directory: pass --home <name|path> (--home ~/.claude for the default) or set CLAUDE_CONFIG_DIR")
 	}
 	user, err := os.UserHomeDir()
 	if err != nil {
@@ -47,7 +47,7 @@ func ResolveHome(flag string) (Home, error) {
 	return Home(dir), nil
 }
 
-// Name is the short name shown in the header: "kira" for ~/.claude-kira.
+// Name is the short name shown in the header: "work" for ~/.claude-work.
 func (h Home) Name() string {
 	return strings.TrimPrefix(filepath.Base(string(h)), ".claude-")
 }

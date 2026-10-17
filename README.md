@@ -5,13 +5,14 @@ directory, with a periodic digest of what the sessions did and what is
 waiting on you.
 
 ```
-overview --home kira        # live view of ~/.claude-kira
+overview --home work        # live view of ~/.claude-work
 overview sessions           # print the sessions once
 overview digest             # write a digest now
 ```
 
-`--home` takes a path or a short name: `kira` means `~/.claude-kira`. Without
-the flag, `CLAUDE_CONFIG_DIR` decides. One process looks at one config
+`--home` takes a path or a short name: `work` means `~/.claude-work`. Without
+the flag, `CLAUDE_CONFIG_DIR` decides. With neither, overview stops rather
+than guess, so pass `--home ~/.claude` for Claude Code's default directory. One process looks at one config
 directory, and all of its state lives in `<home>/overview/`, so personal and
 work sessions never appear together.
 
@@ -135,12 +136,25 @@ already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 `Notification`, `Stop` and `SessionEnd`:
 
 ```json
-{"hooks": [{"type": "command", "command": "/Users/kira/.local/bin/overview hook"}]}
+{"hooks": [{"type": "command", "command": "\"$HOME\"/.local/bin/overview hook"}]}
 ```
 
 Sessions that do not read `settings.json` have to be given the hook by their
 launcher. `staff` does this for its members when `:overview-bin` is set in
 its `config.edn`, and those sessions are labelled with the member's id.
+
+Digests come from a background session, the orchestrator. `overview
+orchestrator start` starts it, and `stop` stands it down. Its schedule lives
+in the session itself and is lost when the process restarts, so on macOS a
+launchd agent runs `overview orchestrator ensure` every 15 minutes to restart
+it when it goes silent:
+
+```
+scripts/launchd install work    # or remove, or print to see the agent first
+```
+
+The agent uses whichever `overview` and `claude` are on your PATH when you
+install it, and logs to `~/Library/Logs/overview/`.
 
 ## Limits
 

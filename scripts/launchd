@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Keeps the digest orchestrator for one config directory alive under launchd.
+# Every 15 minutes, and at login, launchd runs `overview orchestrator ensure`,
+# which restarts a session that has gone silent. It never starts one that was
+# not started by hand with `overview orchestrator start`.
+#
+#   scripts/launchd install <home>   write the agent and load it
+#   scripts/launchd remove <home>    unload the agent and delete it
+#   scripts/launchd print <home>     print the agent without installing it
+#
+# <home> is what --home takes: a short name such as "work" for
+# ~/.claude-work, or a path. The agent runs whichever overview and claude
+# are on PATH now, so install them first.
+set -euo pipefail
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[[ $# -eq 2 ]] || usage
+action=$1 home=$2
+# launchd runs the agent from /, so a relative path would point elsewhere.
+if [[ $home == */* && $home != /* && $home != "~"* ]]; then
+  home="$(cd "$home" && pwd)"
+fi
+
+# One agent per config directory, named after it like the view's header.
+name=$(basename "$home")
+name=${name#.claude-}
+name=$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.-' '-')
+label="local.overview.orchestrator.$name"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+domain="gui/$(id -u)"
+
+xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+
+agent() {
+  local overview claude log
+  overview=$(command -v overview) || { echo "overview is not on PATH" >&2; exit 1; }
+  claude=$(command -v claude) || { echo "claude is not on PATH" >&2; exit 1; }
+  log="$HOME/Library/Logs/overview/orchestrator-$name.log"
+  # launchd starts with a bare PATH, and ensure runs claude.
+  local path
+  path="$(dirname "$overview"):$(dirname "$claude"):/usr/bin:/bin"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(xml "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml "$overview")</string>
+    <string>orchestrator</string>
+    <string>ensure</string>
+    <string>--home</string>
+    <string>$(xml "$home")</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(xml "$path")</string>
+    <key>HOME</key>
+    <string>$(xml "$HOME")</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- A restart leaves a background session behind; without this launchd would kill it. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(xml "$log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(xml "$log")</string>
+</dict>
+</plist>
+EOF
+}
+
+case $action in
+  print)
+    agent
+    ;;
+  install)
+    overview orchestrator status --home "$home" >/dev/null # fails on a bad home
+    mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs/overview"
+    agent >"$plist.tmp"
+    plutil -lint -s "$plist.tmp"
+    mv "$plist.tmp" "$plist"
+    launchctl bootout "$domain/$label" 2>/dev/null || true
+    launchctl bootstrap "$domain" "$plist"
+    echo "installed $label"
+    ;;
+  remove)
+    launchctl bootout "$domain/$label" 2>/dev/null || true
+    rm -f "$plist"
+    echo "removed $label"
+    ;;
+  *)
+    usage
+    ;;
+esac

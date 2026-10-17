@@ -48,7 +48,7 @@ func TestPlaces(t *testing.T) {
 func TestAppBundle(t *testing.T) {
 	for comm, want := range map[string]string{
 		"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)": "Visual Studio Code|/Applications/Visual Studio Code.app",
-		"/Users/kira/Applications/Zed.app/Contents/MacOS/zed":                                                                   "Zed|/Users/kira/Applications/Zed.app",
+		"/Users/me/Applications/Zed.app/Contents/MacOS/zed":                                                                     "Zed|/Users/me/Applications/Zed.app",
 		"/usr/bin/login":                "",
 		"-zsh":                          "",
 		"/.app/Contents/MacOS/x":        "",

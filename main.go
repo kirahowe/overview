@@ -28,7 +28,7 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview themes [name]      list the themes, or print one as a file to edit
 
 Flags:
-  --home <name|path>   config directory; "kira" means ~/.claude-kira.
+  --home <name|path>   config directory; "work" means ~/.claude-work.
                        Defaults to CLAUDE_CONFIG_DIR.
   --every <duration>   how often the orchestrator writes a digest (default 1h)
   --model <model>      model for the orchestrator or a one-off digest
