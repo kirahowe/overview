@@ -493,7 +493,7 @@ func (m model) statusBar() string {
 	var left []string
 	switch {
 	case m.filtering:
-		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter jumps · esc clears")}
+		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter opens · esc clears")}
 	case m.note != "":
 		left = []string{strong.Render(m.note)}
 	default:
