@@ -60,6 +60,9 @@ func checkInvariants(t *rapid.T, m model) {
 	if m.filtering && m.screen != sessionsScreen {
 		t.Fatal("filtering on the digest screen")
 	}
+	if m.jumping < 0 || m.jumping > m.jumpSeq {
+		t.Fatalf("jump %d in flight, only %d started", m.jumping, m.jumpSeq)
+	}
 	if m.filter != printable(m.filter) {
 		t.Fatalf("filter %q holds control characters", m.filter)
 	}
@@ -84,9 +87,6 @@ func TestStateMachine(t *testing.T) {
 
 		t.Repeat(map[string]func(*rapid.T){
 			"": func(t *rapid.T) { checkInvariants(t, m) },
-			"key": func(t *rapid.T) {
-				m, _ = press(m, rapid.SampledFrom(keyPool).Draw(t, "key"))
-			},
 			"type": func(t *rapid.T) {
 				m, _ = press(m, rapid.SampledFrom(typeable).Draw(t, "rune"))
 			},
@@ -110,8 +110,47 @@ func TestStateMachine(t *testing.T) {
 					Height: rapid.IntRange(3, 60).Draw(t, "h"),
 				})
 			},
+			"key": func(t *rapid.T) {
+				before := m
+				k := rapid.SampledFrom(keyPool).Draw(t, "key")
+				m, _ = press(m, k)
+				if before.jumping != 0 && m.jumpSeq != before.jumpSeq {
+					t.Fatalf("%q started a second jump while %d was in flight", k, before.jumping)
+				}
+			},
 			"jump result": func(t *rapid.T) {
-				m = update(m, jumpMsg{key: "s1\x00ttys000", id: "T1", note: rapid.SampledFrom([]string{"", "x failed"}).Draw(t, "note")})
+				// Answers to the jump in flight, to none, or to an older or
+				// unknown one, for a row that is shown or one that has gone.
+				keys := []string{"gone\x00ttys009"}
+				for _, r := range m.rows {
+					keys = append(keys, jumpKey(r.SessionID, m.ttys[r.PID]))
+				}
+				msg := jumpMsg{
+					seq:  rapid.SampledFrom([]int{0, m.jumping, m.jumping - 1, m.jumpSeq + 1}).Draw(t, "seq"),
+					key:  rapid.SampledFrom(keys).Draw(t, "jkey"),
+					id:   rapid.SampledFrom([]string{"", "T1"}).Draw(t, "jid"),
+					drop: rapid.Bool().Draw(t, "drop"),
+					note: rapid.SampledFrom([]string{"", "x failed"}).Draw(t, "note"),
+				}
+				before, cached := m, m.terms[msg.key]
+				m = update(m, msg)
+				live := msg.seq != 0 && msg.seq == before.jumping
+				switch {
+				case !live && (m.jumping != before.jumping || m.note != before.note):
+					t.Fatalf("stale result %d (in flight %d) changed the view", msg.seq, before.jumping)
+				case live && m.jumping != 0:
+					t.Fatal("the answered jump is still in flight")
+				}
+				want := cached
+				if msg.drop {
+					want = ""
+				}
+				if live && msg.id != "" && before.hasJumpKey(msg.key) {
+					want = msg.id
+				}
+				if got := m.terms[msg.key]; got != want {
+					t.Fatalf("cache for %q is %q, want %q (live %v, shown %v)", msg.key, got, want, live, before.hasJumpKey(msg.key))
+				}
 			},
 			"view": func(t *rapid.T) {
 				for _, w := range []int{40, 41, 63, 89, 90, 91, 120, 200} {

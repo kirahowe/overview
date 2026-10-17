@@ -342,3 +342,38 @@ func TestNoLocateOutsideGhostty(t *testing.T) {
 		}
 	}
 }
+
+func TestSecondEnterWaitsForTheJumpInFlight(t *testing.T) {
+	j := &fakeJumper{}
+	m := newTestModel(t, j, row("s1", "red", "auth", 11))
+	m, first := press(m, "enter")
+	m, second := press(m, "enter")
+	if first == nil || second != nil {
+		t.Fatalf("first cmd %v, second cmd %v: want one jump", first != nil, second != nil)
+	}
+	m = settle(t, m, first)
+	if len(j.locates) != 1 || m.jumping != 0 {
+		t.Fatalf("locates %v, in flight %d", j.locates, m.jumping)
+	}
+	if _, again := press(m, "enter"); again == nil {
+		t.Fatal("enter after the jump finished should jump again")
+	}
+}
+
+// The answer to a jump can arrive after a refresh: the session may be gone,
+// or now run on another tty. The view keeps going and caches nothing stale.
+func TestJumpAnswerAfterTheRowChanged(t *testing.T) {
+	for name, after := range map[string]rowsMsg{
+		"vanished":    {rows: []fleet.Row{row("s2", "blue", "b", 12)}, ttys: map[int]string{12: "ttys2"}},
+		"tty changed": {rows: []fleet.Row{row("s1", "red", "auth", 11)}, ttys: map[int]string{11: "ttys8"}},
+	} {
+		j := &fakeJumper{}
+		m := newTestModel(t, j, row("s1", "red", "auth", 11))
+		m, cmd := press(m, "enter")
+		m = update(m, after)
+		m = settle(t, m, cmd)
+		if m.jumping != 0 || len(m.terms) != 0 {
+			t.Errorf("%s: in flight %d, cache %v", name, m.jumping, m.terms)
+		}
+	}
+}

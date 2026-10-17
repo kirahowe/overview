@@ -53,14 +53,14 @@ func jumpReason(err error) string {
 // and, if Ghostty has forgotten it, locates once more. Locate writes to the
 // tty, so it runs only for a session whose process pid runs under Ghostty.
 // It returns a jumpMsg and never touches the model.
-func jumpCmd(j jumper, name, key, tty string, pid int, cached string) tea.Cmd {
+func jumpCmd(j jumper, seq int, name, key, tty string, pid int, cached string) tea.Cmd {
 	return func() tea.Msg {
 		call := func(timeout time.Duration, f func(ctx context.Context) error) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			return f(ctx)
 		}
-		msg := jumpMsg{key: key}
+		msg := jumpMsg{seq: seq, key: key}
 		id := cached
 		if id != "" {
 			err := call(focusTimeout, func(ctx context.Context) error { return j.Focus(ctx, id) })

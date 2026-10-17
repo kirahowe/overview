@@ -52,6 +52,7 @@ type (
 	// jumpMsg reports how a jump to a Ghostty terminal went. The Cmd that
 	// ran it does not touch the model; Update applies this.
 	jumpMsg struct {
+		seq  int    // which jump this answers
 		key  string // cache key
 		id   string // terminal id to remember, if the jump worked
 		drop bool   // forget the cached id
@@ -104,6 +105,10 @@ type model struct {
 	// copies of the model share it, and only Update writes to it.
 	jump  jumper
 	terms map[string]string
+	// jumping is the seq of the jump in flight, 0 if none. Only one runs at
+	// a time: two Locates on one tty would each take the other's token for
+	// the terminal's real title.
+	jumping, jumpSeq int
 
 	w, h int
 }
@@ -283,7 +288,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.drop {
 			delete(m.terms, msg.key)
 		}
-		if msg.id != "" {
+		if msg.seq == 0 || msg.seq != m.jumping {
+			return m, nil // not the jump in flight
+		}
+		m.jumping = 0
+		// Remember the terminal only while a shown session still has that
+		// tty; the row may have gone, or its session moved, meanwhile.
+		if msg.id != "" && m.hasJumpKey(msg.key) {
 			m.terms[msg.key] = msg.id
 		}
 		if msg.note != "" {
@@ -513,8 +524,26 @@ func (m model) act(row fleet.Row, jump bool) (tea.Model, tea.Cmd) {
 	if !jump || m.jump == nil || tty == "" {
 		return m.say(ttyNote(row.Name, tty, "")), nil
 	}
-	key := row.SessionID + "\x00" + tty
-	return m, jumpCmd(m.jump, row.Name, key, tty, row.PID, m.terms[key])
+	if m.jumping != 0 {
+		return m, nil // a second enter while the first jump runs
+	}
+	key := jumpKey(row.SessionID, tty)
+	m.jumpSeq++
+	m.jumping = m.jumpSeq
+	return m, jumpCmd(m.jump, m.jumping, row.Name, key, tty, row.PID, m.terms[key])
+}
+
+// jumpKey is the terms cache key: a terminal id is only good for the same
+// session on the same tty.
+func jumpKey(session, tty string) string { return session + "\x00" + tty }
+
+func (m model) hasJumpKey(key string) bool {
+	for _, r := range m.rows {
+		if tty := m.ttys[r.PID]; tty != "" && !r.Background() && jumpKey(r.SessionID, tty) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) digestKey(k string) model {
