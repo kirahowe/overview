@@ -127,35 +127,49 @@ func flatten(secs []section) []fleet.Row {
 }
 
 // projects maps a working directory to its project's display name. The repo
-// root lookup sits behind exists so tests need no filesystem, and its answer
-// is cached per directory.
+// root lookup sits behind exists and resolve so tests need no filesystem, and
+// its answer is cached per directory.
 type projects struct {
-	exists func(path string) bool
-	roots  map[string]string
+	exists  func(path string) bool
+	resolve func(path string) string // symlinks resolved, so /tmp and /private/tmp agree
+	roots   map[string]string
 }
 
 func newProjects() *projects {
 	return &projects{
-		exists: func(p string) bool { _, err := os.Lstat(p); return err == nil },
-		roots:  map[string]string{},
+		exists:  func(p string) bool { _, err := os.Lstat(p); return err == nil },
+		resolve: resolvePath,
+		roots:   map[string]string{},
 	}
+}
+
+// resolvePath resolves symlinks in p, or only cleans it if that fails (the
+// directory may be gone by now).
+func resolvePath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // name is the display name of the project cwd belongs to.
 func (p *projects) name(cwd string) string {
 	root, ok := p.roots[cwd]
 	if !ok {
-		root = repoRoot(cwd, p.exists)
+		if cwd != "" {
+			root = repoRoot(p.resolve(cwd), p.exists)
+		}
 		p.roots[cwd] = root
 	}
-	if user, _ := os.UserHomeDir(); root == user {
+	if user, err := os.UserHomeDir(); err == nil && root == p.resolve(user) {
 		return "~"
 	}
 	return fleet.ShortDir(root)
 }
 
 // repoRoot returns the nearest ancestor of cwd (cwd included) that holds a
-// .jj or .git entry, file or directory. Without one it returns cwd.
+// .jj or .git entry, file or directory. Without one it returns cwd. Either
+// way the result is clean.
 func repoRoot(cwd string, exists func(path string) bool) string {
 	if cwd == "" {
 		return ""
@@ -166,7 +180,7 @@ func repoRoot(cwd string, exists func(path string) bool) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return cwd
+			return filepath.Clean(cwd)
 		}
 		dir = parent
 	}

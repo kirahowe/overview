@@ -309,10 +309,29 @@ func TestPropRepoRoot(t *testing.T) {
 
 func TestRepoRootEdges(t *testing.T) {
 	fs := fakeFS{"/r/.git": true}
-	for cwd, want := range map[string]string{"/r": "/r", "/r/x/y": "/r", "/r/x/": "/r", "/q": "/q", "": ""} {
+	for cwd, want := range map[string]string{"/r": "/r", "/r/x/y": "/r", "/r/x/": "/r", "/q": "/q", "/q/": "/q", "/q/./x/..": "/q", "": ""} {
 		if got := repoRoot(cwd, fs.exists); got != want {
 			t.Errorf("%q: got %q want %q", cwd, got, want)
 		}
+	}
+}
+
+// A cwd reached through a symlink (/tmp is /private/tmp on macOS) belongs
+// to the same project as the resolved path.
+func TestProjectsResolveSymlinks(t *testing.T) {
+	p := newProjects()
+	p.exists = fakeFS{"/private/tmp/r/.git": true}.exists
+	p.resolve = func(s string) string {
+		if strings.HasPrefix(s, "/tmp/") {
+			return "/private" + s
+		}
+		return s
+	}
+	if a, b := p.name("/tmp/r/x"), p.name("/private/tmp/r"); a != b {
+		t.Fatalf("%q and %q", a, b)
+	}
+	if a, b := p.name("/tmp/q/"), p.name("/private/tmp/q"); a != b {
+		t.Fatalf("no repo: %q and %q", a, b)
 	}
 }
 
