@@ -281,3 +281,31 @@ func TestNeedsYouIsPinnedAndNJumpsThere(t *testing.T) {
 		t.Fatalf("n should return to the waiting session, got %q", m.sel)
 	}
 }
+
+func TestUnhandledKeyWhileFilteringKeepsTheCursor(t *testing.T) {
+	m := newTestModel(t, nil, row("s1", "red", "work", 11), row("s2", "blue", "work", 12))
+	m, _ = press(m, "/", "w", "down")
+	moved := m.sel
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyLeft}, {Type: tea.KeyRight}, {Type: tea.KeyCtrlA}} {
+		m = update(m, k)
+		if m.sel != moved {
+			t.Fatalf("%v moved the cursor from %q to %q", k, moved, m.sel)
+		}
+	}
+	m, _ = press(m, "backspace") // the text changed: back to the first match
+	if first := m.ordered()[0].SessionID; m.sel != first {
+		t.Fatalf("new filter text should select the first match %q, got %q", first, m.sel)
+	}
+}
+
+// A filter left in place by an enter with no match, then a refresh that
+// brings rows the filter hides: esc must put the cursor on a shown row.
+func TestEscOutsideTheFilterSelectsAShownRow(t *testing.T) {
+	m := newTestModel(t, nil)
+	m, _ = press(m, "/", "z", "z", "enter")
+	m = update(m, rowsMsg{rows: []fleet.Row{row("s1", "red", "work", 11)}, ttys: map[int]string{11: "ttys1"}})
+	m, _ = press(m, "esc")
+	if m.filter != "" || m.sel != "s1" {
+		t.Fatalf("filter %q sel %q", m.filter, m.sel)
+	}
+}

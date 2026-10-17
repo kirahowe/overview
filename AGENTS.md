@@ -18,6 +18,9 @@ See README.md for behaviour and docs/ for design notes.
   gets property tests with `pgregory.net/rapid`, next to table tests. Put them
   in `props_test.go` in the package. If a property fails, find out whether the
   code or the property is wrong before changing either.
+- rapid saves a failing case as a `.fail` file under `testdata/rapid/` and
+  replays every file there on each run, so they are regression seeds. Commit
+  one only once the bug is fixed and it passes.
 - External commands (claude, ps, osascript, pbcopy) sit behind small seams:
   a function variable or an interface, set by tests. Logic must be testable
   without those programs installed or running.

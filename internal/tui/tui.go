@@ -313,9 +313,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := msg.String()
 	if m.filtering {
+		before := m.filter
 		switch msg.Type {
 		case tea.KeyEsc:
+			// The cursor's row is still shown once the filter is gone.
 			m.filter, m.filtering = "", false
+			return m.keepSel(), nil
 		case tea.KeyEnter:
 			m.filtering = false
 			rows := m.ordered()
@@ -343,7 +346,12 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 		}
-		return m.moveTo(m.ordered(), 0), nil
+		// New filter text puts the cursor on the first match. Keys that left
+		// the text alone must not undo where the user arrowed to.
+		if m.filter != before {
+			return m.moveTo(m.ordered(), 0), nil
+		}
+		return m.keepSel(), nil
 	}
 	if m.confirm != "" {
 		id := m.confirm
@@ -434,7 +442,7 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "esc":
 			m.filter = ""
-			return m, nil
+			return m.keepSel(), nil
 		}
 	}
 
