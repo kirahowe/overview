@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -211,6 +212,20 @@ func (m model) selected(rows []fleet.Row) (fleet.Row, int, bool) {
 	return rows[0], 0, true
 }
 
+// printable cleans typed or pasted filter text: tabs become spaces and other
+// control characters, which would have no width and break the layout, go.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // keepSel puts the cursor on the first row if it is on none that is shown.
 func (m model) keepSel() model {
 	rows := m.ordered()
@@ -324,7 +339,7 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.filter = string(r[:len(r)-1])
 			}
 		case tea.KeyRunes, tea.KeySpace:
-			m.filter += string(msg.Runes)
+			m.filter += printable(string(msg.Runes))
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 		}
@@ -353,7 +368,7 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// keystrokes. They can start a filter but never trigger an action.
 	if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 {
 		if msg.Runes[0] == '/' && m.screen == sessionsScreen {
-			m.filter, m.filtering, m.focus = string(msg.Runes[1:]), true, listPane
+			m.filter, m.filtering, m.focus = printable(string(msg.Runes[1:])), true, listPane
 			return m.moveTo(m.ordered(), 0), nil
 		}
 		return m, nil
