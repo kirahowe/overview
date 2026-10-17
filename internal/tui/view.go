@@ -93,7 +93,8 @@ func (m model) View() string {
 }
 
 func (m model) sessionsView() []string {
-	rows := m.ordered()
+	secs := m.sections()
+	rows := flatten(secs)
 	row, _, ok := m.selected(rows)
 	lw, lh, dw, dh := m.split()
 
@@ -101,7 +102,7 @@ func (m model) sessionsView() []string {
 	if m.filter != "" || m.filtering {
 		listInfo = fmt.Sprintf("/%s · %d", m.filter, len(rows))
 	}
-	list := box("sessions", listInfo, m.listLines(rows, row.SessionID, lw-4, lh-2), lw, lh, m.focus == listPane)
+	list := box("sessions", listInfo, m.listLines(secs, row.SessionID, lw-4, lh-2), lw, lh, m.focus == listPane)
 
 	var detail []string
 	title, info := "detail", ""
@@ -157,9 +158,8 @@ func box(title, info string, body []string, w, h int, focused bool) []string {
 	return append(out, bottom)
 }
 
-// listLines renders the grouped list and scrolls it so the cursor stays in
-// view.
-func (m model) listLines(rows []fleet.Row, sel string, w, h int) []string {
+// listLines renders the sections and scrolls so the cursor stays in view.
+func (m model) listLines(secs []section, sel string, w, h int) []string {
 	if !m.loaded {
 		return []string{dim.Render("reading sessions…")}
 	}
@@ -167,34 +167,31 @@ func (m model) listLines(rows []fleet.Row, sel string, w, h int) []string {
 	if m.rowsErr != nil {
 		lines = append(lines, red.Render(m.rowsErr.Error()), "")
 	}
-	if len(rows) == 0 {
+	if len(secs) == 0 {
 		msg := "no sessions running"
 		if m.filter != "" {
 			msg = "nothing matches /" + m.filter
 		}
 		return append(lines, dim.Render(msg))
 	}
-	counts := map[int]int{}
-	for _, r := range rows {
-		counts[group(r)]++
-	}
-	names := []string{"needs you", "working", "idle"}
-	styles := []lipgloss.Style{red, green.Bold(true), dim.Bold(true)}
-	selTop, selBottom, last := 0, 0, -1
-	for _, r := range rows {
-		if g := group(r); g != last {
-			if last != -1 {
-				lines = append(lines, "")
+	selTop, selBottom := 0, 0
+	for i, sec := range secs {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		style := heading
+		if sec.NeedsYou {
+			style = red
+		}
+		lines = append(lines, style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", len(sec.Rows))))
+		for _, r := range sec.Rows {
+			if r.SessionID == sel {
+				selTop = len(lines)
 			}
-			lines = append(lines, styles[g].Render(names[g])+dim.Render(fmt.Sprintf(" %d", counts[g])))
-			last = g
-		}
-		if r.SessionID == sel {
-			selTop = len(lines)
-		}
-		lines = append(lines, m.rowLines(r, w, r.SessionID == sel)...)
-		if r.SessionID == sel {
-			selBottom = len(lines)
+			lines = append(lines, m.rowLines(r, w, r.SessionID == sel, sec.NeedsYou)...)
+			if r.SessionID == sel {
+				selBottom = len(lines)
+			}
 		}
 	}
 	top := 0
@@ -207,7 +204,7 @@ func (m model) listLines(rows []fleet.Row, sel string, w, h int) []string {
 // rowLines renders one session as two lines: name, place and age, then what
 // it is about. The selected row is a solid bar, which needs plain text
 // underneath, since every inner colour would reset its background.
-func (m model) rowLines(r fleet.Row, w int, selected bool) []string {
+func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 	mark, when, sub := "○", Ago(r.Since), Subject(r)
 	style := dim
 	switch {
@@ -222,7 +219,17 @@ func (m model) rowLines(r fleet.Row, w int, selected bool) []string {
 	case r.State == fleet.Working:
 		mark, style = spinner[m.frame%len(spinner)], green
 	}
-	right := project(r) + " · " + when
+	// Under a project heading the project is already known, so say the state
+	// instead. In the pinned section the project is what is missing.
+	place, placed := m.projects.name(r.Cwd), ""
+	if !pinned {
+		place = string(r.State)
+		if place == "" {
+			place = "idle"
+		}
+	}
+	placed = place + " · "
+	right := placed + when
 	name := ansi.Truncate(r.Name, max(w-ansi.StringWidth(right)-4, 4), "…")
 	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
 
@@ -237,20 +244,12 @@ func (m model) rowLines(r fleet.Row, w int, selected bool) []string {
 			bar.Bold(false).Render(fit("  "+sub, w)),
 		}
 	}
-	line := style.Render(mark) + " " + fg(normal).Render(name) + gap + dim.Render(project(r)+" · ") + style.Render(when)
+	line := style.Render(mark) + " " + fg(normal).Render(name) + gap + dim.Render(placed) + style.Render(when)
 	subStyle := dim
 	if r.NeedsYou() {
 		subStyle = style.Bold(false)
 	}
 	return []string{line, "  " + subStyle.Render(sub)}
-}
-
-// project is the short directory a session runs in, for the list.
-func project(r fleet.Row) string {
-	if user, _ := os.UserHomeDir(); r.Cwd == user {
-		return "~"
-	}
-	return fleet.ShortDir(r.Cwd)
 }
 
 type detailCache struct {
@@ -497,19 +496,14 @@ func (m model) statusBar() string {
 	case m.note != "":
 		left = []string{strong.Render(m.note)}
 	default:
-		count := map[int]int{}
-		for _, r := range m.rows {
-			if r.Name != fleet.OrchestratorName {
-				count[group(r)]++
-			}
+		need, working, idle := m.counts()
+		if need > 0 {
+			left = append(left, strong.Render(fmt.Sprintf("%d need you", need)))
 		}
-		if c := count[0]; c > 0 {
-			left = append(left, strong.Render(fmt.Sprintf("%d need you", c)))
+		if working > 0 {
+			left = append(left, base.Render(fmt.Sprintf("%d working", working)))
 		}
-		if c := count[1]; c > 0 {
-			left = append(left, base.Render(fmt.Sprintf("%d working", c)))
-		}
-		left = append(left, base.Render(fmt.Sprintf("%d idle", count[2])))
+		left = append(left, base.Render(fmt.Sprintf("%d idle", idle)))
 		if m.loaded && m.rowsErr == nil {
 			switch h := m.home.HealthOf(m.rows); {
 			case !h.Running:

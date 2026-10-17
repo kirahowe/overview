@@ -5,7 +5,6 @@ package tui
 import (
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
+	"overview/internal/ghostty"
 )
 
 const (
@@ -47,6 +47,14 @@ type (
 	digestMsg struct {
 		d   fleet.Digest
 		err error
+	}
+	// jumpMsg reports how a jump to a Ghostty terminal went. The Cmd that
+	// ran it does not touch the model; Update applies this.
+	jumpMsg struct {
+		key  string // cache key
+		id   string // terminal id to remember, if the jump worked
+		drop bool   // forget the cached id
+		note string // what to tell the user when it failed
 	}
 	// doneMsg reports how an action on a session went.
 	doneMsg struct {
@@ -88,15 +96,29 @@ type model struct {
 	// every spinner frame. A pointer, because the model is passed by value.
 	cache *detailCache
 
+	projects *projects
+
+	// jump finds and focuses a session's Ghostty terminal; nil means no
+	// jumping. terms caches session+tty -> terminal id. It is a map, so
+	// copies of the model share it, and only Update writes to it.
+	jump  jumper
+	terms map[string]string
+
 	w, h int
 }
 
 // Run opens the view and blocks until the user quits.
 func Run(home fleet.Home, llm string) error {
-	m := model{home: home, llm: llm, cache: &detailCache{}}
+	m := newModel(home, llm)
+	m.jump = ghostty.New()
 	m = m.loadDigests()
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+func newModel(home fleet.Home, llm string) model {
+	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
+		terms: map[string]string{}}
 }
 
 // loadDigests picks up the digest list and shows the newest one.
@@ -167,46 +189,13 @@ func (m model) say(note string) model {
 	return m
 }
 
-// group places a session in the list: what needs you, then what is working,
-// then the rest.
-func group(r fleet.Row) int {
-	switch {
-	case r.NeedsYou():
-		return 0
-	case r.State == fleet.Working:
-		return 1
-	}
-	return 2
+// sections is the list as shown, with the filter applied.
+func (m model) sections() []section {
+	return buildList(m.rows, m.filter, m.projects.name)
 }
 
-// ordered is the list as shown: filtered, grouped, the longest wait first
-// among what needs you and the latest activity first elsewhere. The
-// orchestrator is left out, since the status bar already reports on it.
-func (m model) ordered() []fleet.Row {
-	var out []fleet.Row
-	q := strings.ToLower(m.filter)
-	for _, r := range m.rows {
-		if r.Name == fleet.OrchestratorName {
-			continue
-		}
-		hay := strings.ToLower(strings.Join([]string{r.Name, r.Cwd, r.Title, r.Label, r.LastPrompt}, " "))
-		if q != "" && !strings.Contains(hay, q) {
-			continue
-		}
-		out = append(out, r)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		gi, gj := group(out[i]), group(out[j])
-		if gi != gj {
-			return gi < gj
-		}
-		if gi == 0 {
-			return out[i].Since.Before(out[j].Since)
-		}
-		return out[i].Since.After(out[j].Since)
-	})
-	return out
-}
+// ordered is the list flattened in the order the cursor walks it.
+func (m model) ordered() []fleet.Row { return flatten(m.sections()) }
 
 // selected returns the row under the cursor and its place in rows, falling
 // back to the first row when the selected session has gone.
@@ -220,6 +209,21 @@ func (m model) selected(rows []fleet.Row) (fleet.Row, int, bool) {
 		return fleet.Row{}, -1, false
 	}
 	return rows[0], 0, true
+}
+
+// keepSel puts the cursor on the first row if it is on none that is shown.
+func (m model) keepSel() model {
+	rows := m.ordered()
+	if len(rows) == 0 {
+		return m
+	}
+	for _, r := range rows {
+		if r.SessionID == m.sel {
+			return m
+		}
+	}
+	m.sel, m.scroll, m.confirm = rows[0].SessionID, 0, ""
+	return m
 }
 
 func (m model) moveTo(rows []fleet.Row, i int) model {
@@ -258,8 +262,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh, tick())
 	case rowsMsg:
 		m.rows, m.ttys, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.err, true
-		if rows := m.ordered(); m.sel == "" && len(rows) > 0 {
-			m.sel = rows[0].SessionID
+		// Keep the cursor on a visible row after sessions come and go.
+		m = m.keepSel()
+	case jumpMsg:
+		if msg.drop {
+			delete(m.terms, msg.key)
+		}
+		if msg.id != "" {
+			m.terms[msg.key] = msg.id
+		}
+		if msg.note != "" {
+			m = m.say(msg.note)
 		}
 	case digestMsg:
 		m.digesting = false
@@ -290,6 +303,22 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filter, m.filtering = "", false
 		case tea.KeyEnter:
 			m.filtering = false
+			rows := m.ordered()
+			if row, _, ok := m.selected(rows); ok && len(rows) > 0 {
+				// Act on the match under the cursor, then show everything
+				// again so coming back finds the full list.
+				m.filter = ""
+				m.sel = row.SessionID
+				return m.act(row, true)
+			}
+			return m, nil
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyDown, tea.KeyCtrlN:
+			rows := m.ordered()
+			_, i, _ := m.selected(rows)
+			if msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP {
+				return m.moveTo(rows, i-1), nil
+			}
+			return m.moveTo(rows, i+1), nil
 		case tea.KeyBackspace:
 			if r := []rune(m.filter); len(r) > 0 {
 				m.filter = string(r[:len(r)-1])
@@ -423,16 +452,7 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		if !row.Background() {
-			where := "its own terminal"
-			if tty := m.ttys[row.PID]; tty != "" {
-				where = tty
-			}
-			return m.say(row.Name + " is interactive, in " + where + ". Switch to that tab to answer it."), nil
-		}
-		return m, tea.ExecProcess(m.home.AttachCmd(row.Live), func(err error) tea.Msg {
-			return doneMsg{"back from " + row.Name, err}
-		})
+		return m.act(row, k == "enter")
 	case "x":
 		if !ok || !row.Background() {
 			return m.say("only background sessions can be stopped from here"), nil
@@ -455,6 +475,23 @@ func (m model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.scroll = m.clampScroll()
 	return m, nil
+}
+
+// act does what enter means for a row. A background session is attached. An
+// interactive one is jumped to in Ghostty when jump is set (enter), and
+// otherwise only reported with its tty (the `a` key).
+func (m model) act(row fleet.Row, jump bool) (tea.Model, tea.Cmd) {
+	if row.Background() {
+		return m, tea.ExecProcess(m.home.AttachCmd(row.Live), func(err error) tea.Msg {
+			return doneMsg{"back from " + row.Name, err}
+		})
+	}
+	tty := m.ttys[row.PID]
+	if !jump || m.jump == nil || tty == "" {
+		return m.say(ttyNote(row.Name, tty, "")), nil
+	}
+	key := row.SessionID + "\x00" + tty
+	return m, jumpCmd(m.jump, row.Name, key, tty, m.terms[key])
 }
 
 func (m model) digestKey(k string) model {
