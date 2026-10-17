@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/fleet"
 	"overview/internal/ghostty"
@@ -351,6 +353,9 @@ func TestSecondEnterWaitsForTheJumpInFlight(t *testing.T) {
 	if first == nil || second != nil {
 		t.Fatalf("first cmd %v, second cmd %v: want one jump", first != nil, second != nil)
 	}
+	if !strings.Contains(m.note, "finding red") {
+		t.Fatalf("no progress note while the jump runs: %q", m.note)
+	}
 	m = settle(t, m, first)
 	if len(j.locates) != 1 || m.jumping != 0 {
 		t.Fatalf("locates %v, in flight %d", j.locates, m.jumping)
@@ -374,6 +379,58 @@ func TestJumpAnswerAfterTheRowChanged(t *testing.T) {
 		m = settle(t, m, cmd)
 		if m.jumping != 0 || len(m.terms) != 0 {
 			t.Errorf("%s: in flight %d, cache %v", name, m.jumping, m.terms)
+		}
+	}
+}
+
+func TestJumpShowsProgressNote(t *testing.T) {
+	j := &fakeJumper{}
+	m := newTestModel(t, j, row("s1", "red", "auth", 11))
+	m, first := press(m, "enter")
+	if m.note != "finding red's terminal…" {
+		t.Fatalf("note %q", m.note)
+	}
+	m.note = ""
+	m, second := press(m, "enter")
+	if second != nil || !strings.Contains(m.note, "finding red") {
+		t.Fatalf("repeat enter: cmd %v, note %q", second != nil, m.note)
+	}
+	m = settle(t, m, first)
+	if m.jumping != 0 {
+		t.Fatal("jump still in flight")
+	}
+}
+
+// A timeout from the real runner wraps the context error and reaches the
+// user as "Ghostty did not answer".
+func TestJumpTimeoutFromRunnerShowsDidNotAnswer(t *testing.T) {
+	killed := fmt.Errorf("osascript: %w: %w: ", context.DeadlineExceeded, errors.New("signal: killed"))
+	c := ghostty.Client{
+		Run:   func(context.Context, string, ...string) ([]byte, error) { return nil, killed },
+		Write: func(string, []byte) error { return nil },
+		Sleep: func(context.Context, time.Duration) error { return nil },
+		Token: func() string { return "tok" },
+	}
+	m := newTestModel(t, c, row("s1", "red", "auth", 11))
+	m, cmd := press(m, "enter")
+	m = settle(t, m, cmd)
+	if !strings.Contains(m.note, "did not answer") {
+		t.Fatalf("note %q", m.note)
+	}
+}
+
+// A tab typed into the search box once overflowed the narrowest layout.
+func TestSearchWithTabStaysWithinWidth(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{}, row("s1", "a", "auth", 11))
+	m = update(m, tea.WindowSizeMsg{Width: 40, Height: 10})
+	m, _ = press(m, "/")
+	m, _ = press(m, typed("auth\tauth")...)
+	if strings.ContainsRune(m.filter, '\t') {
+		t.Fatalf("filter %q holds a tab", m.filter)
+	}
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := ansi.StringWidth(line); w > 40 {
+			t.Errorf("line %d is %d cells: %q", i, w, line)
 		}
 	}
 }

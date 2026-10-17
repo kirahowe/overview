@@ -525,11 +525,13 @@ func (m model) act(row fleet.Row, jump bool) (tea.Model, tea.Cmd) {
 		return m.say(ttyNote(row.Name, tty, "")), nil
 	}
 	if m.jumping != 0 {
-		return m, nil // a second enter while the first jump runs
+		// A second enter while the first jump runs. Keep the note up.
+		return m.say("finding " + row.Name + "'s terminal…"), nil
 	}
 	key := jumpKey(row.SessionID, tty)
 	m.jumpSeq++
 	m.jumping = m.jumpSeq
+	m = m.say("finding " + row.Name + "'s terminal…")
 	return m, jumpCmd(m.jump, m.jumping, row.Name, key, tty, row.PID, m.terms[key])
 }
 
