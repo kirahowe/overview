@@ -44,7 +44,7 @@ The original plan's open questions came out like this:
   Only `D` runs one by hand.
 
 Still to do by hand: grant Ghostty Accessibility access for the global
-`ctrl+backquote` hotkey, restart Ghostty, and start overview in the quick
+`ctrl+=` hotkey, restart Ghostty, and start overview in the quick
 terminal once.
 
 Verification: `scripts/check` gates every commit, and `scripts/check
