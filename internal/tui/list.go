@@ -133,14 +133,19 @@ type projects struct {
 	exists  func(path string) bool
 	resolve func(path string) string // symlinks resolved, so /tmp and /private/tmp agree
 	roots   map[string]string
+	home    string // the resolved home directory, "" if unknown
 }
 
 func newProjects() *projects {
-	return &projects{
+	p := &projects{
 		exists:  func(p string) bool { _, err := os.Lstat(p); return err == nil },
 		resolve: resolvePath,
 		roots:   map[string]string{},
 	}
+	if user, err := os.UserHomeDir(); err == nil {
+		p.home = p.resolve(user)
+	}
+	return p
 }
 
 // resolvePath resolves symlinks in p, or only cleans it if that fails (the
@@ -161,7 +166,7 @@ func (p *projects) name(cwd string) string {
 		}
 		p.roots[cwd] = root
 	}
-	if user, err := os.UserHomeDir(); err == nil && root == p.resolve(user) {
+	if p.home != "" && root == p.home {
 		return "~"
 	}
 	return fleet.ShortDir(root)
