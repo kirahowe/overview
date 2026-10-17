@@ -5,8 +5,13 @@ Pick it up in a fresh session started from this repo.
 
 ## Status, 2026-10-17: built
 
-The plan below has been built, with three changes. The rest of this file
+The plan below has been built, with four changes. The rest of this file
 is the original plan, kept for its reasoning.
+
+- **No quick terminal.** Kira dropped it after trying it. Cmd+1 to the
+  overview tab is enough, and the dropdown needed overview started in it
+  by hand after every Ghostty restart, because `initial-command` only
+  runs in the first terminal. The hotkey is gone from the Ghostty config.
 
 - **The tab bar stays visible.** Stock Ghostty 1.3.1 on macOS cannot hide
   it: `window-show-tab-bar` is GTK-only, and `macos-titlebar-style =
@@ -37,15 +42,9 @@ The original plan's open questions came out like this:
 - Ghostty has no xterm title stack (`CSI 22/23 t`). Restoring the old
   title can therefore freeze a title that Ghostty derived itself.
 - `focus terminal id` selects the tab, focuses the split and raises the
-  window. In QA, focusing a main-window terminal from the quick terminal
-  hid the dropdown in 6 runs out of 7. If Kira sees it stay open,
-  overview should hide it explicitly.
+  window.
 - Two overview instances are safe. The TUI never runs digests on a timer.
   Only `D` runs one by hand.
-
-Still to do by hand: grant Ghostty Accessibility access for the global
-`ctrl+=` hotkey, restart Ghostty, and start overview in the quick
-terminal once.
 
 Verification: `scripts/check` gates every commit, and `scripts/check
 --deep` runs the property tests at 2000 cases. `OVERVIEW_E2E=1

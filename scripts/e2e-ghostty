@@ -5,8 +5,7 @@
 # macOS Automation permission for the calling terminal. It is NOT part of
 # scripts/check: it opens windows on the live desktop and moves focus.
 #
-#   OVERVIEW_E2E=1 scripts/e2e-ghostty            # jump scenarios
-#   OVERVIEW_E2E=1 OVERVIEW_E2E_QUICK=1 scripts/e2e-ghostty   # + quick terminal
+#   OVERVIEW_E2E=1 scripts/e2e-ghostty
 #
 # What it does:
 #   * builds bin/overview, makes a temp home and a fake `claude` (selected with
@@ -19,8 +18,6 @@
 #   * scenarios: jump via `/filter` + Enter; jump with no filter on the
 #     selected row; a stale jump after B is closed (overview must survive and
 #     stay put).
-#   * with OVERVIEW_E2E_QUICK=1, runs overview in the quick terminal (briefly
-#     visible on screen) and reports whether a jump hides it.
 #
 # Only windows this script opens are touched; all are closed, and every
 # process it started is killed by pid, on exit (trap) even after a failure.
@@ -84,12 +81,6 @@ focus_term() { osascript -e "tell application \"Ghostty\" to focus (terminal id 
   [ "$(front_terminal)" = "$1" ] || { sleep 0.3; [ "$(front_terminal)" = "$1" ] || die "could not focus $1 first"; }; }
 all_terms() { osascript -e 'tell application "Ghostty" to return id of every terminal'; }
 send_text() { osascript -e "tell application \"Ghostty\" to input text \"$2\" to (terminal id \"$1\")" >/dev/null; }
-# Counts on-screen Ghostty windows above normal level: the quick terminal's
-# panel. (The quick terminal's terminal is in app.terminals but in no window
-# whether shown or hidden, so the scripting API cannot tell.)
-quick_visible() { osascript -l JavaScript -e 'ObjC.import("CoreGraphics");
-  var l=ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly,0)));
-  l.filter(function(w){return w.kCGWindowOwnerName==="Ghostty"&&w.kCGWindowLayer>0}).length' 2>/dev/null; }
 send_key() { osascript -e "tell application \"Ghostty\" to send key \"$2\" to (terminal id \"$1\")" >/dev/null; }
 
 # Window B: records its tty and pid, then sits in sleep.
@@ -170,41 +161,6 @@ focus_term "$a_term"; sleep 0.4
 t0=$(now); send_key "$a_term" enter; sleep 3.5
 alive && pass "overview survives stale jump ($(( $(now) - t0 )) ms incl. wait)" || fail "overview died on stale jump"
 [ "$(front_terminal)" = "$a_term" ] && pass "focus stayed on A after stale jump" || fail "focus moved on stale jump"
-
-# 4. quick terminal (opt-in: it appears on screen for a few seconds)
-if [ "${OVERVIEW_E2E_QUICK:-}" = 1 ]; then
-  # fresh B
-  rm -f "$tmp/b.pid"
-  read -r b_win b_term < <(open_window "$tmp/b.sh"); windows+=("$b_win")
-  for _ in $(seq 50); do [ -s "$tmp/b.pid" ] && break; sleep 0.1; done
-  b_pid=$(cat "$tmp/b.pid"); pids+=("$b_pid")
-  sed -i '' "s/\"pid\":[0-9]*,\"id\":\"\",\"cwd\":\"$(echo "$tmp" | sed 's/[\/&]/\\&/g')\/a-target/\"pid\":$b_pid,\"id\":\"\",\"cwd\":\"$(echo "$tmp" | sed 's/[\/&]/\\&/g')\/a-target/" "$live"
-  toggle_quick() { osascript -e "tell application \"Ghostty\" to perform action \"toggle_quick_terminal\" on (terminal id \"$a_term\")" >/dev/null; }
-  [ "$(quick_visible)" = 0 ] || { toggle_quick; sleep 1; }   # start from hidden
-  toggle_quick; sleep 1
-  # The quick terminal is the one terminal that belongs to no window.
-  q_term=$(osascript -l JavaScript -e 'var a=Application("Ghostty"),inw={};
-    for (var i=0;i<a.windows.length;i++) a.windows[i].terminals.id().forEach(function(x){inw[x]=1});
-    a.terminals.id().filter(function(x){return !inw[x]}).join(",")')
-  if [ -z "$q_term" ]; then fail "quick terminal did not appear"; else
-    [ "$(quick_visible)" = 1 ] || fail "quick terminal not visible before the jump (check is meaningless)"
-    rm -f "$tmp/a.pid"; send_text "$q_term" "$tmp/a.sh"
-    send_key "$q_term" enter; sleep 1.5
-    for _ in $(seq 50); do [ -s "$tmp/a.pid" ] && break; sleep 0.1; done
-    q_pid=$(cat "$tmp/a.pid" 2>/dev/null); pids+=("$q_pid")   # the quick terminal outlives us, so kill by pid
-    send_text "$q_term" "/"; send_text "$q_term" "ovtarget"; sleep 0.3; send_key "$q_term" enter
-    sleep 2
-    qvis=$(quick_visible)
-    front=$(front_terminal)
-    echo "INFO  quick terminal $q_term; front=$front (B=$b_term); quick panels visible after jump: $qvis"
-    [ "$front" = "$b_term" ] && pass "quick-terminal jump focuses B" || fail "quick-terminal jump: front is $front"
-    if [ "$qvis" = 0 ]; then pass "quick terminal hid itself (autohide)"; else
-      echo "INFO  quick terminal still visible after jump: autohide did NOT happen"; fi
-    # leave it hidden, with overview quit
-    send_text "$q_term" "q"; sleep 0.3
-    [ "$(quick_visible)" = 0 ] || toggle_quick 2>/dev/null
-  fi
-fi
 
 echo; [ "$fails" = 0 ] && echo "all passed" || echo "$fails failed"
 [ "$fails" = 0 ]

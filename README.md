@@ -60,8 +60,7 @@ Ghostty terminal and attaches to a background one. While you are searching,
 background session, `x` stops one (it asks first), and `y` copies the
 attach command. `tab` moves between the two panes. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `?` lists
-every key. The keys are the same whether overview runs in a tab or in
-Ghostty's quick terminal.
+every key.
 
 Jumping needs stock Ghostty 1.3 or later and its Automation permission.
 Interactive sessions run in someone's terminal, so overview finds the
