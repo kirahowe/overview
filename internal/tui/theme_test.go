@@ -112,11 +112,12 @@ func TestLoadTheme(t *testing.T) {
 	var names []string
 	for _, th := range Themes(dir) {
 		names = append(names, th.Name)
-		if (th.Path != "") != (th.Name != "revdiff") {
+		builtin := th.Name == "one-light" || th.Name == "revdiff"
+		if (th.Path != "") == builtin {
 			t.Errorf("%s: path %q", th.Name, th.Path)
 		}
 	}
-	if strings.Join(names, " ") != "calm one-dark revdiff" {
+	if strings.Join(names, " ") != "calm one-dark one-light revdiff" {
 		t.Errorf("themes: %v", names)
 	}
 }

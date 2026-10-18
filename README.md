@@ -95,8 +95,10 @@ running already; overview never launches it.
 
 ## Themes
 
-The view comes with two themes: `one-dark`, the default, after Atom's One
-Dark, and `revdiff`, with revdiff's amber accent. `--theme` picks one for a
+The view comes with three themes: `one-dark`, the default, after Atom's One
+Dark; `one-light`, after Atom's One Light; and `revdiff`, with revdiff's
+amber accent. Themes draw on the terminal's own background, so `one-light`
+needs a light terminal. `--theme` picks one for a
 run. Without the flag, overview uses `OVERVIEW_THEME`, then a `theme =` line
 in `~/.config/overview/config` (or under `$XDG_CONFIG_HOME`), then
 `one-dark`:

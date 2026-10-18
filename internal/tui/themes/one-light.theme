@@ -1,0 +1,17 @@
+# Atom's One Light, for a light terminal background: the same blue accent
+# and quiet status bar as one-dark, in the light palette.
+accent        = #4078f2
+border        = #c2c2c3
+text          = #383a42
+muted         = #696c77
+cursor-fg     = #fafafa
+cursor-bg     = #4078f2
+cursor-dim-fg = #383a42
+cursor-dim-bg = #e5e5e6
+status-fg     = #383a42
+status-bg     = #e5e5e6
+pill-fg       = #fafafa
+blocked       = #e45649
+asking        = #c18401
+working       = #50a14f
+code          = #0184bc
