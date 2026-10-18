@@ -1,4 +1,5 @@
-// Package ghostty finds and focuses a stock Ghostty terminal for a tty.
+// Package ghostty finds and focuses a stock Ghostty terminal for a tty, and
+// opens new tabs.
 //
 // Stock Ghostty gives a shell no way to learn its own terminal id, so Locate
 // works backwards: it writes a unique token to the tty as an OSC 2 title and
@@ -17,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -172,6 +174,25 @@ const (
 }`
 )
 
+// newTabAS opens a tab in the front window, or a window when there is none,
+// and focuses it. It is AppleScript because JXA silently drops a surface
+// configuration's settings, and the settings go in one record because a
+// configuration built from another loses them. argv is the working
+// directory, the initial input and one KEY=VALUE environment entry.
+const newTabAS = `on run argv
+	if application "Ghostty" is not running then return "not-running"
+	tell application "Ghostty"
+		set cfg to new surface configuration from {initial working directory:item 1 of argv, initial input:item 2 of argv, environment variables:{item 3 of argv}}
+		if (count of windows) is 0 then
+			set t to selected tab of (new window with configuration cfg)
+		else
+			set t to new tab in front window with configuration cfg
+		end if
+		focus focused terminal of t
+	end tell
+	return "ok"
+end run`
+
 func (c Client) jxa(ctx context.Context, script string, args ...string) ([]byte, error) {
 	a := append([]string{"-l", "JavaScript", "-e", script}, args...)
 	return c.Run(ctx, "osascript", a...)
@@ -277,6 +298,27 @@ func (c Client) Focus(ctx context.Context, id string) error {
 			return ErrStale
 		}
 		return fmt.Errorf("ghostty: focus: %w", err)
+	}
+	if strings.TrimSpace(string(out)) == "not-running" {
+		return ErrNotRunning
+	}
+	return nil
+}
+
+// NewTab opens a Ghostty tab whose shell starts in dir with env (one
+// KEY=VALUE entry) set, types input into it if input is not empty, and
+// focuses it. It returns ErrNotRunning if Ghostty is not running (it never
+// launches Ghostty).
+func (c Client) NewTab(ctx context.Context, dir, input, env string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("ghostty: working directory %q is not absolute", dir)
+	}
+	if !strings.Contains(env, "=") {
+		return fmt.Errorf("ghostty: environment entry %q is not KEY=VALUE", env)
+	}
+	out, err := c.Run(ctx, "osascript", "-e", newTabAS, dir, input, env)
+	if err != nil {
+		return fmt.Errorf("ghostty: new tab: %w", err)
 	}
 	if strings.TrimSpace(string(out)) == "not-running" {
 		return ErrNotRunning

@@ -44,6 +44,8 @@ const (
 	click  // a click on row id at time at; a second one soon after opens it
 	stop
 	copyID
+	newSession // a tab running claude in the selected session's project
+	newTab     // a shell tab there
 )
 
 type action struct {
@@ -195,6 +197,10 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(stop)
 	case "y":
 		return do(copyID)
+	case "c":
+		return do(newSession)
+	case "t":
+		return do(newTab)
 	}
 	return nil
 }

@@ -64,7 +64,8 @@ attaches to a background one, and brings the app to the front for a session in
 another app. While you are searching, `enter` acts on the selected match and
 clears the search. `a` attaches to a background session, `x` stops one (it
 asks first), and `y` copies the attach command. To end a session in another app,
-close it in that app. `tab` moves between the two panes. `d` shows the
+close it in that app. `c` starts a new session in the selected session's
+project, and `t` opens a shell there. `tab` moves between the two panes. `d` shows the
 digests, where `[` and `]` step through older ones and `D` writes a new one.
 `?` lists every key.
 
@@ -84,6 +85,13 @@ another terminal app is left alone, so its title is never touched. When
 Ghostty is not running, the session is not in Ghostty, or the terminal cannot
 be found, the status line shows the tty instead, and you switch to that tab
 yourself.
+
+`c` and `t` open a new tab in Ghostty's front window, or a new window if it
+has none, at the root of the selected session's project. `c` types `claude`
+into the tab's shell, and `t` leaves the shell alone. Both tabs get
+`CLAUDE_CONFIG_DIR` set to the config directory overview is watching, so a
+session started in either one shows up in the list. Ghostty has to be
+running already; overview never launches it.
 
 ## Themes
 

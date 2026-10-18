@@ -18,7 +18,7 @@ import (
 var keyPool = []string{
 	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "a", "x", "y", "d", "1", "2", "?",
 	"tab", "l", "h", "r", "D", "J", "K", "ctrl+d", "ctrl+u", " ", "backspace", "down", "up",
-	"[", "]", "z",
+	"[", "]", "c", "t", "z",
 }
 
 var typeable = []string{"a", "e", "o", "r", "b", "f", "w", "x", "A", " ", "u"}

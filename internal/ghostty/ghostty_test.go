@@ -21,12 +21,16 @@ type fake struct {
 	finds   []string // answers for successive find calls
 	findErr error
 	focus   func() ([]byte, error)
+	newTab  func() ([]byte, error)
 }
 
 func (f *fake) client() Client {
 	return Client{
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			f.calls = append(f.calls, call{name, args})
+			if args[1] == newTabAS {
+				return f.newTab()
+			}
 			script := args[3]
 			switch {
 			case script == snapshotJS:
@@ -234,13 +238,49 @@ func TestFocusRejectsBadIDs(t *testing.T) {
 
 // Scripts must never launch Ghostty: every script checks running() before
 // anything that would send an Apple event, and none is a `tell application`.
+// The one AppleScript has to tell, so it checks first.
 func TestScriptsGuardLaunch(t *testing.T) {
+	if g, tell := strings.Index(newTabAS, "is not running then return"), strings.Index(newTabAS, "tell application"); g < 0 || g > tell {
+		t.Errorf("new tab script must check that Ghostty runs before telling it")
+	}
 	for _, s := range []string{snapshotJS, findJS, focusJS} {
 		if strings.Contains(s, "tell application") {
 			t.Errorf("script launches via tell: %s", s)
 		}
 		if strings.Index(s, "running()") > strings.Index(s, "app.terminals") {
 			t.Errorf("running() check must precede terminals access: %s", s)
+		}
+	}
+}
+
+func TestNewTab(t *testing.T) {
+	f := &fake{}
+	f.newTab = func() ([]byte, error) { return []byte("ok\n"), nil }
+	dir, input, env := `/w/a "b"`, "claude\n", "CLAUDE_CONFIG_DIR=/h"
+	if err := f.client().NewTab(context.Background(), dir, input, env); err != nil {
+		t.Fatal(err)
+	}
+	a := f.calls[0].args
+	if want := []string{dir, input, env}; strings.Join(a[2:], "|") != strings.Join(want, "|") || strings.Contains(a[1], "/w/a") {
+		t.Errorf("values must travel via argv only: %q", a)
+	}
+
+	f.newTab = func() ([]byte, error) { return []byte("not-running\n"), nil }
+	if err := f.client().NewTab(context.Background(), "/w", "", env); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("err = %v", err)
+	}
+
+	f.newTab = func() ([]byte, error) { return nil, errors.New("boom") }
+	if err := f.client().NewTab(context.Background(), "/w", "", env); err == nil || errors.Is(err, ErrNotRunning) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestNewTabRejectsBadArgs(t *testing.T) {
+	for _, c := range [][2]string{{"", "K=v"}, {"rel/dir", "K=v"}, {"/w", ""}, {"/w", "K"}} {
+		f := &fake{}
+		if err := f.client().NewTab(context.Background(), c[0], "", c[1]); err == nil || len(f.calls) != 0 {
+			t.Errorf("%q: err=%v calls=%d", c, err, len(f.calls))
 		}
 	}
 }

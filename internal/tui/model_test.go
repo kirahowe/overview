@@ -578,3 +578,77 @@ func TestCopyRunsAsACommand(t *testing.T) {
 		t.Fatalf("copied %q, note %q", got, m.note)
 	}
 }
+
+// fakeTabber records the tabs the view asked Ghostty to open.
+type fakeTabber struct {
+	opened [][3]string // dir, input, env
+	err    error
+}
+
+func (f *fakeTabber) NewTab(_ context.Context, dir, input, env string) error {
+	f.opened = append(f.opened, [3]string{dir, input, env})
+	return f.err
+}
+
+func TestNewSessionOpensATabAtTheProjectRoot(t *testing.T) {
+	tabs := &fakeTabber{}
+	r := row("s1", "red", "auth", 11)
+	r.Cwd = "/code/app/internal/x"
+	m := newTestModel(t, &fakeJumper{}, r)
+	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" }
+	m.projects.roots = map[string]string{} // drop the roots found without it
+	m.tabs = tabs
+	env := "CLAUDE_CONFIG_DIR=" + string(m.home)
+
+	m, cmd := press(m, "c")
+	if len(tabs.opened) != 0 || cmd == nil {
+		t.Fatal("c opened a tab inside Update")
+	}
+	m = update(m, cmd())
+	if want := [3]string{"/code/app", "claude\n", env}; len(tabs.opened) != 1 || tabs.opened[0] != want {
+		t.Fatalf("opened %q, want %q", tabs.opened, want)
+	}
+	if m.note != "opened a session in /code/app" {
+		t.Errorf("note %q", m.note)
+	}
+
+	_, cmd = press(m, "t")
+	m = update(m, cmd())
+	if want := [3]string{"/code/app", "", env}; len(tabs.opened) != 2 || tabs.opened[1] != want {
+		t.Fatalf("opened %q, want %q", tabs.opened, want)
+	}
+
+	tabs.err = ghostty.ErrNotRunning
+	_, cmd = press(m, "t")
+	if m = update(m, cmd()); m.note != "could not open a tab: Ghostty is not running" {
+		t.Errorf("note %q", m.note)
+	}
+}
+
+func TestNewSessionNeedsAProjectAndGhostty(t *testing.T) {
+	m := newTestModel(t, &fakeJumper{})
+	if m, cmd := press(m, "c"); cmd != nil || !strings.Contains(m.note, "no session selected") {
+		t.Errorf("empty list: note %q", m.note)
+	}
+
+	m = newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	if m, cmd := press(m, "c"); cmd != nil || m.note != "opening a tab needs Ghostty" {
+		t.Errorf("no tabber: note %q", m.note)
+	}
+
+	r := row("s1", "red", "auth", 11)
+	r.Cwd = ""
+	tabs := &fakeTabber{}
+	m = newTestModel(t, &fakeJumper{}, r)
+	m.tabs = tabs
+	if m, cmd := press(m, "t"); cmd != nil || !strings.Contains(m.note, "no directory") {
+		t.Errorf("no cwd: note %q", m.note)
+	}
+
+	// While searching, c is search text.
+	m = newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	m.tabs = tabs
+	if m, cmd := press(m, "/", "c"); cmd != nil || m.filter != "c" || len(tabs.opened) != 0 {
+		t.Errorf("c while searching: filter %q", m.filter)
+	}
+}

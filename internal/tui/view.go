@@ -479,6 +479,8 @@ func (m model) helpBox() []string {
 		entry{"a", "attach (background)"},
 		entry{"x", "stop (background)"},
 		entry{"y", "copy attach command"},
+		entry{"c", "new session in project"},
+		entry{"t", "new tab in project"},
 	)...)
 	right := append(section("detail",
 		entry{"J K", "scroll"},

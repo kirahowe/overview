@@ -179,8 +179,8 @@ func resolvePath(p string) string {
 	return filepath.Clean(p)
 }
 
-// name is the display name of the project cwd belongs to.
-func (p *projects) name(cwd string) string {
+// root is the directory of the project cwd belongs to, "" for no cwd.
+func (p *projects) root(cwd string) string {
 	root, ok := p.roots[cwd]
 	if !ok {
 		if cwd != "" {
@@ -188,6 +188,12 @@ func (p *projects) name(cwd string) string {
 		}
 		p.roots[cwd] = root
 	}
+	return root
+}
+
+// name is the display name of the project cwd belongs to.
+func (p *projects) name(cwd string) string {
+	root := p.root(cwd)
 	if p.home != "" && root == p.home {
 		return "~"
 	}

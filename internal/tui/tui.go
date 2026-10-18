@@ -113,6 +113,8 @@ type model struct {
 	// copies of the model share it, and only Update writes to it.
 	jump  jumper
 	terms map[string]string
+	// tabs opens new Ghostty tabs; nil means it cannot.
+	tabs tabber
 	// reveal brings an app to the front. Tests replace it.
 	reveal func(path string) error
 	// jumping is the seq of the jump in flight, 0 if none. Only one runs at
@@ -131,7 +133,8 @@ type model struct {
 func Run(home fleet.Home, llm string, theme Theme) error {
 	useTheme(theme)
 	m := newModel(home, llm)
-	m.jump = ghostty.New()
+	gh := ghostty.New()
+	m.jump, m.tabs = gh, gh
 	m = m.loadDigests()
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
@@ -474,6 +477,11 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.say("only background sessions can be stopped from here"), nil
 		}
 		m.confirm = row.SessionID
+	case newSession, newTab:
+		if !ok {
+			return m.say("no session selected, so no project to open"), nil
+		}
+		return m.openTab(row, a.do == newSession)
 	case copyID:
 		if !ok {
 			return m, nil
@@ -536,6 +544,23 @@ func (m model) act(row fleet.Row, jump bool) (model, tea.Cmd) {
 	m.jumping = m.jumpSeq
 	m = m.say("finding " + row.Name + "'s terminal…")
 	return m, jumpCmd(m.jump, m.jumping, row.Name, key, tty, row.PID, m.terms[key])
+}
+
+// openTab opens a Ghostty tab at the root of row's project, and starts
+// claude there when session is set.
+func (m model) openTab(row fleet.Row, session bool) (model, tea.Cmd) {
+	dir, where := m.projects.root(row.Cwd), m.projects.name(row.Cwd)
+	if dir == "" {
+		return m.say(row.Name + " has no directory, so there is no project to open"), nil
+	}
+	if m.tabs == nil {
+		return m.say("opening a tab needs Ghostty"), nil
+	}
+	what, input := "a tab", ""
+	if session {
+		what, input = "a session", "claude\n"
+	}
+	return m.say("opening " + what + " in " + where + "…"), tabCmd(m.tabs, m.home, dir, input, what, where)
 }
 
 // jumpKey is the terms cache key: a terminal id is only good for the same

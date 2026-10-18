@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"overview/internal/fleet"
 	"overview/internal/ghostty"
 )
 
@@ -15,6 +16,8 @@ import (
 const (
 	focusTimeout  = 1500 * time.Millisecond
 	locateTimeout = ghostty.LocateBudget + 300*time.Millisecond
+	// tabTimeout bounds opening a tab, which may have to open a window.
+	tabTimeout = 5 * time.Second
 )
 
 // jumper is the part of ghostty.Client the view needs. Tests fake it.
@@ -22,6 +25,29 @@ type jumper interface {
 	InGhostty(ctx context.Context, pid int) (bool, error)
 	Locate(ctx context.Context, tty string) (string, error)
 	Focus(ctx context.Context, id string) error
+}
+
+// tabber is the part of ghostty.Client that opens tabs. Tests fake it.
+type tabber interface {
+	NewTab(ctx context.Context, dir, input, env string) error
+}
+
+// tabCmd opens a Ghostty tab in dir with this home's config directory set,
+// so a claude started there joins the fleet, and types input into it. what
+// and where name the tab in the note it returns.
+func tabCmd(t tabber, home fleet.Home, dir, input, what, where string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), tabTimeout)
+		defer cancel()
+		err := t.NewTab(ctx, dir, input, "CLAUDE_CONFIG_DIR="+string(home))
+		switch {
+		case errors.Is(err, ghostty.ErrNotRunning), errors.Is(err, context.DeadlineExceeded):
+			return noteMsg("could not open " + what + ": " + jumpReason(err))
+		case err != nil:
+			return noteMsg("could not open " + what + ": " + err.Error())
+		}
+		return noteMsg("opened " + what + " in " + where)
+	}
 }
 
 // ttyNote is the fallback for a session that cannot be jumped to: say where
