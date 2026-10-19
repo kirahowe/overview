@@ -275,3 +275,28 @@ func TestStageCmdLeavesTheOldWindowProportional(t *testing.T) {
 		t.Fatalf("a went from %d of %d to %d, want about %.0f", wa, wa+wb, na, want)
 	}
 }
+
+// A build is its contents: the same bytes written again are the same build,
+// and changed ones another.
+func TestBuildOfIsTheContents(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "overview")
+	write := func(b string) string {
+		t.Helper()
+		if err := os.WriteFile(exe, []byte(b), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		id, err := buildOf(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	a := write("one")
+	time.Sleep(10 * time.Millisecond)
+	if b := write("one"); b != a {
+		t.Fatalf("the same bytes gave %q, then %q", a, b)
+	}
+	if c := write("two"); c == a {
+		t.Fatal("other bytes gave the same build")
+	}
+}

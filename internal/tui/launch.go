@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +84,9 @@ func Launch(home fleet.Home, socket, dir string, settings []string, cwd string) 
 	if err != nil {
 		return err
 	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real // ~/.local/bin/overview and its target are one build
+	}
 	build, err := buildOf(exe)
 	if err != nil {
 		return err
@@ -101,14 +106,20 @@ func Launch(home fleet.Home, socket, dir string, settings []string, cwd string) 
 	return syscall.Exec(tmuxPath, []string{"tmux", "-S", srv.Socket(), "attach-session", "-t", "=" + session}, os.Environ())
 }
 
-// buildOf names the build of the binary at exe by its path, size and
-// modification time, so a rebuilt overview tells its view is out of date.
+// buildOf names the build of the binary at exe by its path and a hash of
+// its contents, so a rebuilt overview tells its view is out of date, and a
+// rebuild that changed nothing does not.
 func buildOf(exe string) (string, error) {
-	info, err := os.Stat(exe)
+	f, err := os.Open(exe)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %d %d", exe, info.Size(), info.ModTime().UnixNano()), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s %x", exe, h.Sum(nil)), nil
 }
 
 // viewKey is what the view's pane records about what it runs: its
