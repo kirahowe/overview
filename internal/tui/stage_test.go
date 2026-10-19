@@ -35,6 +35,7 @@ type fakeMux struct {
 	detach  int
 
 	drawn map[string]string // what the view wrote to each tty
+	focus string            // the active pane of the window shown
 
 	moveErr error
 }
@@ -136,14 +137,26 @@ func (f *fakeMux) KillWindow(window string) error {
 	if f.inWindow(window) == 0 {
 		return errors.New("can't find window " + window)
 	}
+	// Real tmux would end the view with it.
+	if f.window("%0") == window {
+		return errors.New("killed the list's window " + window)
+	}
 	f.killed = append(f.killed, window)
 	f.panes = slices.DeleteFunc(f.panes, func(p tmux.Pane) bool { return p.Window == window })
 	return nil
 }
 
+// SelectBeside focuses a pane right of pane in its window: the first one
+// listed, which stands in for the one used last.
 func (f *fakeMux) SelectBeside(pane string) error {
 	f.besides = append(f.besides, pane)
-	return nil
+	for _, p := range f.panes {
+		if p.Window == f.window(pane) && p.ID != pane {
+			f.focus = p.ID
+			return nil
+		}
+	}
+	return errors.New("no pane right of " + pane)
 }
 
 func (f *fakeMux) Move(list, target, size string) error {
@@ -161,6 +174,7 @@ func (f *fakeMux) Move(list, target, size string) error {
 	}
 	f.panes[i].Session, f.panes[i].Window, f.panes[i].W = f.panes[j].Session, f.panes[j].Window, w
 	f.current[f.panes[j].Session] = f.panes[j].Window
+	f.focus = list // join-pane makes the list the active pane
 	return nil
 }
 
@@ -208,7 +222,11 @@ func (f *fakeMux) SetLayout(window, layout string) error {
 }
 
 func (f *fakeMux) Select(pane string) error {
+	if f.find(pane) < 0 {
+		return errors.New("can't find pane " + pane)
+	}
 	f.selects = append(f.selects, pane)
+	f.focus = pane
 	return nil
 }
 
@@ -370,8 +388,8 @@ func TestEnterFocusesTheSession(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	m = pressSettled(t, m, "enter")
-	if want := paneWithTTY(f, "ttys011"); len(f.selects) != 1 || f.selects[0] != want {
-		t.Fatalf("selects %v, want [%s]", f.selects, want)
+	if want := paneWithTTY(f, "ttys011"); len(f.selects) != 1 || f.selects[0] != want || f.focus != want {
+		t.Fatalf("selects %v, focus %s, want %s", f.selects, f.focus, want)
 	}
 	// Twice is fine too, and nothing else moves.
 	moves := len(f.moves)
@@ -898,8 +916,8 @@ func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
 	if m.sel != shell.Window || e.kind != terminalEntry || e.term.Title != "zsh" {
 		t.Fatalf("sel %s (%+v), want the terminal %s", m.sel, e, shell.Window)
 	}
-	if !f.staged(shell.ID) || !slices.Equal(f.besides, []string{"%0"}) || len(f.selects) != 0 {
-		t.Fatalf("list in %s, besides %v, selects %v", f.stage(), f.besides, f.selects)
+	if !f.staged(shell.ID) || !slices.Equal(f.besides, []string{"%0"}) || len(f.selects) != 0 || f.focus != shell.ID {
+		t.Fatalf("list in %s, besides %v, selects %v, focus %s", f.stage(), f.besides, f.selects, f.focus)
 	}
 	// It is listed under its project, after the session.
 	secs := m.sections()

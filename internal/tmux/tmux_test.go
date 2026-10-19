@@ -459,3 +459,42 @@ func must(t *testing.T) func(string, error) string {
 		return out
 	}
 }
+
+// A size in percent makes the list that share of its new window's width.
+func TestMoveTakesAPercentOfTheWindow(t *testing.T) {
+	s := testServer(t)
+	list := strings.TrimSpace(must(t)(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep", "300")))
+	target, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Move(list, target.ID, "30%"); err != nil {
+		t.Fatal(err)
+	}
+	p := byID(t, s)[list]
+	if p.Window != target.Window || p.W < 59 || p.W > 60 {
+		t.Fatalf("the list is %d wide in %s, want 30%% of 200 beside %s", p.W, p.Window, target.ID)
+	}
+}
+
+// respawn-pane keeps a pane's options, which is how the view's pane keeps
+// its marks across a restart.
+func TestRespawnKeepsPaneOptions(t *testing.T) {
+	s := testServer(t)
+	p, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkList(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPaneOption(p.ID, ViewOption, `"--theme" "x"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Respawn(p.ID, nil, "sleep", "301"); err != nil {
+		t.Fatal(err)
+	}
+	if got := byID(t, s)[p.ID]; !got.List || got.View != `"--theme" "x"` {
+		t.Fatalf("after respawn: %+v", got)
+	}
+}

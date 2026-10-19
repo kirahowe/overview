@@ -496,10 +496,13 @@ func TestPropWindow(t *testing.T) {
 	})
 }
 
-// plan moves the list exactly when the wanted pane is in another window,
-// always into that pane's window, as wide as the list is unless it is
-// alone, and asks for the layout fix-up only when its window keeps two or
-// more panes.
+// plan moves the list exactly when the wanted pane is listed in another
+// window. Carried out on the listing, the move puts the list in the wanted
+// pane's window, after which there is nothing left to plan, and the layout
+// fix-up is asked for exactly when the window the list left keeps two or
+// more panes. The list keeps its width when it shared its window, which is
+// a width the user may have dragged it to, and takes listShare when it was
+// alone, and so as wide as the window.
 func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var panes []tmux.Pane
@@ -519,18 +522,23 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		if !ok {
 			return
 		}
-		beside := 0
-		for _, p := range panes {
-			if p.Window == self.Window {
-				beside++
+		after := slices.Clone(panes)
+		left := 0
+		for i, p := range after {
+			if p.ID == self.ID {
+				after[i].Window = want.Window
+			} else if p.Window == self.Window {
+				left++
 			}
 		}
-		size := strconv.Itoa(self.W)
-		if beside == 1 {
-			size = listShare
+		if mv.to != want.ID || mv.from != self.Window || mv.fix != (left >= 2) {
+			t.Fatalf("plan %+v for want %s, list %+v, %d left behind", mv, want.ID, self, left)
 		}
-		if mv != (shift{to: want.ID, from: self.Window, size: size, fix: beside > 2}) {
-			t.Fatalf("plan %+v for want %s, list %+v, %d in its window", mv, want.ID, self, beside)
+		if size := strconv.Itoa(self.W); (left > 0 && mv.size != size) || (left == 0 && mv.size != listShare) {
+			t.Fatalf("the list %d wide, with %d beside it, moves %s wide", self.W, left, mv.size)
+		}
+		if again, ok := plan(self.ID, want.ID, after); ok {
+			t.Fatalf("after the move, plan asks for %+v", again)
 		}
 	})
 }
@@ -814,9 +822,10 @@ func TestPropStuck(t *testing.T) {
 	})
 }
 
-// nearest picks the first surviving key after the lost one, else the last
-// surviving one before it, and nothing when it was not listed or none
-// survives.
+// nearest lands on a key still listed with none listed strictly between
+// it and the lost one in the old order, after the lost one when any after
+// it is listed, and finds nothing only when the lost key was not in the
+// old order or nothing else in it is left.
 func TestPropNearest(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		n := rapid.IntRange(0, 8).Draw(t, "n")
@@ -830,20 +839,28 @@ func TestPropNearest(t *testing.T) {
 		left[sel] = false
 		got, ok := nearest(old, sel, func(k string) bool { return left[k] })
 		i := slices.Index(old, sel)
-		want, wantOK := "", false
-		if i >= 0 {
-			for j := i + 1; j < n && !wantOK; j++ {
-				want, wantOK = old[j], left[old[j]]
-			}
-			for j := i - 1; j >= 0 && !wantOK; j-- {
-				want, wantOK = old[j], left[old[j]]
-			}
+		anyLeft, leftAfter := false, false
+		for j, k := range old {
+			anyLeft = anyLeft || left[k]
+			leftAfter = leftAfter || (left[k] && j > i)
 		}
-		if !wantOK {
-			want = ""
+		if !ok {
+			if i >= 0 && anyLeft {
+				t.Fatalf("nearest(%v, %s) found nothing, though %v are left", old, sel, left)
+			}
+			return
 		}
-		if ok != wantOK || got != want {
-			t.Fatalf("nearest(%v, %s) = %q %v, want %q %v (left %v)", old, sel, got, ok, want, wantOK, left)
+		j := slices.Index(old, got)
+		if i < 0 || j < 0 || !left[got] {
+			t.Fatalf("nearest(%v, %s) = %s, which is not listed", old, sel, got)
+		}
+		if leftAfter != (j > i) {
+			t.Fatalf("nearest(%v, %s) = %s, though one after is left: %v", old, sel, got, leftAfter)
+		}
+		for _, k := range old[min(i, j)+1 : max(i, j)] {
+			if left[k] {
+				t.Fatalf("nearest(%v, %s) = %s, past the nearer %s", old, sel, got, k)
+			}
 		}
 	})
 }

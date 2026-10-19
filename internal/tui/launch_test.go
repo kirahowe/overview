@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -226,5 +227,51 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 		if got := focused(); got == list {
 			t.Fatal("ctrl+[ from the list stayed there")
 		}
+	}
+}
+
+// The whole move, as stageCmd makes it on a real tmux: the window the list
+// leaves shares the list's width among the panes left in proportion to
+// their widths, rather than handing it all to the one beside the list.
+func TestStageCmdLeavesTheOldWindowProportional(t *testing.T) {
+	srv, sock := privateServer(t, "/dev/null")
+	list := sock.Must("new-session", "-d", "-s", "ov", "-x", "201", "-y", "50", "-P", "-F", "#{pane_id}", "sleep", "300")
+	a := sock.Must("split-window", "-h", "-d", "-t", list, "-P", "-F", "#{pane_id}", "sleep", "300")
+	b := sock.Must("split-window", "-h", "-d", "-t", a, "-P", "-F", "#{pane_id}", "sleep", "300")
+	sock.Must("resize-pane", "-t", list, "-x", "40")
+	sock.Must("resize-pane", "-t", a, "-x", "53")
+	target, err := srv.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	width := func() map[string]tmux.Pane {
+		panes, err := srv.Panes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]tmux.Pane{}
+		for _, p := range panes {
+			out[p.ID] = p
+		}
+		return out
+	}
+	before := width()
+	mv, ok := plan(list, target.ID, slices.Collect(maps.Values(before)))
+	if !ok || !mv.fix {
+		t.Fatalf("plan %+v, %v", mv, ok)
+	}
+	none := func(...string) roots { return nil }
+	if msg := stageCmd(srv, none, list, mv, 0)().(stagedMsg); msg.err != nil {
+		t.Fatal(msg.err)
+	}
+	after := width()
+	wa, wb := before[a].W, before[b].W
+	na, nb := after[a].W, after[b].W
+	if after[list].Window != target.Window || na+nb+1 != 201 {
+		t.Fatalf("list in %s, a and b %d and %d wide in a window 201 wide", after[list].Window, na, nb)
+	}
+	// Each keeps its share of the room the two had, to within a cell.
+	if want := float64(wa) / float64(wa+wb) * 200; float64(na) < want-1 || float64(na) > want+1 {
+		t.Fatalf("a went from %d of %d to %d, want about %.0f", wa, wa+wb, na, want)
 	}
 }
