@@ -1,0 +1,11 @@
+{:id 1
+ :title "Resume a session from overview"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-10-19"
+ :updated "2026-10-19"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "1-resume-a-session-from-overview.md"}
