@@ -56,7 +56,6 @@ func genRow(t *rapid.T, id string) fleet.Row {
 	r := fleet.Row{
 		State:      rapid.SampledFrom(states).Draw(t, "state"),
 		Since:      t0.Add(time.Duration(rapid.IntRange(0, 4).Draw(t, "since")) * time.Minute),
-		Label:      rapid.SampledFrom([]string{"", "", "crew-7", "Ops"}).Draw(t, "label"),
 		Title:      phrase(t, "title"),
 		LastPrompt: phrase(t, "prompt"),
 		LastReply:  rapid.SampledFrom(replies).Draw(t, "reply"),
@@ -127,7 +126,7 @@ func tokenRow(t *rapid.T, id string) (fleet.Row, map[string]bool) {
 		return strings.Join(ws, " ")
 	}
 	r := genRow(t, id)
-	r.Title, r.LastPrompt, r.Label = field("title"), field("prompt"), field("label")
+	r.Title, r.LastPrompt = field("title"), field("prompt")
 	r.Name = field("name")
 	// fakeProject names the project after the last path element: one word
 	// or none ("?").
@@ -290,7 +289,7 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 		for _, r := range []fleet.Row{
 			{Title: a, LastPrompt: b},
 			{Name: a, Title: b},
-			{LastPrompt: a, Label: b},
+			{LastPrompt: a, Name: b},
 		} {
 			r.SessionID = "x"
 			if len(buildList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost)) != 0 {

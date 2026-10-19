@@ -23,7 +23,7 @@ func row(id, name, title string, pid int) fleet.Row {
 // no tmux.
 func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
-	m := newModel(fleet.Home(t.TempDir()), "")
+	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
 	m.projects.exists = func(string) bool { return false }
 	ttys := map[int]string{}
 	for _, r := range rows {

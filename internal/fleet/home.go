@@ -10,26 +10,26 @@ import (
 	"strings"
 )
 
-// Home is one Claude Code config directory, such as ~/.claude-work. Everything
-// overview reads or writes sits under a single Home, so sessions from another
-// config directory never show up beside it.
-type Home string
+// Home is one Claude Code config directory, such as ~/.claude-work, and the
+// claude that runs against it. Everything overview reads or writes sits under
+// a single Home, so sessions from another config directory never show up
+// beside it.
+type Home struct {
+	Dir    string // the config directory, absolute
+	Claude string // the claude binary to run
+	// OrchestratorDir is the directory the orchestrator session runs in,
+	// DefaultOrchestratorDir unless a flag says otherwise.
+	OrchestratorDir string
+}
 
-// ResolveHome picks the config directory: the flag when given, otherwise
-// CLAUDE_CONFIG_DIR. A bare name such as "work" means ~/.claude-work. There is
-// no default: someone with several config directories would see an empty
-// fleet from a guess, with nothing saying why.
-func ResolveHome(flag string) (Home, error) {
-	dir := flag
+// ResolveHome finds the config directory that spec names, as --home or the
+// config file's home line gives it. A bare name such as "work" means
+// ~/.claude-work, and ~ is user, the user's home directory. There is no default: someone with several config
+// directories would see an empty fleet from a guess, with nothing saying why.
+func ResolveHome(spec, user string) (string, error) {
+	dir := spec
 	if dir == "" {
-		dir = os.Getenv("CLAUDE_CONFIG_DIR")
-	}
-	if dir == "" {
-		return "", errors.New("no config directory: pass --home <name|path> (--home ~/.claude for the default) or set CLAUDE_CONFIG_DIR")
-	}
-	user, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+		return "", errors.New("no config directory: pass --home <name|path> (--home ~/.claude for the default), or put a home = <name|path> line in overview's config file")
 	}
 	switch {
 	case dir == "~" || strings.HasPrefix(dir, "~/"):
@@ -37,22 +37,22 @@ func ResolveHome(flag string) (Home, error) {
 	case !strings.ContainsRune(dir, filepath.Separator) && !strings.HasPrefix(dir, "."):
 		dir = filepath.Join(user, ".claude-"+dir)
 	}
-	dir, err = filepath.Abs(dir)
+	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("config directory %s does not exist", dir)
 	}
-	return Home(dir), nil
+	return dir, nil
 }
 
 // Name is the short name shown in the header: "work" for ~/.claude-work.
 func (h Home) Name() string {
-	return strings.TrimPrefix(filepath.Base(string(h)), ".claude-")
+	return strings.TrimPrefix(filepath.Base(h.Dir), ".claude-")
 }
 
-func (h Home) dataDir() string      { return filepath.Join(string(h), "overview") }
+func (h Home) dataDir() string      { return filepath.Join(h.Dir, "overview") }
 func (h Home) sessionsDir() string  { return filepath.Join(h.dataDir(), "sessions") }
 func (h Home) digestsDir() string   { return filepath.Join(h.dataDir(), "digests") }
 func (h Home) pendingFile() string  { return filepath.Join(h.dataDir(), "digest-pending") }

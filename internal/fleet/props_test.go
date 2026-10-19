@@ -45,7 +45,6 @@ func genSession() *rapid.Generator[Session] {
 		return Session{
 			ID:         text().Draw(t, "id"),
 			Cwd:        text().Draw(t, "cwd"),
-			Label:      text().Draw(t, "label"),
 			State:      genState().Draw(t, "state"),
 			Since:      genTime().Draw(t, "since"),
 			Reason:     text().Draw(t, "reason"),
@@ -253,7 +252,7 @@ func genID() *rapid.Generator[string] {
 // newHome gives each generated case its own home under root.
 func newHome(root string, n *int) Home {
 	*n++
-	return Home(filepath.Join(root, fmt.Sprintf("case%d", *n), "home"))
+	return Home{Dir: filepath.Join(root, fmt.Sprintf("case%d", *n), "home")}
 }
 
 func TestPropSessionRoundTrip(t *testing.T) {
@@ -266,7 +265,7 @@ func TestPropSessionRoundTrip(t *testing.T) {
 			t.Skipf("save refused id %q: %v", s.ID, err)
 		}
 		got := h.loadSession(s.ID)
-		if got.ID != s.ID || got.Cwd != s.Cwd || got.Label != s.Label || got.State != s.State ||
+		if got.ID != s.ID || got.Cwd != s.Cwd || got.State != s.State ||
 			got.Reason != s.Reason || got.LastPrompt != s.LastPrompt || got.Transcript != s.Transcript ||
 			!got.Since.Equal(s.Since) {
 			t.Fatalf("round trip changed the session:\n saved  %+v\n loaded %+v", s, got)
@@ -283,7 +282,7 @@ func TestPropSessionIDStaysInsideSessionsDir(t *testing.T) {
 	root, n := t.TempDir(), 0
 	rapid.Check(t, func(t *rapid.T) {
 		h := newHome(root, &n)
-		parent := filepath.Dir(string(h))
+		parent := filepath.Dir(h.Dir)
 		id := strings.ReplaceAll(genID().Draw(t, "id"), "\x00", "")
 
 		if dir := filepath.Dir(h.sessionFile(id)); dir != h.sessionsDir() {
@@ -301,8 +300,8 @@ func TestPropSessionIDStaysInsideSessionsDir(t *testing.T) {
 		if len(entries) > 1 || (len(entries) == 1 && entries[0].Name() != "home") {
 			t.Fatalf("id %q wrote next to the home: %v", id, entries)
 		}
-		err := filepath.WalkDir(string(h), func(p string, d os.DirEntry, err error) error {
-			if err != nil || p == string(h) || p == h.dataDir() || p == h.sessionsDir() {
+		err := filepath.WalkDir(h.Dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || p == h.Dir || p == h.dataDir() || p == h.sessionsDir() {
 				return err
 			}
 			if d.IsDir() || filepath.Dir(p) != h.sessionsDir() {

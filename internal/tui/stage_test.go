@@ -181,7 +181,7 @@ func recordDraws(t testing.TB) drawn {
 // stagedModel is newTestModel inside the fake tmux: each interactive row's
 // claude runs in a window of its own, on the row's tty.
 func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
-	m := newModel(fleet.Home(t.TempDir()), "")
+	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
 	m.projects.exists = func(string) bool { return false }
 	m.mux, m.self, m.session, m.holder, m.exe = f, "%0", "ov", "%1", "overview"
 	ttys := map[int]string{}
@@ -331,7 +331,7 @@ func TestEnterOnABackgroundSessionAttachesBesideTheList(t *testing.T) {
 	if got := strings.Join(call.command, " "); !strings.HasSuffix(got, "attach abc123") || call.session != "ov" {
 		t.Fatalf("spawned %q in %s", got, call.session)
 	}
-	if !slices.Contains(call.env, "CLAUDE_CONFIG_DIR="+string(m.home)) {
+	if !slices.Contains(call.env, m.home.ClaudeEnv()) {
 		t.Fatalf("env %v", call.env)
 	}
 	attach := m.attached["abc123"]
@@ -566,7 +566,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 			}
 			rows = append(rows, r)
 		}
-		m := newModel(fleet.Home(t.Name()), "")
+		m := newModel(fleet.Home{Dir: t.Name()}, "")
 		m.projects.exists = func(string) bool { return false }
 		m.mux, m.self, m.session, m.holder, m.exe = f, "%0", "ov", "%1", "overview"
 		m = m.setPanes(f.panes)
@@ -661,7 +661,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 func TestPropHolderTextFillsThePane(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, ttys := genStateRows(t)
-		m := newModel(fleet.Home(t.Name()), "")
+		m := newModel(fleet.Home{Dir: t.Name()}, "")
 		m.projects.exists = func(string) bool { return false }
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		w := rapid.IntRange(3, 200).Draw(t, "w")
@@ -680,13 +680,13 @@ func TestPropHolderTextFillsThePane(t *testing.T) {
 }
 
 func TestSessionNameIsSafeForTmux(t *testing.T) {
-	for home, want := range map[fleet.Home]string{
+	for dir, want := range map[string]string{
 		"/u/.claude-work": "overview-work",
 		"/u/.claude":      "overview-_claude",
 		"/u/a:b.c":        "overview-a_b_c",
 	} {
-		if got := SessionName(home); got != want {
-			t.Errorf("%s: %q, want %q", home, got, want)
+		if got := SessionName(fleet.Home{Dir: dir}); got != want {
+			t.Errorf("%s: %q, want %q", dir, got, want)
 		}
 	}
 }

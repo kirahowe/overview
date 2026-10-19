@@ -1,9 +1,7 @@
 package tui
 
 import (
-	"bufio"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,10 +12,12 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"overview/internal/config"
 )
 
 // DefaultTheme is the theme used when nothing chooses another.
-const DefaultTheme = "one-dark"
+const DefaultTheme = config.DefaultTheme
 
 //go:embed themes/*.theme
 var builtinThemes embed.FS
@@ -68,32 +68,11 @@ func validColor(s string) bool {
 	return err == nil && n >= 0 && n <= 255
 }
 
-// parseSettings reads "key = value" lines. Blank lines and lines starting
-// with # are comments; a value may itself start with #, so comments never
-// trail a value.
-func parseSettings(src string) (map[string]string, error) {
-	kv := map[string]string{}
-	sc := bufio.NewScanner(strings.NewReader(src))
-	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
-		if !ok || key == "" || value == "" {
-			return nil, fmt.Errorf("line %d: want key = value, got %q", n, line)
-		}
-		kv[key] = value
-	}
-	return kv, sc.Err()
-}
-
 // ParseTheme reads a theme file. Its colours go over base, so a file only
 // needs the colours it changes. A "base = <name>" line picks a built-in
 // theme to start from instead of base.
 func ParseTheme(name, src string, base Theme) (Theme, error) {
-	kv, err := parseSettings(src)
+	kv, err := config.Settings(src)
 	if err != nil {
 		return Theme{}, fmt.Errorf("theme %s: %w", name, err)
 	}
@@ -150,49 +129,6 @@ func builtinNames() []string {
 		names = append(names, strings.TrimSuffix(e.Name(), ".theme"))
 	}
 	return names
-}
-
-// ConfigDir is where overview's own settings and themes live:
-// $XDG_CONFIG_HOME/overview, or ~/.config/overview.
-func ConfigDir() (string, error) {
-	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "overview"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "overview"), nil
-}
-
-// ChooseTheme names the theme to use: the flag, then OVERVIEW_THEME, then
-// the theme line of the config file, then the default.
-func ChooseTheme(flag, configDir string) (string, error) {
-	if flag != "" {
-		return flag, nil
-	}
-	if env := os.Getenv("OVERVIEW_THEME"); env != "" {
-		return env, nil
-	}
-	src, err := os.ReadFile(filepath.Join(configDir, "config"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return DefaultTheme, nil
-	} else if err != nil {
-		return "", err
-	}
-	kv, err := parseSettings(string(src))
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", filepath.Join(configDir, "config"), err)
-	}
-	for k := range kv {
-		if k != "theme" {
-			return "", fmt.Errorf("%s: unknown key %q", filepath.Join(configDir, "config"), k)
-		}
-	}
-	if kv["theme"] != "" {
-		return kv["theme"], nil
-	}
-	return DefaultTheme, nil
 }
 
 // LoadTheme finds a theme by name or path. A name is looked up in the

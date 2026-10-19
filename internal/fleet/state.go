@@ -24,7 +24,6 @@ const (
 type Session struct {
 	ID         string    `json:"session_id"`
 	Cwd        string    `json:"cwd,omitempty"`
-	Label      string    `json:"label,omitempty"`
 	State      State     `json:"state"`
 	Since      time.Time `json:"since"`
 	Reason     string    `json:"reason,omitempty"`

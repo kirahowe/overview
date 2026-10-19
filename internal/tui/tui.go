@@ -557,7 +557,7 @@ func (m model) act(row fleet.Row) (model, tea.Cmd) {
 		return m.say(m.stageHint(row)), nil
 	}
 	attach := m.home.AttachCmd(row.Live)
-	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
+	env := []string{m.home.ClaudeEnv()}
 	return m.say("attaching to " + row.Name + "…"),
 		spawnCmd(m.mux, spawnAttach, row.ID, row.Name, m.session, row.Cwd, env, attach.Args...)
 }
@@ -572,7 +572,7 @@ func (m model) start(row fleet.Row) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
-	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
+	env := []string{m.home.ClaudeEnv()}
 	return m.say("starting a session in " + where + "…"),
 		spawnCmd(m.mux, spawnSession, "", "a session in "+where, m.session, dir, env, m.home.NewCmd().Args...)
 }

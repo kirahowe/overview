@@ -10,7 +10,7 @@ import (
 )
 
 func TestProjectsPinAndUnpin(t *testing.T) {
-	h := Home(t.TempDir())
+	h := Home{Dir: t.TempDir()}
 	if got := h.Projects(); len(got) != 0 {
 		t.Fatalf("fresh home has projects %v", got)
 	}
@@ -34,7 +34,7 @@ func TestProjectsPinAndUnpin(t *testing.T) {
 }
 
 func TestProjectsRelativeDirBecomesAbsolute(t *testing.T) {
-	h := Home(t.TempDir())
+	h := Home{Dir: t.TempDir()}
 	if err := h.PinProject("some/dir"); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestProjectsRelativeDirBecomesAbsolute(t *testing.T) {
 }
 
 func TestProjectsReadIgnoresBlanksAndDuplicates(t *testing.T) {
-	h := Home(t.TempDir())
+	h := Home{Dir: t.TempDir()}
 	if err := os.MkdirAll(h.dataDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestProjectsReadIgnoresBlanksAndDuplicates(t *testing.T) {
 }
 
 func TestProjectsLeaveNoTempFiles(t *testing.T) {
-	h := Home(t.TempDir())
+	h := Home{Dir: t.TempDir()}
 	if err := h.PinProject("/a"); err != nil {
 		t.Fatal(err)
 	}

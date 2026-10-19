@@ -114,19 +114,16 @@ func writeConf(path string) (upgraded bool, err error) {
 // Launch puts the view in overview's tmux server and attaches this terminal
 // to it. A session already running is attached as it is, unless this launch
 // gives the view other flags, which restart it in place; one whose view has
-// quit gets a new view in a window of its own. args are the view's own flags.
-// On success it does not return.
-func Launch(home fleet.Home, args []string) error {
+// quit gets a new view in a window of its own. dir is overview's config
+// directory, and args are the view's own flags. On success it does not
+// return.
+func Launch(home fleet.Home, dir string, args []string) error {
 	tmuxPath, err := exec.LookPath("tmux")
 	if err != nil {
 		return errors.New("overview runs its sessions in tmux, and tmux is not installed")
 	}
 	if os.Getenv("TMUX") != "" && !strings.Contains(os.Getenv("TMUX"), "/"+tmux.Socket+",") {
 		return errors.New("run overview outside tmux: it starts a tmux of its own")
-	}
-	dir, err := ConfigDir()
-	if err != nil {
-		return err
 	}
 	conf := filepath.Join(dir, "tmux.conf")
 	upgraded, err := writeConf(conf)
@@ -167,7 +164,7 @@ func ensureView(srv tmux.Server, session string, home fleet.Home, view []string)
 	if err != nil {
 		return err
 	}
-	env := []string{envSession + "=" + session, "CLAUDE_CONFIG_DIR=" + string(home)}
+	env := []string{envSession + "=" + session, home.ClaudeEnv()}
 	args := quoteArgs(view[1:])
 	exists := false
 	for _, p := range panes {

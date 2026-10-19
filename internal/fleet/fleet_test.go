@@ -46,43 +46,47 @@ func TestApplyFollowsATurn(t *testing.T) {
 	}
 }
 
+// The transcript path in the payload is all that names a session's home.
 func TestHookWritesOnlyUnderItsOwnHome(t *testing.T) {
-	kira, seeq := t.TempDir(), t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", kira)
-	t.Setenv("OVERVIEW_SKIP", "")
-	t.Setenv("OVERVIEW_LABEL", "reviewer")
-	Hook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/x","prompt":"hello"}`))
-	Hook(strings.NewReader(`{"hook_event_name":"Stop","session_id":"s1","agent_id":"sub"}`))
+	kira, seeq := Home{Dir: t.TempDir()}, Home{Dir: t.TempDir()}
+	path := filepath.Join(kira.Dir, "projects", "-x", "s1.jsonl")
+	Hook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"/x","prompt":"hello","transcript_path":"` + path + `"}`))
+	Hook(strings.NewReader(`{"hook_event_name":"Stop","session_id":"s1","agent_id":"sub","transcript_path":"` + path + `"}`))
 
-	got := Home(kira).Sessions()["s1"]
-	if got.State != Working || got.Label != "reviewer" || got.LastPrompt != "hello" {
+	got := kira.Sessions()["s1"]
+	if got.State != Working || got.LastPrompt != "hello" {
 		t.Fatalf("unexpected record: %+v", got)
 	}
-	if n := len(Home(seeq).Sessions()); n != 0 {
+	if n := len(seeq.Sessions()); n != 0 {
 		t.Fatalf("other home has %d sessions", n)
 	}
+	// With no transcript, or one outside a projects directory, there is no
+	// home to write to.
+	Hook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s2","prompt":"lost"}`))
+	Hook(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s3","transcript_path":"` + filepath.Join(seeq.Dir, "s3.jsonl") + `"}`))
+	if n := len(seeq.Sessions()); n != 0 {
+		t.Fatalf("a payload with no home wrote %d sessions", n)
+	}
 
-	Hook(strings.NewReader(`{"hook_event_name":"SessionEnd","session_id":"s1"}`))
-	if _, ok := Home(kira).Sessions()["s1"]; ok {
+	Hook(strings.NewReader(`{"hook_event_name":"SessionEnd","session_id":"s1","transcript_path":"` + path + `"}`))
+	if _, ok := kira.Sessions()["s1"]; ok {
 		t.Fatal("record kept after the session ended")
 	}
 }
 
 func TestResolveHome(t *testing.T) {
 	user := t.TempDir()
-	t.Setenv("HOME", user)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	if _, err := ResolveHome(""); err == nil {
-		t.Fatal("expected an error with no flag and no CLAUDE_CONFIG_DIR")
+	if _, err := ResolveHome("", user); err == nil {
+		t.Fatal("expected an error with no home given")
 	}
 	dir := filepath.Join(user, ".claude-kira")
 	os.Mkdir(dir, 0o755)
 	for _, in := range []string{"kira", "~/.claude-kira", dir} {
-		if h, err := ResolveHome(in); err != nil || string(h) != dir {
-			t.Fatalf("ResolveHome(%q) = %q, %v", in, h, err)
+		if got, err := ResolveHome(in, user); err != nil || got != dir {
+			t.Fatalf("ResolveHome(%q) = %q, %v", in, got, err)
 		}
 	}
-	if _, err := ResolveHome("seeq"); err == nil {
+	if _, err := ResolveHome("seeq", user); err == nil {
 		t.Fatal("expected an error for a missing directory")
 	}
 }
@@ -136,18 +140,16 @@ func TestReadThreadKeepsOnlyTurnsInTheWindow(t *testing.T) {
 }
 
 func TestPublishMovesTheCursorToTheExtractNotPastIt(t *testing.T) {
-	home := Home(t.TempDir())
 	fake := filepath.Join(t.TempDir(), "claude")
 	os.WriteFile(fake, []byte("#!/bin/sh\necho '[]'\n"), 0o755)
-	t.Setenv("OVERVIEW_CLAUDE", fake)
-	t.Setenv("OVERVIEW_ORCHESTRATOR_DIR", "/p/orchestrator")
+	home := Home{Dir: t.TempDir(), Claude: fake, OrchestratorDir: "/p/orchestrator"}
 
 	if _, _, quiet, err := home.Activity(); err != nil || !quiet {
 		t.Fatalf("empty home: quiet=%v err=%v", quiet, err)
 	}
 
 	write := func(project, cwd string) {
-		dir := filepath.Join(string(home), "projects", project)
+		dir := filepath.Join(home.Dir, "projects", project)
 		os.MkdirAll(dir, 0o755)
 		now := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
 		line := `{"type":"user","timestamp":"` + now + `","cwd":"` + cwd + `","message":{"content":"ship it"}}` + "\n"
@@ -195,13 +197,13 @@ func TestOrchestratorCommandLine(t *testing.T) {
 	if _, err := cronFor(time.Minute); err == nil {
 		t.Fatal("a one minute tick was accepted")
 	}
-	args, err := Home("/h/.claude-kira").orchestratorArgs(time.Hour, "sonnet", "")
+	args, err := Home{Dir: "/h/.claude-kira", OrchestratorDir: "/p/orchestrator"}.orchestratorArgs(time.Hour, "sonnet", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"--bg", "--name overview-orchestrator", "--permission-mode dontAsk",
-		`"Bash(overview *)"`, `"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`"} {
+		`"Bash(overview *)"`, `"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`", `"Edit(//p/orchestrator/digest.md)"`} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command line lacks %s:\n%s", want, joined)
 		}
@@ -209,7 +211,7 @@ func TestOrchestratorCommandLine(t *testing.T) {
 }
 
 func TestHealthTellsASilentOrchestratorFromAHealthyOne(t *testing.T) {
-	home := Home(t.TempDir())
+	home := Home{Dir: t.TempDir()}
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	started := now.Add(-5 * time.Hour)
 	live := []Live{{Name: OrchestratorName, SessionID: "abc-1", Status: "idle", StartedAt: started.UnixMilli()}}
@@ -290,7 +292,7 @@ func TestLiveStatePrecedence(t *testing.T) {
 }
 
 func TestSaveSessionCleansUpWhenRenameFails(t *testing.T) {
-	h := Home(filepath.Join(t.TempDir(), "home"))
+	h := Home{Dir: filepath.Join(t.TempDir(), "home")}
 	// A directory where the record belongs makes the rename fail.
 	if err := os.MkdirAll(h.sessionFile("s1"), 0o755); err != nil {
 		t.Fatal(err)
@@ -301,5 +303,31 @@ func TestSaveSessionCleansUpWhenRenameFails(t *testing.T) {
 	left, _ := filepath.Glob(filepath.Join(h.sessionsDir(), ".tmp-*"))
 	if len(left) != 0 {
 		t.Fatalf("temp files left behind: %v", left)
+	}
+}
+
+// A digest run is overview's own, so it must not record itself through the
+// hook: it starts with every hook off, from its own arguments.
+func TestRunDigestTurnsHooksOff(t *testing.T) {
+	dir := t.TempDir()
+	argv := filepath.Join(dir, "argv")
+	fake := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\n[ \"$1\" = agents ] && { echo '[]'; exit; }\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\"; done > " + argv + "\necho '## Finished'\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := Home{Dir: filepath.Join(dir, "home"), Claude: fake}
+	project := filepath.Join(home.Dir, "projects", "app")
+	os.MkdirAll(project, 0o755)
+	now := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
+	os.WriteFile(filepath.Join(project, "s1.jsonl"),
+		[]byte(`{"type":"user","timestamp":"`+now+`","cwd":"/p/app","message":{"content":"ship it"}}`+"\n"), 0o644)
+	if _, err := home.RunDigest("sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(argv)
+	if !strings.Contains(string(b), "--settings\n{\"disableAllHooks\":true}\n") {
+		t.Fatalf("claude ran with\n%s", b)
 	}
 }

@@ -16,9 +16,6 @@ func Hook(r io.Reader) {
 	// Read the payload before any early return. Claude Code writes it to the
 	// hook's stdin and would hit a closed pipe otherwise.
 	payload, _ := io.ReadAll(r)
-	if os.Getenv("OVERVIEW_SKIP") != "" {
-		return
-	}
 	var ev HookEvent
 	if json.Unmarshal(payload, &ev) != nil || ev.SessionID == "" {
 		return
@@ -28,8 +25,8 @@ func Hook(r io.Reader) {
 	if ev.AgentID != "" {
 		return
 	}
-	home := hookHome(ev)
-	if home == "" {
+	home, ok := hookHome(ev)
+	if !ok {
 		return
 	}
 	prev := home.loadSession(ev.SessionID)
@@ -38,28 +35,18 @@ func Hook(r io.Reader) {
 		os.Remove(home.sessionFile(ev.SessionID))
 		return
 	}
-	if label := hookLabel(); label != next.Label {
-		next.Label, changed = label, true
-	}
 	if changed {
 		_ = home.saveSession(next)
 	}
 }
 
-// hookHome is the config directory of the session that fired the hook. The
-// session's own environment names it. A transcript path is the fallback,
-// since transcripts live in <home>/projects/<project>/.
-func hookHome(ev HookEvent) Home {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return Home(dir)
-	}
+// hookHome is the config directory of the session that fired the hook,
+// read from the payload's transcript path, since transcripts live in
+// <home>/projects/<project>/.
+func hookHome(ev HookEvent) (Home, bool) {
 	projects := filepath.Dir(filepath.Dir(ev.Transcript))
-	if filepath.Base(projects) == "projects" {
-		return Home(filepath.Dir(projects))
+	if !filepath.IsAbs(projects) || filepath.Base(projects) != "projects" {
+		return Home{}, false
 	}
-	return ""
+	return Home{Dir: filepath.Dir(projects)}, true
 }
-
-// hookLabel names who the session is working as, when its launcher says so
-// through OVERVIEW_LABEL.
-func hookLabel() string { return os.Getenv("OVERVIEW_LABEL") }

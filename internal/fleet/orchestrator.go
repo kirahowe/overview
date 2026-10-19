@@ -14,14 +14,11 @@ import (
 // the view and the stop command find it among the live sessions.
 const OrchestratorName = "overview-orchestrator"
 
-// OrchestratorDir is the directory the orchestrator session runs in. Its
-// AGENTS.md holds the orchestrator's instructions, so it has to be the one in
-// this repository: by default the orchestrator/ beside the bin/ that holds
-// the real binary.
-func OrchestratorDir() string {
-	if d := os.Getenv("OVERVIEW_ORCHESTRATOR_DIR"); d != "" {
-		return d
-	}
+// DefaultOrchestratorDir is the directory the orchestrator session runs in
+// unless --orchestrator-dir says otherwise. Its AGENTS.md holds the
+// orchestrator's instructions, so it has to be the one in this repository:
+// the orchestrator/ beside the bin/ that holds the real binary.
+func DefaultOrchestratorDir() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
@@ -162,8 +159,8 @@ func (h Home) orchestratorArgs(every time.Duration, model, resume string) ([]str
 	}
 	settings, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": []string{
 		"Bash(overview *)", "CronCreate", "CronList", "CronDelete",
-		"Read(/" + string(h) + "/projects/**)", "Read(/" + string(h) + "/overview/**)",
-		"Edit(/" + OrchestratorDir() + "/digest.md)",
+		"Read(/" + h.Dir + "/projects/**)", "Read(/" + h.Dir + "/overview/**)",
+		"Edit(/" + h.OrchestratorDir + "/digest.md)",
 	}}})
 	prompt := fmt.Sprintf("Start orchestrating. Your tick schedule is the cron expression `%s`. "+
 		"Schedule it as AGENTS.md describes, then run the first tick now.", cron)
@@ -178,18 +175,17 @@ func (h Home) orchestratorArgs(every time.Duration, model, resume string) ([]str
 }
 
 func (h Home) launch(st orchestratorState, resume string) (string, error) {
-	dir := OrchestratorDir()
+	dir := h.OrchestratorDir
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); err != nil {
-		return "", fmt.Errorf("no orchestrator instructions at %s (set OVERVIEW_ORCHESTRATOR_DIR)", dir)
+		return "", fmt.Errorf("no orchestrator instructions at %s (pass --orchestrator-dir)", dir)
 	}
 	args, err := h.orchestratorArgs(st.Every, st.Model, resume)
 	if err != nil {
 		return "", err
 	}
+	// The orchestrator is a session like any other and shows in the view,
+	// so unlike a digest run it keeps its hooks.
 	cmd := h.claude(args...)
-	// The orchestrator is a session like any other and should show in the
-	// view, so it does not get the OVERVIEW_SKIP that h.claude sets.
-	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h))
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

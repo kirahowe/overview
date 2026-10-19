@@ -73,7 +73,7 @@ func eachEntry(r io.Reader, fn func(entry)) {
 // FindTranscript locates a session's transcript by id. Transcripts sit at
 // <home>/projects/<project>/<session>.jsonl.
 func (h Home) FindTranscript(sessionID string) string {
-	m, _ := filepath.Glob(filepath.Join(string(h), "projects", "*", filepath.Base(sessionID)+".jsonl"))
+	m, _ := filepath.Glob(filepath.Join(h.Dir, "projects", "*", filepath.Base(sessionID)+".jsonl"))
 	if len(m) == 0 {
 		return ""
 	}
@@ -196,7 +196,7 @@ func readThread(path string, since time.Time) (Thread, error) {
 // most recently active first. Only top-level transcripts are read: subagents
 // keep theirs in subdirectories.
 func (h Home) Threads(since time.Time) []Thread {
-	files, _ := filepath.Glob(filepath.Join(string(h), "projects", "*", "*.jsonl"))
+	files, _ := filepath.Glob(filepath.Join(h.Dir, "projects", "*", "*.jsonl"))
 	var out []Thread
 	for _, f := range files {
 		info, err := os.Stat(f)
@@ -204,7 +204,7 @@ func (h Home) Threads(since time.Time) []Thread {
 			continue
 		}
 		// The orchestrator reports on the fleet. Its own ticks are not news.
-		if th, err := readThread(f, since); err == nil && len(th.Turns) > 0 && th.Cwd != OrchestratorDir() {
+		if th, err := readThread(f, since); err == nil && len(th.Turns) > 0 && th.Cwd != h.OrchestratorDir {
 			out = append(out, th)
 		}
 	}

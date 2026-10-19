@@ -108,9 +108,6 @@ func extract(threads []Thread, rows []Row, since, now time.Time) string {
 			if r.Reason != "" {
 				state += " (" + r.Reason + ")"
 			}
-			if r.Label != "" {
-				name += ", working as " + r.Label
-			}
 		}
 		fmt.Fprintf(&b, "\n=== Session: %s\nProject: %s\nState: %s\n", name, ShortDir(th.Cwd), state)
 		if th.Title != "" {
@@ -208,7 +205,10 @@ func (h Home) RunDigest(model string) (Digest, error) {
 	if err != nil || quiet {
 		return Digest{Since: since, Quiet: quiet}, err
 	}
+	// A digest run is overview's own, not a session to list, so it runs
+	// with every hook off, the hook that would record it included.
 	cmd := h.claude("-p", "--model", model, "--tools", "", "--setting-sources", "",
+		"--settings", `{"disableAllHooks":true}`,
 		"--no-session-persistence", "--system-prompt", digestInstructions)
 	cmd.Dir = h.dataDir()
 	cmd.Stdin = strings.NewReader(text)

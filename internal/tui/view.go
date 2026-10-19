@@ -309,9 +309,6 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 	out = append(out, "")
 
 	meta := []string{fleet.ShortDir(r.Cwd)}
-	if r.Label != "" {
-		meta = append(meta, r.Label)
-	}
 	meta = append(meta, "started "+Ago(time.UnixMilli(r.StartedAt))+" ago")
 	if !r.Hooked {
 		meta = append(meta, "no hook")
@@ -583,9 +580,6 @@ func Subject(r fleet.Row) string {
 		s = r.Title + ": " + r.LastPrompt
 	default:
 		s = r.Title + r.LastPrompt
-	}
-	if r.Label != "" {
-		s = "[" + r.Label + "] " + s
 	}
 	return s
 }

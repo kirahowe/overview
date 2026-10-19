@@ -18,7 +18,7 @@ func TestEnsureView(t *testing.T) {
 	}
 	srv := tmux.On(fmt.Sprintf("overview-launch-%d", os.Getpid()), "/dev/null")
 	t.Cleanup(func() { srv.Run("kill-server") }) //nolint:errcheck
-	home := fleet.Home(t.TempDir())
+	home := fleet.Home{Dir: t.TempDir()}
 	// The view's stand-in marks its own pane, as Run does.
 	view := []string{"sh", "-c", `tmux -L "$1" set-option -p -t "$TMUX_PANE" @overview-list 1; sleep 300`, "sh", srv.Socket()}
 

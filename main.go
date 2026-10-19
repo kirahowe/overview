@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"overview/internal/config"
 	"overview/internal/fleet"
 	"overview/internal/tui"
 )
@@ -30,14 +31,23 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview themes [name]      list the themes, or print one as a file to edit
 
 Flags:
-  --home <name|path>   config directory; "work" means ~/.claude-work.
-                       Defaults to CLAUDE_CONFIG_DIR.
+  --home <name|path>   Claude Code config directory; "work" means
+                       ~/.claude-work. Defaults to the config file's home line.
   --every <duration>   how often the orchestrator writes a digest (default 1h)
   --model <model>      model for the orchestrator or a one-off digest
                        (default sonnet)
-  --theme <name|path>  colours for the live view. Defaults to OVERVIEW_THEME,
-                       then the theme line in ~/.config/overview/config,
-                       then one-dark.
+  --theme <name|path>  colours for the live view. Defaults to the config
+                       file's theme line, then one-dark.
+  --claude <path>      the claude to run. Defaults to the config file's
+                       claude line, then claude on PATH.
+  --config <dir>       overview's own directory, holding the config file,
+                       themes and tmux.conf (default ~/.config/overview)
+  --orchestrator-dir <dir>
+                       where the orchestrator runs (default the orchestrator/
+                       beside the bin/ that holds overview)
+
+The config file is <config dir>/config, with key = value lines for home,
+theme and claude. A flag wins over the file.
 `
 
 func main() {
@@ -57,36 +67,44 @@ func main() {
 
 	fs := flag.NewFlagSet("overview", flag.ExitOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	homeFlag := fs.String("home", "", "")
+	var flags config.Values
+	fs.StringVar(&flags.Home, "home", "", "")
+	fs.StringVar(&flags.Theme, "theme", "", "")
+	fs.StringVar(&flags.Claude, "claude", "", "")
+	configDir := fs.String("config", "", "")
+	orchDir := fs.String("orchestrator-dir", "", "")
 	every := fs.Duration("every", time.Hour, "")
 	model := fs.String("model", "sonnet", "")
-	themeFlag := fs.String("theme", "", "")
 	// Flags may come before or after a positional argument such as "start".
 	var rest []string
 	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
 		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
 	}
 
+	cfg, err := config.Load(*configDir, flags)
+	if err != nil {
+		fail(err)
+	}
 	if cmd == "themes" {
-		if err := themes(*themeFlag, rest); err != nil {
+		if err := themes(cfg, rest); err != nil {
 			fail(err)
 		}
 		return
 	}
 
-	home, err := fleet.ResolveHome(*homeFlag)
+	home, err := resolveHome(cfg, *orchDir)
 	if err != nil {
 		fail(err)
 	}
 	switch cmd {
 	case "":
 		var theme tui.Theme
-		switch theme, err = loadTheme(*themeFlag); {
+		switch theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); {
 		case err != nil:
 		case tui.InTmux():
 			err = tui.Run(home, *model, theme)
 		default:
-			err = tui.Launch(home, os.Args[1:])
+			err = tui.Launch(home, cfg.Dir, os.Args[1:])
 		}
 	case "sessions":
 		err = printSessions(home)
@@ -178,25 +196,27 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 	return fmt.Errorf("unknown orchestrator action %q", action)
 }
 
-func loadTheme(flag string) (tui.Theme, error) {
-	dir, err := tui.ConfigDir()
+// resolveHome finds the config directory cfg names and gives it the claude
+// and orchestrator directory to run with.
+func resolveHome(cfg config.Config, orchDir string) (fleet.Home, error) {
+	user, err := os.UserHomeDir()
 	if err != nil {
-		return tui.Theme{}, err
+		return fleet.Home{}, err
 	}
-	name, err := tui.ChooseTheme(flag, dir)
+	dir, err := fleet.ResolveHome(cfg.Home, user)
 	if err != nil {
-		return tui.Theme{}, err
+		return fleet.Home{}, err
 	}
-	return tui.LoadTheme(name, dir)
+	if orchDir == "" {
+		orchDir = fleet.DefaultOrchestratorDir()
+	}
+	return fleet.Home{Dir: dir, Claude: cfg.Claude, OrchestratorDir: orchDir}, nil
 }
 
 // themes lists the themes, marking the one in use, or prints the named one
 // in full.
-func themes(flag string, rest []string) error {
-	dir, err := tui.ConfigDir()
-	if err != nil {
-		return err
-	}
+func themes(cfg config.Config, rest []string) error {
+	dir := cfg.Dir
 	if len(rest) > 0 {
 		t, err := tui.LoadTheme(rest[0], dir)
 		if err != nil {
@@ -205,10 +225,7 @@ func themes(flag string, rest []string) error {
 		fmt.Print(t.Format())
 		return nil
 	}
-	current, err := tui.ChooseTheme(flag, dir)
-	if err != nil {
-		return err
-	}
+	current := cfg.Theme
 	for _, t := range tui.Themes(dir) {
 		mark, where := " ", "built in"
 		if t.Name == current {

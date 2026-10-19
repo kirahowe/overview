@@ -31,17 +31,16 @@ type Live struct {
 // the view attach to it or stop it.
 func (l Live) Background() bool { return l.Kind == "background" }
 
-func claudeBin() string {
-	if b := os.Getenv("OVERVIEW_CLAUDE"); b != "" {
-		return b
-	}
-	return "claude"
-}
+// ClaudeEnv is the one variable overview sets for a claude it starts. It
+// is Claude Code's own interface for choosing a config directory, and it
+// reaches only that child, so it is the exception to overview passing its
+// settings as arguments.
+func (h Home) ClaudeEnv() string { return "CLAUDE_CONFIG_DIR=" + h.Dir }
 
+// claude runs h.Claude against this home.
 func (h Home) claude(args ...string) *exec.Cmd {
-	cmd := exec.Command(claudeBin(), args...)
-	// OVERVIEW_SKIP keeps overview's own Claude runs out of the fleet.
-	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h), "OVERVIEW_SKIP=1")
+	cmd := exec.Command(h.Claude, args...)
+	cmd.Env = append(os.Environ(), h.ClaudeEnv())
 	return cmd
 }
 
@@ -67,7 +66,6 @@ type Row struct {
 	State      State
 	Since      time.Time
 	Reason     string
-	Label      string
 	Title      string
 	LastPrompt string
 	// LastReply is the last thing the session said, empty while it works on
@@ -92,7 +90,7 @@ func (h Home) Rows() ([]Row, error) {
 		r := Row{Live: l}
 		rec, ok := recorded[l.SessionID]
 		r.Hooked = ok
-		r.Label, r.LastPrompt = rec.Label, rec.LastPrompt
+		r.LastPrompt = rec.LastPrompt
 		r.State, r.Since, r.Reason = liveState(l, rec)
 		path := rec.Transcript
 		if path == "" {
@@ -159,21 +157,11 @@ func (r Row) Asking() bool {
 func (r Row) NeedsYou() bool { return r.State == Blocked || r.Asking() }
 
 // AttachCmd opens a background session in the terminal. The session is
-// resumed in place if it had stopped, so it keeps the hook: the command gets
-// none of the OVERVIEW_SKIP that overview's own runs carry.
-func (h Home) AttachCmd(l Live) *exec.Cmd {
-	cmd := exec.Command(claudeBin(), "attach", l.ID)
-	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h))
-	return cmd
-}
+// resumed in place if it had stopped, and keeps its hooks.
+func (h Home) AttachCmd(l Live) *exec.Cmd { return h.claude("attach", l.ID) }
 
-// NewCmd starts a new interactive session. Like AttachCmd it carries no
-// OVERVIEW_SKIP, so the session joins the fleet.
-func (h Home) NewCmd() *exec.Cmd {
-	cmd := exec.Command(claudeBin())
-	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h))
-	return cmd
-}
+// NewCmd starts a new interactive session, which joins the fleet.
+func (h Home) NewCmd() *exec.Cmd { return h.claude() }
 
 // Stop stops a background session. Its conversation is kept.
 func (h Home) Stop(l Live) error { return h.stopSession(l) }

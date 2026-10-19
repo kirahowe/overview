@@ -119,7 +119,7 @@ func matches(r fleet.Row, project, app string, terms []string) bool {
 	if len(terms) == 0 {
 		return true
 	}
-	fields := [...]string{project, r.Title, r.LastPrompt, r.Name, r.Label, app}
+	fields := [...]string{project, r.Title, r.LastPrompt, r.Name, app}
 	lower := make([]string, len(fields))
 	for i, f := range fields {
 		lower[i] = strings.ToLower(f)

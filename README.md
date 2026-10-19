@@ -11,9 +11,9 @@ overview digest             # write a digest now
 ```
 
 `--home` takes a path or a short name: `work` means `~/.claude-work`. Without
-the flag, `CLAUDE_CONFIG_DIR` decides. With neither, overview stops rather
-than guess, so pass `--home ~/.claude` for Claude Code's default directory. One process looks at one config
-directory, and all of its state lives in `<home>/overview/`, so personal and
+the flag, the `home =` line of overview's config file decides. With neither,
+overview stops rather than guess, so pass `--home ~/.claude` for Claude
+Code's default directory. One process looks at one config directory, and all of its state lives in `<home>/overview/`, so personal and
 work sessions never appear together.
 
 ## How it works
@@ -73,7 +73,7 @@ when you move to another session and come back with it. `ctrl+[` returns to
 the list from any of them.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
-searches. Search looks at the project, title, last prompt, name and label, and
+searches. Search looks at the project, title, last prompt and name, and
 the app's name for a session in another app, ignoring case. Each
 space-separated word has to match one of those fields, and a word never
 matches across two of them. The cursor moves to the first match, `up` and
@@ -108,6 +108,28 @@ then. tmux can only tell `ctrl+[` from Esc when the terminal
 sends extended keys. A terminal that does not sends a plain Esc, which goes
 to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
 set to the config directory it is watching, so they show up in the list.
+That is Claude Code's own way to pick a config directory, and the only
+environment variable overview sets or reads.
+
+## Configuration
+
+overview takes its settings from flags and from one file,
+`~/.config/overview/config`, and reads them once when it starts. `--config
+<dir>` uses another directory in place of `~/.config/overview`, for the
+file, the themes and `tmux.conf` alike. The file holds `key = value` lines,
+and lines starting with `#` are comments:
+
+```
+home   = work          # what --home takes
+theme  = revdiff       # what --theme takes
+claude = /opt/bin/claude
+```
+
+A flag wins over the file, and the file over the default. An unknown key is
+an error. `--claude` and `claude =` pick the claude that overview runs, by
+default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
+somewhere other than the `orchestrator/` directory beside the `bin/` that
+holds overview.
 
 ## Themes
 
@@ -115,9 +137,8 @@ The view comes with three themes: `one-dark`, the default, after Atom's One
 Dark; `one-light`, after Atom's One Light; and `revdiff`, with revdiff's
 amber accent. Themes draw on the terminal's own background, so `one-light`
 needs a light terminal. `--theme` picks one for a
-run. Without the flag, overview uses `OVERVIEW_THEME`, then a `theme =` line
-in `~/.config/overview/config` (or under `$XDG_CONFIG_HOME`), then
-`one-dark`:
+run. Without the flag, overview uses the `theme =` line in
+`~/.config/overview/config`, then `one-dark`:
 
 ```
 theme = revdiff
@@ -169,9 +190,9 @@ already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 ```
 
 Sessions that do not read `settings.json` have to be given the hook by their
-launcher. A launcher can also set `OVERVIEW_LABEL` in a session's
-environment, and overview shows that label on the session's row and
-searches it.
+launcher. The hook finds the config directory from the transcript path that
+Claude Code hands it. overview's own digest runs start with every hook
+turned off, so they never show up as sessions.
 
 Digests come from a background session, the orchestrator. `overview
 orchestrator start` starts it, and `stop` stands it down. Its schedule lives
