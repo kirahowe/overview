@@ -131,6 +131,7 @@ type rig struct {
 	config, home, work      string
 	list                    pane
 	holder                  string
+	termPane                string // the terminal overview was launched in
 }
 
 // launch builds overview and starts it on two private servers named after
@@ -177,7 +178,7 @@ func launch(t *testing.T, tag string) *rig {
 
 	// The terminal is a pane of the second server. env -u TMUX, since tmux
 	// refuses to attach from inside another tmux.
-	r.term.must("-f", "/dev/null", "new-session", "-d", "-x", "200", "-y", "50", "-c", r.work,
+	r.termPane = r.term.must("-f", "/dev/null", "new-session", "-d", "-x", "200", "-y", "50", "-c", r.work, "-P", "-F", "#{pane_id}",
 		"env", "-u", "TMUX", r.bin, "--socket", r.ov.name, "--config", r.config, "--home", r.home)
 
 	waitFor(t, "the view and its holder", func() (bool, string) {
@@ -608,5 +609,34 @@ func TestTheListStaysWhileYouType(t *testing.T) {
 			t.Fatalf("the list moved while typing: %s, active %s", say, r.active())
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// q in the list detaches the terminal it was typed in, and a second
+// terminal attached to the view stays attached, though it was used more
+// recently than the first until the q.
+func TestQDetachesOnlyItsTerminal(t *testing.T) {
+	r := launch(t, "q")
+	second := r.term.must("new-window", "-P", "-F", "#{pane_id}", "-c", r.work, "env", "-u", "TMUX", r.bin,
+		"--socket", r.ov.name, "--config", r.config, "--home", r.home)
+	clients := func() []string { return strings.Fields(r.ov.must("list-clients", "-F", "#{client_tty}")) }
+	waitFor(t, "two clients", func() (bool, string) {
+		c := clients()
+		return len(c) == 2, strings.Join(c, " ")
+	})
+	r.ov.must("select-pane", "-t", r.list.id)
+	// The second terminal is used, then q is typed in the first. tmux
+	// counts a client's activity in seconds.
+	time.Sleep(1100 * time.Millisecond)
+	r.term.must("send-keys", "-t", second, "k")
+	time.Sleep(1100 * time.Millisecond)
+	secondTTY := r.term.must("display-message", "-p", "-t", second, "#{pane_tty}")
+	r.term.must("send-keys", "-t", r.termPane, "q")
+	waitFor(t, "only the second client", func() (bool, string) {
+		c := clients()
+		return len(c) == 1 && c[0] == secondTTY, strings.Join(c, " ")
+	})
+	if l := listPane(r.ov.panes()); l.pid != r.list.pid {
+		t.Fatalf("the view went with the client: %+v", l)
 	}
 }
