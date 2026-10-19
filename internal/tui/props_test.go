@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"reflect"
 	"slices"
@@ -843,6 +844,33 @@ func TestPropNearest(t *testing.T) {
 		}
 		if ok != wantOK || got != want {
 			t.Fatalf("nearest(%v, %s) = %q %v, want %q %v (left %v)", old, sel, got, ok, want, wantOK, left)
+		}
+	})
+}
+
+// follow finds an entry in the list's window exactly when there is one,
+// and keeps the cursor's entry when it is one of them.
+func TestPropFollow(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		var ps []place
+		for i := range rapid.IntRange(0, 8).Draw(t, "n") {
+			ps = append(ps, place{fmt.Sprintf("k%d", i), rapid.SampledFrom([]string{"", "@1", "@2", "@3"}).Draw(t, "window")})
+		}
+		stage := rapid.SampledFrom([]string{"", "@1", "@2"}).Draw(t, "stage")
+		sel := rapid.SampledFrom([]string{"k0", "k1", "k5", "gone"}).Draw(t, "sel")
+		got, ok := follow(ps, stage, sel)
+		there := map[string]bool{}
+		for _, p := range ps {
+			there[p.key] = stage != "" && p.window == stage
+		}
+		any := slices.Contains(slices.Collect(maps.Values(there)), true)
+		switch {
+		case ok != any:
+			t.Fatalf("follow found %v, an entry there %v", ok, any)
+		case ok && !there[got]:
+			t.Fatalf("%s is not in %s", got, stage)
+		case there[sel] && got != sel:
+			t.Fatalf("the cursor's %s is there, yet follow chose %s", sel, got)
 		}
 	})
 }

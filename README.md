@@ -76,18 +76,23 @@ belongs to the project of the directory its first pane is in.
 The right side follows the cursor. Each session that runs in overview's tmux
 has a tmux window of its own in the session `overview-<home>`, and so does
 each terminal. Moving the cursor moves the list into the selected entry's
-window. A session with no
-pane there, such as a background session, one in another app, or one started
-in some other terminal, gets a pane that shows where it runs, what it is
+window. A session with no pane there, such as a background session, one in
+another app, or one started in some other terminal or in the overview of
+another config directory, gets a pane that shows where it runs, what it is
 waiting on, and its last few turns from the transcript.
 
 You can split the right side as you would any tmux window. The prefix is
 tmux's default `ctrl+b`, and `ctrl+b %` and `ctrl+b "` split the current pane
 in its own directory. The splits belong to the session's window, so they go
 when you move to another session and come back with it. `ctrl+[` returns to
-the list from any of them. When Claude exits and a split is left in its
-window, the window becomes a terminal, and the cursor stays on it so the
-list does not move away from where you are typing.
+the list from any of them.
+
+While the keyboard is in a pane on the right, the list stays where it is,
+beside you. The cursor follows the window you are typing in: when Claude
+exits and leaves a split, the window becomes a terminal and the cursor
+stays on it, and when you start `claude` in a terminal, or a session's id
+changes, the cursor moves to the session there. Once the keyboard is back
+in the list, the cursor's own rules apply again.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
 searches. Search looks at the project, title, last prompt and name, and

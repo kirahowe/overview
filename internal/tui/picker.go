@@ -35,10 +35,11 @@ type pickedMsg struct {
 	paths  []string
 }
 
-// pinnedMsg answers a pin with the project root that was pinned.
+// pinnedMsg answers a pin, or an unpin, with the project root it wrote.
 type pinnedMsg struct {
-	root string
-	err  error
+	root  string
+	err   error
+	unpin bool
 }
 
 // readDirs lists the directories in dir by name, hidden ones and symlinks
@@ -206,6 +207,6 @@ func pinCmd(read func(string) ([]string, error), pin func(string) error, path st
 			}
 		}
 		root := repoRoot(resolve(path), exists)
-		return pinnedMsg{root, pin(root)}
+		return pinnedMsg{root: root, err: pin(root)}
 	}
 }

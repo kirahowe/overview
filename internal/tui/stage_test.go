@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -656,8 +657,11 @@ func TestFocusDimsTheCursor(t *testing.T) {
 }
 
 // Whatever the cursor, the sessions, their panes and the user's splits
-// do, once the view settles the list is in the wanted pane's window, and
-// every other pane stays in the window it started in.
+// do, once the view settles with the keyboard in the list, the list is in
+// the wanted pane's window, and every other pane stays in the window it
+// started in. While the keyboard is in another pane the list never moves,
+// and when an entry's pane is in the list's window the cursor is on such
+// an entry.
 func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
@@ -687,10 +691,38 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 		m = settle(t, m, cmd)
 		// home is the window each pane other than the list started in.
 		home := map[string]string{}
+		// moves is how many moves there had been when the keyboard left.
+		moves := 0
+		// owns says whether an entry's pane is in the list's window, read
+		// from the fake tmux.
+		owns := func(e entry) bool {
+			for _, p := range f.panes {
+				if p.Session != "ov" || p.Window != f.stage() || p.ID == "%0" {
+					continue
+				}
+				switch {
+				case e.kind == terminalEntry && e.term.Window == p.Window,
+					e.kind == sessionEntry && e.row.Background() && p.Attach == e.row.ID,
+					e.kind == sessionEntry && !e.row.Background() && p.TTY == m.ttys[e.row.PID]:
+					return true
+				}
+			}
+			return false
+		}
 
 		t.Repeat(map[string]func(*rapid.T){
 			"": func(t *rapid.T) {
-				if want := m.want(); want != "" && !f.staged(want) {
+				if m.blurred {
+					if len(f.moves) != moves {
+						t.Fatalf("the list moved while the keyboard was elsewhere: %v", f.moves[moves:])
+					}
+					cur, _, _ := m.selected(m.ordered())
+					for _, e := range m.ordered() {
+						if owns(e) && !owns(cur) {
+							t.Fatalf("%s is in the list's window %s, yet the cursor is on %s", e.key(), f.stage(), m.sel)
+						}
+					}
+				} else if want := m.want(); want != "" && !f.staged(want) {
 					t.Fatalf("the list is in %s, the wanted %s in %s", f.stage(), want, f.window(want))
 				}
 				if m.stageOf(m.panes) != f.stage() {
@@ -715,9 +747,25 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 			},
 			"key": func(t *rapid.T) {
+				if m.blurred {
+					t.Skip("the keys go to another pane")
+				}
 				m = pressSettled(t, m, rapid.SampledFrom([]string{"j", "k", "g", "G", "n", "enter", "c", "t", "esc"}).Draw(t, "key"))
 			},
+			"blur": func(t *rapid.T) {
+				if !m.blurred {
+					m, moves = blurred(t, m), len(f.moves)
+				}
+			},
+			"focus": func(t *rapid.T) {
+				var cmd tea.Cmd
+				m, cmd = step(m, tea.FocusMsg{})
+				m = settle(t, m, cmd)
+			},
 			"close": func(t *rapid.T) {
+				if m.blurred {
+					t.Skip("the keys go to another pane")
+				}
 				// x and y on a terminal close its window. (On a session
 				// they would run claude stop.)
 				if e, _, ok := m.selected(m.ordered()); ok && e.kind == terminalEntry {
@@ -1013,8 +1061,12 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 	if cmd == nil || m.confirm != "" {
 		t.Fatalf("x on the placeholder: confirm %q", m.confirm)
 	}
-	if msg := cmd().(doneMsg); msg.err != nil || msg.note != "unpinned /code/empty" || len(m.home.Projects()) != 0 {
+	msg := cmd().(pinnedMsg)
+	if msg.err != nil || !msg.unpin || msg.root != "/code/empty" || len(m.home.Projects()) != 0 {
 		t.Fatalf("done %+v, pinned %v", msg, m.home.Projects())
+	}
+	if m = update(m, msg); m.shown("project:/code/empty") || m.note != "unpinned /code/empty" {
+		t.Fatalf("after the unpin: note %q, entries %v", m.note, m.ordered())
 	}
 }
 
@@ -1049,5 +1101,174 @@ func TestAFailedRefreshKeepsTheList(t *testing.T) {
 	m = settle(t, m, cmd)
 	if m.sel != sel || f.stage() != cur || m.rowsErr != nil {
 		t.Fatalf("after the next refresh: sel %s, list in %s", m.sel, f.stage())
+	}
+}
+
+// blurred is m with the keyboard in another pane, as tmux reports it.
+func blurred(t tester, m model) model {
+	t.Helper()
+	m, cmd := step(m, tea.BlurMsg{})
+	return settle(t, m, cmd)
+}
+
+// claude typed into a terminal turns its window into a session's. The
+// terminal's entry goes and the session's comes, and since the user is
+// typing there, the cursor goes to the session and the list stays.
+func TestClaudeTypedInATerminalKeepsTheList(t *testing.T) {
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "t")
+	shell := f.panes[len(f.panes)-1]
+	if !f.staged(shell.ID) {
+		t.Fatalf("setup: list in %s", f.stage())
+	}
+	m = blurred(t, m)
+	moves, selects := len(f.moves), len(f.selects)
+	r := row("new", "typed", "typed", 44)
+	r.Cwd = "/code/app"
+	ttys := maps.Clone(m.ttys)
+	ttys[44] = shell.TTY
+	m, cmd := step(m, m.rowsMsg(append(slices.Clone(m.rows), r), ttys, nil, nil))
+	m = settle(t, m, cmd)
+	if f.stage() != shell.Window || len(f.moves) != moves || len(f.selects) != selects || m.sel != "new" {
+		t.Fatalf("list in %s (was %s), moves %d then %d, sel %s", f.stage(), shell.Window, moves, len(f.moves), m.sel)
+	}
+}
+
+// A session whose id changes under the same pane, as /clear does, keeps
+// the list while the user types in it.
+func TestANewSessionIDKeepsTheListWhileTyping(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m = blurred(t, pressSettled(t, m, "j"))
+	cur, moves := f.stage(), len(f.moves)
+	rows := slices.Clone(m.rows)
+	for i := range rows {
+		if rows[i].SessionID == m.sel {
+			rows[i].SessionID = "s-new"
+		}
+	}
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m = settle(t, m, cmd)
+	if f.stage() != cur || len(f.moves) != moves || m.sel != "s-new" {
+		t.Fatalf("list in %s (was %s), sel %s", f.stage(), cur, m.sel)
+	}
+	// Back in the list, the cursor rules apply again, and nothing moves
+	// since the cursor is where the list is.
+	m, cmd = step(m, tea.FocusMsg{})
+	settle(t, m, cmd)
+	if f.stage() != cur || len(f.moves) != moves {
+		t.Fatalf("focus moved the list to %s", f.stage())
+	}
+}
+
+// A search the selected session stops matching, while the user types in
+// it, moves the cursor but not the list.
+func TestASearchThatLosesTheSessionKeepsTheList(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "auth", 12))
+	m = pressSettled(t, m, "/", "a", "u", "t", "h", "esc", "j")
+	m.filter = "auth"
+	m = blurred(t, m)
+	cur, moves := f.stage(), len(f.moves)
+	rows := slices.Clone(m.rows)
+	for i := range rows {
+		if rows[i].SessionID == m.sel {
+			rows[i].Title = "other"
+		}
+	}
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m = settle(t, m, cmd)
+	if f.stage() != cur || len(f.moves) != moves {
+		t.Fatalf("list in %s (was %s)", f.stage(), cur)
+	}
+}
+
+// Both homes' views share one server. A session of this home started in
+// the other home's view gets the holder, which says so, and the list never
+// moves into the other view's session.
+func TestASessionInAnotherOverviewSessionGetsTheHolder(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	f.add("overview-other", "ttys777")
+	ttys := map[int]string{11: m.ttys[11], 22: "ttys777"}
+	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.rows), row("s2", "zzz", "x", 22)), ttys: ttys})
+	m = settle(t, m, cmd)
+	m = pressSettled(t, m, "j")
+	if m.sel != "s2" || f.panes[f.find("%0")].Session != "ov" || !f.staged("%1") {
+		t.Fatalf("sel %s, list in session %s, window %s", m.sel, f.panes[f.find("%0")].Session, f.stage())
+	}
+	if text := ansi.Strip(f.drawn["ttys901"]); !strings.Contains(text, "runs in another overview session") {
+		t.Fatalf("holder shows %q", text)
+	}
+}
+
+// An attach that lands after the cursor has moved on does not take the
+// keyboard there.
+func TestALateAttachDoesNotTakeTheKeyboard(t *testing.T) {
+	f := newFakeMux()
+	bg := row("b1", "bgwork", "nightly", 0)
+	bg.Kind, bg.ID = "background", "abc123"
+	m := stagedModel(t, f, bg, row("s1", "red", "auth", 11))
+	m = pressSettled(t, m, "g")
+	m, spawned := press(m, "enter")
+	m = pressSettled(t, m, "j")
+	m = settle(t, m, spawned)
+	if len(f.spawned) != 1 || len(f.selects) != 0 || !f.staged(paneWithTTY(f, "ttys011")) {
+		t.Fatalf("spawned %d, selects %v, list in %s", len(f.spawned), f.selects, f.stage())
+	}
+}
+
+// A move that fails forgets the focus it was for, so the retry after the
+// next listing does not take the keyboard.
+func TestAFailedMoveForgetsTheFocus(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	f.moveErr = errors.New("tmux join-pane: boom")
+	m = pressSettled(t, m, "c")
+	if m.entering != "" || len(f.selects) != 0 {
+		t.Fatalf("entering %q, selects %v", m.entering, f.selects)
+	}
+	f.moveErr = nil
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.landed})
+	settle(t, m, cmd)
+	if !f.staged(m.opened.ID) || len(f.selects) != 0 {
+		t.Fatalf("list in %s, selects %v", f.stage(), f.selects)
+	}
+}
+
+// A listing answered while a spawn is in flight may show its pane without
+// its options, so it is dropped even though it was asked for after the
+// last spawn landed.
+func TestAListingDuringASpawnIsDropped(t *testing.T) {
+	f := newFakeMux()
+	bg := row("b1", "bgwork", "nightly", 0)
+	bg.Kind, bg.ID = "background", "abc123"
+	m := stagedModel(t, f, bg)
+	m, spawned := press(m, "enter")
+	gen := m.landed
+	p, _ := f.Spawn("ov", "", nil, "claude", "attach", "abc123") // not yet marked
+	m, _ = step(m, panesMsg{panes: slices.Clone(f.panes), gen: gen})
+	if m.alive(p.ID) {
+		t.Fatalf("a listing taken mid-spawn shows %s", p.ID)
+	}
+	settle(t, m, spawned)
+}
+
+// A refresh that read the pinned projects before a pin landed does not
+// take the pin away again.
+func TestARefreshFromBeforeAPinKeepsThePin(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	stale := m.rowsMsg(nil, nil, nil, nil)
+	m.pins++ // as pressing enter in the picker does
+	m, _ = step(m, pinnedMsg{root: "/code/new"})
+	if m.sel != "project:/code/new" {
+		t.Fatalf("sel %s after the pin", m.sel)
+	}
+	m, cmd := step(m, stale)
+	m = settle(t, m, cmd)
+	if !slices.Contains(m.pinned, "/code/new") || m.sel != "project:/code/new" {
+		t.Fatalf("a stale refresh: pinned %v, sel %s", m.pinned, m.sel)
 	}
 }

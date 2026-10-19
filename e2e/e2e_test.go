@@ -535,3 +535,54 @@ func TestTerminalsAndProjects(t *testing.T) {
 		return ok && strings.Count(s, "no sessions") == 1 && strings.Contains(s, "zother"), say + "\n" + s
 	})
 }
+
+// Claude typed into a terminal makes it a session, and while the keyboard
+// is in it the list stays beside it, though the terminal's entry went and
+// the cursor's rules would move it to the session before.
+func TestTheListStaysWhileYouType(t *testing.T) {
+	r := launch(t, "k")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the session in the list", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "e2e-0"), s
+	})
+
+	before = r.ov.panes()
+	r.press("t")
+	shell := r.fresh(t, "a terminal window", before, isShell)
+	waitFor(t, "the terminal shown and focused", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), shell.id, 0)
+		return ok && r.active() == shell.id && strings.Contains(r.screen(), "$ "), say + ", active " + r.active()
+	})
+
+	// The shell becomes what claude would be, keeping its pid, and claude
+	// lists it.
+	r.ov.must("send-keys", "-t", shell.id, "exec sleep 600", "Enter")
+	waitFor(t, "the command to run", func() (bool, string) {
+		for _, p := range r.ov.panes() {
+			if p.id == shell.id {
+				return p.command == "sleep", p.command
+			}
+		}
+		return false, "the pane is gone"
+	})
+	r.lists(t, r.work, session, shell)
+	waitFor(t, "the terminal listed as a session", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "e2e-1") && !strings.Contains(s, "$ "), s
+	})
+	for range 6 { // three seconds: a refresh and some listings
+		ok, say := beside(r.ov.panes(), shell.id, 0)
+		if !ok || r.active() != shell.id {
+			t.Fatalf("the list moved while typing: %s, active %s", say, r.active())
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}

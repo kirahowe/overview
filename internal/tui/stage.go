@@ -63,6 +63,7 @@ const (
 type spawn struct {
 	kind    spawnKind
 	key     string // the background session's ID, for spawnAttach
+	sel     string // the cursor's entry when it was asked for
 	name    string // what to call it in a note
 	session string
 	dir     string // the project root, for spawnSession and spawnTerminal
@@ -91,8 +92,8 @@ func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
 
 type (
 	panesTick time.Time
-	// panesMsg is a listing of tmux's panes. gen is the model's spawns
-	// when it was asked for: see model.spawns.
+	// panesMsg is a listing of tmux's panes. gen is the model's landed
+	// spawns when it was asked for: see model.spawns.
 	panesMsg struct {
 		panes []tmux.Pane
 		roots roots // of the panes' directories
@@ -204,9 +205,19 @@ func stageCmd(mux multiplexer, find func(...string) roots, list string, mv shift
 	}
 }
 
+// startPane asks for sp's pane, which is pending until its Cmd lands.
+func (m model) startPane(sp spawn) (model, tea.Cmd) {
+	m.spawns++
+	return m, spawnCmd(m.mux, sp)
+}
+
+// current says whether a listing asked for when gen spawns had landed
+// can be taken: no spawn is pending, and none landed since.
+func (m model) current(gen int) bool { return m.spawns == m.landed && gen == m.landed }
+
 // spawnCmd starts sp's pane and sets its options straight after, so a
-// listing taken later sees them. One taken in between is dropped: see
-// model.spawns.
+// listing taken later sees them. One answered in between may show the
+// pane without them, and is dropped: see model.spawns.
 func spawnCmd(mux multiplexer, sp spawn) tea.Cmd {
 	return func() tea.Msg {
 		p, err := mux.Spawn(sp.session, sp.dir, sp.env, sp.command...)
@@ -261,6 +272,12 @@ func (m model) holder() string {
 	return ""
 }
 
+// windowOf is the window pane id is in, "" when it is not listed.
+func (m model) windowOf(id string) string {
+	p, _ := m.pane(id)
+	return p.Window
+}
+
 func (m model) alive(id string) bool {
 	_, ok := m.pane(id)
 	return ok
@@ -289,11 +306,23 @@ func (m model) paneOf(r fleet.Row) string {
 	}
 	tty := m.ttys[r.PID]
 	for _, p := range m.panes {
-		if tty != "" && p.TTY == tty && p.ID != m.self {
+		if tty != "" && p.TTY == tty && p.ID != m.self && p.Session == m.session {
 			return p.ID
 		}
 	}
 	return ""
+}
+
+// elsewhere says whether an interactive session runs in a pane of another
+// session on this server, such as another home's view.
+func (m model) elsewhere(r fleet.Row) bool {
+	tty := m.ttys[r.PID]
+	for _, p := range m.panes {
+		if tty != "" && p.TTY == tty && p.Session != m.session {
+			return true
+		}
+	}
+	return false
 }
 
 // want is the pane whose window the list belongs in: a session just started with
@@ -344,26 +373,32 @@ func (m model) restage() (model, tea.Cmd) {
 	if m.mux == nil || m.staging || want == "" || want == m.failed {
 		return m, nil
 	}
-	if mv, ok := plan(m.self, want, m.panes); ok {
+	// With the keyboard outside the list, the list stays beside the pane
+	// the user is in, unless an action asked to go somewhere.
+	if mv, ok := plan(m.self, want, m.panes); ok && (!m.blurred || m.entering != "") {
 		m.staging = true
-		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.spawns)
+		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.landed)
 	}
 	var cmds []tea.Cmd
-	if m.entering {
-		m.entering = false
+	// The focus moves only to the pane it was asked for, once the list is
+	// beside it. A cursor that moved on has cleared it already.
+	if target := m.entering; target != "" {
+		m.entering = ""
 		mux, self, beside := m.mux, m.self, m.besideTerminal(want)
-		cmds = append(cmds, func() tea.Msg {
-			err := error(nil)
-			if beside {
-				err = mux.SelectBeside(self)
-			} else {
-				err = mux.Select(want)
-			}
-			if err != nil {
-				return noteMsg(err.Error())
-			}
-			return nil
-		})
+		if target == want && m.stageOf(m.panes) == m.windowOf(want) {
+			cmds = append(cmds, func() tea.Msg {
+				err := error(nil)
+				if beside {
+					err = mux.SelectBeside(self)
+				} else {
+					err = mux.Select(want)
+				}
+				if err != nil {
+					return noteMsg(err.Error())
+				}
+				return nil
+			})
+		}
 	}
 	if p, ok := m.pane(want); ok && want == m.holder() {
 		if text := m.holderText(p.W, p.H); text != m.holderShown {
@@ -374,16 +409,28 @@ func (m model) restage() (model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// movedSelf is panes with the list's own pane as listing has it.
+func movedSelf(panes, listing []tmux.Pane, self string) []tmux.Pane {
+	i := slices.IndexFunc(panes, func(p tmux.Pane) bool { return p.ID == self })
+	j := slices.IndexFunc(listing, func(p tmux.Pane) bool { return p.ID == self })
+	if i < 0 || j < 0 {
+		return panes
+	}
+	out := slices.Clone(panes)
+	out[i] = listing[j]
+	return out
+}
+
 // stageUpdate handles the messages that come back from tmux.
 func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case panesTick:
-		return m, tea.Batch(listPanes(m.mux, m.deps.roots, m.spawns), panesEveryTick())
+		return m, tea.Batch(listPanes(m.mux, m.deps.roots, m.landed), panesEveryTick())
 	case panesMsg:
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
 		}
-		if msg.gen < m.spawns {
+		if !m.current(msg.gen) {
 			return m, nil // it may show a spawned pane without its options
 		}
 		// A move that failed is tried again once tmux has been reread.
@@ -391,20 +438,26 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.failed = ""
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
-			return m, spawnCmd(m.mux, spawn{kind: spawnHolder, session: m.session, command: []string{m.exe, "stage"}})
+			return m.startPane(spawn{kind: spawnHolder, session: m.session, command: []string{m.exe, "stage"}})
 		}
 	case stagedMsg:
 		m.staging = false
 		if msg.err != nil {
-			m.failed = msg.to
+			m.failed, m.entering = msg.to, ""
 			m = m.say("could not show the session: " + msg.err.Error())
 		}
-		if msg.panes != nil && msg.gen >= m.spawns {
+		switch {
+		case msg.panes == nil:
+		case m.current(msg.gen):
 			m = m.setPanes(msg.panes, msg.roots)
+		default:
+			// The rest may be stale, but where the list went is not.
+			m.panes = movedSelf(m.panes, msg.panes, m.self)
 		}
 		// The holder may have been resized, so draw it afresh.
 		m.holderShown = ""
 	case spawnedMsg:
+		m.landed++
 		if msg.kind == spawnHolder {
 			m.spawningHolder = false
 		}
@@ -417,19 +470,21 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// Known now, though the next listing is yet to come. A listing
 		// asked for before this point may lack it or its options.
 		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
-		m.spawns++
 		switch msg.kind {
 		case spawnHolder:
 			m.holderShown = ""
 		case spawnAttach:
-			m.entering = true
+			// Only if the cursor is still on the session it is for.
+			if m.sel == msg.sel {
+				m.entering = msg.pane.ID
+			}
 		case spawnSession:
-			m.opened, m.entering = msg.pane, true
+			m.opened, m.entering = msg.pane, msg.pane.ID
 			m = m.say("started " + msg.name)
 		case spawnTerminal:
 			// A terminal is listed as soon as its pane is, so the cursor
 			// takes it at once.
-			m.sel, m.confirm, m.opened, m.entering = msg.pane.Window, "", tmux.Pane{}, true
+			m.sel, m.confirm, m.opened, m.entering = msg.pane.Window, "", tmux.Pane{}, msg.pane.ID
 			if m.filter != "" && !m.shown(m.sel) {
 				m.filter, m.filtering = "", false
 			}
@@ -440,7 +495,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m.say(msg.err.Error()), nil
 		}
 		m = m.say(msg.note)
-		if msg.gen >= m.spawns {
+		if m.current(msg.gen) {
 			m = m.setPanes(msg.panes, msg.roots)
 		}
 	}
@@ -567,6 +622,8 @@ func (m model) stageHint(r fleet.Row) string {
 		return "A background session. enter attaches to it here."
 	case away:
 		return "" // the details say where it is
+	case m.elsewhere(r):
+		return "This session runs in another overview session."
 	case m.ttys[r.PID] != "":
 		return "This session runs in " + m.ttys[r.PID] + ", outside overview's tmux, so it cannot be shown here."
 	}

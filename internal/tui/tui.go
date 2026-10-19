@@ -47,6 +47,7 @@ type (
 		ttys   map[int]string
 		hosts  map[int]host
 		pinned []string
+		pinGen int // the model's pinsLanded when it was asked for
 		roots  roots
 		err    error
 	}
@@ -109,21 +110,31 @@ type model struct {
 	// tmux, as stage.go describes. mux is nil outside tmux, and then
 	// nothing is staged. The view runs in pane self of session. exe starts
 	// the holder.
-	mux               multiplexer
-	self, session     string
-	exe               string
-	panes             []tmux.Pane
-	failed            string
-	staging, entering bool
-	spawningHolder    bool
-	holderShown       string
-	// spawns counts the panes started with options to set. A listing asked
-	// for before the latest of them came back is dropped, since it may show
-	// that pane before its options were set.
-	spawns int
+	mux            multiplexer
+	self, session  string
+	exe            string
+	panes          []tmux.Pane
+	failed         string
+	staging        bool
+	spawningHolder bool
+	holderShown    string
+	// entering is the pane an action asked to move the keyboard into, ""
+	// for none. It is cleared when the cursor moves or the move there
+	// fails, so it never focuses a pane the user has since left.
+	entering string
+	// spawns counts the panes asked for, which all get options set, and
+	// landed those whose Cmd has come back. A listing is taken only when
+	// none is pending and it was asked for after the latest one landed:
+	// any other may show a pane before its options were set.
+	spawns, landed int
+	// pins counts the writes to the pinned projects asked for, and
+	// pinsLanded those done. A refresh that read the file before the
+	// latest write landed is not taken for the pins.
+	pins, pinsLanded int
 	// opened is the pane c started, shown until its session is listed.
 	opened tmux.Pane
-	// blurred is set while the focus is in another pane.
+	// blurred is set while the focus is in another pane. The list then
+	// stays where it is, and the cursor follows its window.
 	blurred bool
 
 	// pick is the add-project picker, open while it takes the list pane.
@@ -219,7 +230,7 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.refresh, tick(), nextFrame()}
 	if m.mux != nil {
 		// The first listing also starts a holder when there is none.
-		cmds = append(cmds, listPanes(m.mux, m.deps.roots, m.spawns), panesEveryTick())
+		cmds = append(cmds, listPanes(m.mux, m.deps.roots, m.landed), panesEveryTick())
 	}
 	return tea.Batch(cmds...)
 }
@@ -250,7 +261,7 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host
 	for _, r := range rows {
 		dirs = append(dirs, r.Cwd)
 	}
-	return rowsMsg{rows, ttys, hosts, pinned, m.deps.roots(dirs...), nil}
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), nil}
 }
 
 func (m model) runDigest() tea.Msg {
@@ -338,7 +349,7 @@ func (m model) moveTo(es []entry, i int) model {
 	}
 	i = max(0, min(i, len(es)-1))
 	if k := es[i].key(); k != m.sel {
-		m.sel, m.confirm, m.opened = k, "", tmux.Pane{}
+		m.sel, m.confirm, m.opened, m.entering = k, "", tmux.Pane{}, ""
 	}
 	return m
 }
@@ -417,13 +428,72 @@ func (m model) stick(before model) model {
 	return m
 }
 
+// keepCursor puts the cursor where it belongs once rows and panes have
+// come and gone. While the keyboard is outside the list, the cursor
+// follows the list's window, which stays where the user is typing: it
+// goes to an entry that is there, if one is. Otherwise, as while the list
+// has the keyboard, it stays on a shown entry, near where it was, and in
+// the window it was in when its session ended there.
+func (m model) keepCursor(before model) model {
+	if m.blurred {
+		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.panes), m.sel); ok {
+			if key != m.sel {
+				m.sel, m.confirm = key, ""
+			}
+			return m
+		}
+	}
+	return m.stick(before).keepNear(before).keepSel()
+}
+
+// place is an entry's key and the window its pane is in, "" when it has
+// no pane on this server.
+type place struct{ key, window string }
+
+// placed is where each entry's pane is.
+func (m model) placed(es []entry) []place {
+	out := make([]place, len(es))
+	for i, e := range es {
+		out[i].key = e.key()
+		switch e.kind {
+		case sessionEntry:
+			if p, ok := m.pane(m.paneOf(e.row)); ok {
+				out[i].window = p.Window
+			}
+		case terminalEntry:
+			out[i].window = e.term.Window
+		}
+	}
+	return out
+}
+
+// follow is the entry the cursor takes while the keyboard is outside the
+// list: one whose pane is in the list's window, stage, preferring sel when
+// it is one of them. ok is false when none is there.
+func follow(ps []place, stage, sel string) (string, bool) {
+	if stage == "" {
+		return "", false
+	}
+	found := ""
+	for _, p := range ps {
+		if p.window != stage {
+			continue
+		}
+		if p.key == sel {
+			return sel, true
+		}
+		if found == "" {
+			found = p.key
+		}
+	}
+	return found, found != ""
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m
 	next, cmd := m.update(msg)
 	m = next.(model)
-	// Rows and panes come and go: keep the cursor on a shown entry, and in
-	// the window it was in when its session ended there.
-	m = m.stick(before).keepNear(before).keepSel()
+	m = m.keepCursor(before)
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
 		e, _, _ := m.selected(m.ordered())
@@ -473,7 +543,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rowsErr = msg.err; msg.err != nil {
 			return m, nil
 		}
-		m.rows, m.ttys, m.hosts, m.pinned, m.rowRoots, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.pinned, msg.roots, true
+		m.rows, m.ttys, m.hosts, m.rowRoots, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, true
+		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
+			m.pinned = msg.pinned
+		}
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.adopt()
 	case digestMsg:
@@ -492,11 +565,18 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pick.sel = max(0, min(m.pick.sel, len(m.pickMatches())-1))
 		}
 	case pinnedMsg:
-		if msg.err != nil {
+		m.pinsLanded++
+		switch {
+		case msg.err != nil && msg.unpin:
+			return m.say("could not unpin " + m.name(msg.root) + ": " + msg.err.Error()), nil
+		case msg.err != nil:
 			return m.say("could not add the project: " + msg.err.Error()), nil
+		case msg.unpin:
+			m.pinned = slices.DeleteFunc(slices.Clone(m.pinned), func(r string) bool { return r == msg.root })
+			return m.say("unpinned " + m.name(msg.root)), nil
 		}
 		if !slices.Contains(m.pinned, msg.root) {
-			m.pinned = append(slices.Clone(m.pinned), msg.root)
+			m.pinned = slices.Concat(m.pinned, []string{msg.root})
 		}
 		return m.toProject(msg.root).say("pinned " + m.name(msg.root)), nil
 	case doneMsg:
@@ -558,7 +638,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.spawns)
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.landed)
 			}
 		}
 		for _, r := range m.rows {
@@ -649,8 +729,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		case ok && e.kind == terminalEntry:
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
-			home, root, name := m.home, e.project, m.name(e.project)
-			return m, func() tea.Msg { return doneMsg{"unpinned " + name, home.UnpinProject(root)} }
+			m.pins++
+			home, root := m.home, e.project
+			return m, func() tea.Msg { return pinnedMsg{root: root, err: home.UnpinProject(root), unpin: true} }
 		case !isSession:
 			return m.say("nothing to stop"), nil
 		default:
@@ -689,7 +770,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if path == "" {
 			return m.say("nothing to add"), nil
 		}
-		m.pick = picker{}
+		m.pick, m.pins = picker{}, m.pins+1
 		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
 	case pickCancel:
 		m.pick = picker{}
@@ -817,7 +898,7 @@ func (m model) act(e entry) (model, tea.Cmd) {
 		if m.mux == nil {
 			return m.say("terminals open only inside overview's tmux"), nil
 		}
-		m.entering = true
+		m.entering = e.term.Pane
 		return m, nil
 	}
 	row := e.row
@@ -833,15 +914,15 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions open only inside overview's tmux"), nil
 	}
-	if m.paneOf(row) != "" {
-		m.entering = true
+	if p := m.paneOf(row); p != "" {
+		m.entering = p
 		return m, nil
 	}
 	if !row.Background() {
 		return m.say(m.stageHint(row)), nil
 	}
 	attach := m.home.AttachCmd(row.Live)
-	return m.say("attaching to " + row.Name + "…"), spawnCmd(m.mux, spawn{kind: spawnAttach, key: row.ID, name: row.Name,
+	return m.say("attaching to " + row.Name + "…").startPane(spawn{kind: spawnAttach, key: row.ID, sel: m.sel, name: row.Name,
 		session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach.Args})
 }
 
@@ -859,7 +940,7 @@ func (m model) start(dir string) (model, tea.Cmd) {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	where := m.name(dir)
-	return m.say("starting a session in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnSession, name: "a session in " + where,
+	return m.say("starting a session in " + where + "…").startPane(spawn{kind: spawnSession, name: "a session in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewCmd().Args})
 }
 
@@ -873,7 +954,7 @@ func (m model) openTerminal(dir string) (model, tea.Cmd) {
 		return m.say("terminals open only inside overview's tmux"), nil
 	}
 	where := m.name(dir)
-	return m.say("opening a terminal in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnTerminal, name: "a terminal in " + where,
+	return m.say("opening a terminal in " + where + "…").startPane(spawn{kind: spawnTerminal, name: "a terminal in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv()})
 }
 
