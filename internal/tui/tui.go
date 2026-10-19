@@ -124,20 +124,21 @@ type model struct {
 }
 
 // Run opens the view in the given theme and blocks until the user quits.
-// It runs in the pane Launch made for it in overview's tmux.
-func Run(home fleet.Home, llm string, theme Theme) error {
+// It runs in the pane Launch made for it in session, on the tmux server at
+// the socket path, and acts on no other server.
+func Run(home fleet.Home, llm string, theme Theme, socket, session string) error {
 	useTheme(theme)
 	m := newModel(home, llm)
 	m.cwd, _ = os.Getwd()
-	session, self := os.Getenv(envSession), os.Getenv("TMUX_PANE")
-	if session == "" || self == "" {
-		return errors.New("the view runs inside overview's tmux: start it with plain `overview`")
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	srv, ok := tmux.Here()
+	srv := tmux.At(socket, "")
+	self, ok, err := srv.Self(os.Getpid())
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return errors.New("the view runs inside overview's tmux: start it with plain `overview`")
 	}

@@ -27,6 +27,9 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview activity [flags]   print what sessions did since the last digest
   overview publish [file]     save a digest (from the file or stdin)
   overview hook               record a Claude Code hook event (reads stdin)
+  overview view --socket <path> --session <name> [flags]
+                              the list itself, which overview starts in its
+                              tmux (internal)
   overview stage              the pane the view draws details into (internal)
   overview themes [name]      list the themes, or print one as a file to edit
 
@@ -40,6 +43,8 @@ Flags:
                        file's theme line, then one-dark.
   --claude <path>      the claude to run. Defaults to the config file's
                        claude line, then claude on PATH.
+  --socket <name>      the name of overview's tmux socket. Defaults to the
+                       config file's socket line, then overview.
   --config <dir>       overview's own directory, holding the config file,
                        themes and tmux.conf (default ~/.config/overview)
   --orchestrator-dir <dir>
@@ -47,7 +52,7 @@ Flags:
                        beside the bin/ that holds overview)
 
 The config file is <config dir>/config, with key = value lines for home,
-theme and claude. A flag wins over the file.
+theme, socket and claude. A flag wins over the file.
 `
 
 func main() {
@@ -71,6 +76,10 @@ func main() {
 	fs.StringVar(&flags.Home, "home", "", "")
 	fs.StringVar(&flags.Theme, "theme", "", "")
 	fs.StringVar(&flags.Claude, "claude", "", "")
+	// --socket names the server, except to the view, which Launch gives
+	// the socket's path along with the session it runs in.
+	socket := fs.String("socket", "", "")
+	session := fs.String("session", "", "")
 	configDir := fs.String("config", "", "")
 	orchDir := fs.String("orchestrator-dir", "", "")
 	every := fs.Duration("every", time.Hour, "")
@@ -81,6 +90,9 @@ func main() {
 		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
 	}
 
+	if cmd != "view" {
+		flags.Socket = *socket
+	}
 	cfg, err := config.Load(*configDir, flags)
 	if err != nil {
 		fail(err)
@@ -98,13 +110,17 @@ func main() {
 	}
 	switch cmd {
 	case "":
+		// The view gets every setting as a flag, resolved, so it runs with
+		// exactly what this launch settled on.
+		view := []string{"--config", cfg.Dir, "--home", home.Dir, "--theme", cfg.Theme,
+			"--claude", cfg.Claude, "--orchestrator-dir", home.OrchestratorDir, "--model", *model}
+		if _, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
+			err = tui.Launch(home, cfg.Socket, cfg.Dir, os.Args[1:], view)
+		}
+	case "view":
 		var theme tui.Theme
-		switch theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); {
-		case err != nil:
-		case tui.InTmux():
-			err = tui.Run(home, *model, theme)
-		default:
-			err = tui.Launch(home, cfg.Dir, os.Args[1:])
+		if theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
+			err = tui.Run(home, *model, theme, *socket, *session)
 		}
 	case "sessions":
 		err = printSessions(home)

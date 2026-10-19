@@ -5,22 +5,43 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	"overview/internal/fleet"
 	"overview/internal/tmux"
 )
 
-func TestEnsureView(t *testing.T) {
+// privateServer is a real tmux server on a socket of its own, killed when
+// the test ends.
+func privateServer(t *testing.T, name, conf string) tmux.Server {
+	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	srv := tmux.On(fmt.Sprintf("overview-launch-%d", os.Getpid()), "/dev/null")
+	if name == "overview" {
+		t.Fatal("tests never use overview's own socket")
+	}
+	srv, err := tmux.Named(name, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { srv.Run("kill-server") }) //nolint:errcheck
-	home := fleet.Home{Dir: t.TempDir()}
+	return srv
+}
+
+func TestViewCommandAddressesTheServerByPath(t *testing.T) {
+	got := viewCommand("/bin/overview", "/tmp/tmux-501/ov", "overview-work", []string{"--theme", "revdiff"})
+	want := []string{"/bin/overview", "view", "--socket", "/tmp/tmux-501/ov", "--session", "overview-work", "--theme", "revdiff"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestEnsureView(t *testing.T) {
+	srv := privateServer(t, fmt.Sprintf("overview-launch-%d", os.Getpid()), "/dev/null")
 	// The view's stand-in marks its own pane, as Run does.
-	view := []string{"sh", "-c", `tmux -L "$1" set-option -p -t "$TMUX_PANE" @overview-list 1; sleep 300`, "sh", srv.Socket()}
+	view := []string{"sh", "-c", `tmux -S "$1" set-option -p -t "$TMUX_PANE" @overview-list 1; sleep 300`, "sh", srv.Socket()}
 
 	count := func() (list, all int) {
 		panes, err := srv.Panes()
@@ -47,7 +68,7 @@ func TestEnsureView(t *testing.T) {
 		t.Fatal("the view never marked its pane")
 	}
 
-	if err := ensureView(srv, "ov", home, view); err != nil {
+	if err := ensureView(srv, "ov", view, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
@@ -55,7 +76,7 @@ func TestEnsureView(t *testing.T) {
 		t.Fatalf("new session: %d list panes of %d", l, all)
 	}
 	// A view already there is left alone.
-	if err := ensureView(srv, "ov", home, view); err != nil {
+	if err := ensureView(srv, "ov", view, nil); err != nil {
 		t.Fatal(err)
 	}
 	if l, all := count(); l != 1 || all != 1 {
@@ -68,14 +89,14 @@ func TestEnsureView(t *testing.T) {
 		return out
 	}
 	before := pid()
-	if err := ensureView(srv, "ov", home, []string{"overview"}); err != nil {
+	if err := ensureView(srv, "ov", []string{"sleep", "300"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if pid() != before {
 		t.Fatal("a launch without flags restarted the view")
 	}
-	themed := append(append([]string{}, view...), "--theme", "one-dark")
-	if err := ensureView(srv, "ov", home, themed); err != nil {
+	themed := []string{"--theme", "one-dark"}
+	if err := ensureView(srv, "ov", view, themed); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
@@ -83,7 +104,7 @@ func TestEnsureView(t *testing.T) {
 		t.Fatalf("new flags: %d list panes of %d, restarted %v", l, all, pid() != before)
 	}
 	before = pid()
-	if err := ensureView(srv, "ov", home, themed); err != nil {
+	if err := ensureView(srv, "ov", view, themed); err != nil {
 		t.Fatal(err)
 	}
 	if pid() != before {
@@ -99,7 +120,7 @@ func TestEnsureView(t *testing.T) {
 	if _, err := srv.Run("kill-pane", "-t", panes[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureView(srv, "ov", home, view); err != nil {
+	if err := ensureView(srv, "ov", view, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
@@ -183,8 +204,7 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 	if err := os.WriteFile(key, []byte(binding+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srv := tmux.On(fmt.Sprintf("ovtest-bracket-%d", os.Getpid()), conf)
-	t.Cleanup(func() { srv.Run("kill-server") }) //nolint:errcheck
+	srv := privateServer(t, fmt.Sprintf("ovtest-bracket-%d", os.Getpid()), conf)
 	run := func(args ...string) string {
 		t.Helper()
 		out, err := srv.Run(args...)

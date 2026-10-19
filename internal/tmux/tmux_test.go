@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"pgregory.net/rapid"
 )
@@ -64,8 +64,20 @@ func testServer(t *testing.T) Server {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	sock := fmt.Sprintf("overview-test-%d", os.Getpid())
-	s := On(sock, "/dev/null")
+	return private(t, fmt.Sprintf("overview-test-%d", os.Getpid()))
+}
+
+// private is the server on the private socket name, killed when the test
+// ends.
+func private(t *testing.T, name string) Server {
+	t.Helper()
+	if name == "overview" {
+		t.Fatal("tests never use overview's own socket")
+	}
+	s, err := Named(name, "/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { s.Run("kill-server") }) //nolint:errcheck
 	return s
 }
@@ -170,8 +182,7 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	s := On(fmt.Sprintf("ovtest-move-%d", os.Getpid()), "/dev/null")
-	t.Cleanup(func() { s.Run("kill-server") }) //nolint:errcheck
+	s := private(t, fmt.Sprintf("ovtest-move-%d", os.Getpid()))
 	run := func(args ...string) string {
 		t.Helper()
 		out, err := s.Run(args...)
@@ -237,50 +248,82 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 	}
 }
 
-func TestSocketPath(t *testing.T) {
-	for _, c := range []struct {
-		env, path string
-		ok        bool
-	}{
-		{"/private/tmp/tmux-501/overview,123,0", "/private/tmp/tmux-501/overview", true},
-		{"/tmp/odd,name/sock,9,12", "/tmp/odd,name/sock", true},
-		{"", "", false},
-		{"/tmp/sock", "", false},
-		{",1,2", "", false},
-	} {
-		path, ok := SocketPath(c.env)
-		if path != c.path || ok != c.ok {
-			t.Errorf("SocketPath(%q) = %q, %v; want %q, %v", c.env, path, ok, c.path, c.ok)
+// SocketPath finds the path -L would use without leaving a server behind,
+// and the server At that path is the one -L name reaches.
+func TestSocketPathIsTheNamedSocket(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	name := fmt.Sprintf("ovtest-path-%d", os.Getpid())
+	path, err := SocketPath(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != name || !filepath.IsAbs(path) {
+		t.Fatalf("path %q for %s", path, name)
+	}
+	s := At(path, "/dev/null")
+	t.Cleanup(func() { s.Run("kill-server") }) //nolint:errcheck
+	if panes, err := s.Panes(); err != nil || panes != nil {
+		t.Fatalf("asking for the path left a server: %v, %v", panes, err)
+	}
+	p, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := SocketPath(name); err != nil || again != path {
+		t.Fatalf("with a server running: %q, %v; want %q", again, err, path)
+	}
+	out, err := exec.Command("tmux", "-L", name, "list-panes", "-a", "-F", "#{pane_id}").Output()
+	if err != nil || strings.TrimSpace(string(out)) != p.ID {
+		t.Fatalf("tmux -L %s sees %q, %v; want %s", name, out, err, p.ID)
+	}
+}
+
+func TestPaneOf(t *testing.T) {
+	out := "%0\t4100\n%3\t41\n\n%7\t410\ngarbage\t41\n"
+	for pid, want := range map[int]string{4100: "%0", 41: "%3", 410: "%7", 4: ""} {
+		if got, ok := PaneOf(out, pid); got != want || ok != (want != "") {
+			t.Errorf("PaneOf(%d) = %q, %v; want %q", pid, got, ok, want)
 		}
 	}
 }
 
-// A pane's $TMUX leads back to the server the pane runs in. The view relies
-// on this to never act on another server, such as the real one during a
-// trial run on a private socket.
-func TestHereIsTheServerThePaneRunsIn(t *testing.T) {
+// A command given as an argument list is the pane's own process, with no
+// shell between, which is what lets the view find its pane by its pid.
+func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	s := testServer(t)
-	out := filepath.Join(t.TempDir(), "tmux")
-	p, err := s.Spawn("ov", "", nil, "sh", "-c", `printf %s "$TMUX" > "$1"; sleep 300`, "sh", out)
+	p, err := s.Spawn("ov", "", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var env []byte
-	for i := 0; i < 100 && len(env) == 0; i++ {
-		time.Sleep(20 * time.Millisecond)
-		env, _ = os.ReadFile(out)
+	if _, err := s.Spawn("ov", "", nil, "sleep", "301"); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("TMUX", string(env))
-	here, ok := Here()
-	if !ok {
-		t.Fatalf("no server in $TMUX %q", env)
+	out, err := s.Run("display-message", "-p", "-t", p.ID, "#{pane_pid}")
+	if err != nil {
+		t.Fatal(err)
 	}
-	panes, err := here.Panes()
-	if err != nil || len(panes) != 1 || panes[0].ID != p.ID {
-		t.Fatalf("Here sees %v, %v; want only %s", panes, err, p.ID)
+	pid, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("TMUX", "")
-	if _, ok := Here(); ok {
-		t.Fatal("Here found a server outside tmux")
+	comm, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil || filepath.Base(strings.TrimSpace(string(comm))) != "sleep" {
+		t.Fatalf("pane %s runs %q, %v; want sleep itself", p.ID, comm, err)
+	}
+	if id, ok, err := s.Self(pid); err != nil || !ok || id != p.ID {
+		t.Fatalf("Self(%d) = %q, %v, %v; want %s", pid, id, ok, err, p.ID)
+	}
+	if _, ok, err := s.Self(os.Getpid()); err != nil || ok {
+		t.Fatalf("the test process is in pane: %v, %v", ok, err)
+	}
+	// respawn-pane runs an argument list the same way.
+	if err := s.Respawn(p.ID, nil, "sleep", "302"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = s.Run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
+	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
+		t.Fatalf("after respawn: %q", out)
 	}
 }

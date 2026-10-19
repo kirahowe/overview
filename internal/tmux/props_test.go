@@ -3,6 +3,7 @@ package tmux
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -166,6 +167,24 @@ func TestPropWithoutAbsentPane(t *testing.T) {
 		in := formatLayout(genLayout(t))
 		if out, err := Without(in, "%9999"); err == nil {
 			t.Fatalf("Without(%q, %%9999) = %q, want an error", in, out)
+		}
+	})
+}
+
+// PaneOf finds the pane listed with the pid, and no pane when none is.
+func TestPropPaneOfFindsTheListedPid(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		pids := rapid.SliceOfDistinct(rapid.IntRange(1, 99999), rapid.ID[int]).Draw(t, "pids")
+		var b strings.Builder
+		ids := map[int]string{}
+		for i, pid := range pids {
+			ids[pid] = fmt.Sprintf("%%%d", i)
+			fmt.Fprintf(&b, "%s\t%d\n", ids[pid], pid)
+		}
+		pid := rapid.IntRange(1, 99999).Draw(t, "pid")
+		got, ok := PaneOf(b.String(), pid)
+		if want, listed := ids[pid]; got != want || ok != listed {
+			t.Fatalf("PaneOf(%d) = %q, %v; want %q, %v in\n%s", pid, got, ok, want, listed, b.String())
 		}
 	})
 }

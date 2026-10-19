@@ -5,23 +5,11 @@ package tmux
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
-
-// Socket names overview's server, so it never shares one with other tmux use.
-// OVERVIEW_TMUX_SOCKET picks another, so a trial run keeps off the real one.
-var Socket = socket()
-
-func socket() string {
-	if s := os.Getenv("OVERVIEW_TMUX_SOCKET"); s != "" {
-		return s
-	}
-	return "overview"
-}
 
 // ListOption marks the pane the view runs in, so a relaunch can tell
 // whether the view is still there.
@@ -47,46 +35,43 @@ type Server struct {
 	socket string
 }
 
-// Socket is the socket name the server listens on.
+// Socket is the path of the socket the server listens on.
 func (s Server) Socket() string { return s.socket }
 
-// New returns overview's real server. conf is read only by the call that
-// starts the server; "" leaves tmux to its defaults.
-func New(conf string) Server { return On(Socket, conf) }
-
-// On returns the server on another socket. Tests use it to keep off the
-// real one.
-func On(socket, conf string) Server {
-	base := []string{"-L", socket}
+// At returns the server listening on the socket at path. conf is read only
+// by the call that starts the server; "" leaves tmux to its defaults.
+func At(path, conf string) Server {
+	base := []string{"-S", path}
 	if conf != "" {
 		base = append(base, "-f", conf)
 	}
-	return Server{socket: socket, Run: runner(base)}
+	return Server{socket: path, Run: runner(base)}
 }
 
-// Here returns the server the calling process runs inside, as $TMUX names
-// it, so a process started in one server never acts on another, whatever
-// OVERVIEW_TMUX_SOCKET says. ok is false outside tmux.
-func Here() (s Server, ok bool) {
-	path, ok := SocketPath(os.Getenv("TMUX"))
-	if !ok {
-		return Server{}, false
+// Named returns the server on the socket that tmux -L name would use, found
+// once and then addressed by its path.
+func Named(name, conf string) (Server, error) {
+	path, err := SocketPath(name)
+	if err != nil {
+		return Server{}, err
 	}
-	return Server{socket: filepath.Base(path), Run: runner([]string{"-S", path})}, true
+	return At(path, conf), nil
 }
 
-// SocketPath is the socket path in a $TMUX value, which tmux writes as
-// "path,pid,session". ok is false when there is none.
-func SocketPath(env string) (string, bool) {
-	i := strings.LastIndexByte(env, ',')
-	if i < 0 {
-		return "", false
+// SocketPath asks tmux where the socket that -L name uses lives. With no
+// server running, start-server makes one only for the length of the call,
+// since a server with no sessions exits, and -f /dev/null keeps that one
+// from reading any settings.
+func SocketPath(name string) (string, error) {
+	out, err := runner([]string{"-L", name, "-f", "/dev/null"})("start-server", ";", "display-message", "-p", "#{socket_path}")
+	if err != nil {
+		return "", err
 	}
-	j := strings.LastIndexByte(env[:i], ',')
-	if j <= 0 {
-		return "", false
+	path := strings.TrimSpace(out)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("tmux gave %q as the path of socket %s", out, name)
 	}
-	return env[:j], true
+	return path, nil
 }
 
 func runner(base []string) func(args ...string) (string, error) {
@@ -122,6 +107,34 @@ func ParsePanes(out string) []Pane {
 		})
 	}
 	return panes
+}
+
+// PaneOf finds the pane whose process is pid in list-panes output in
+// pidFormat. A process that tmux started directly, from an argument list
+// rather than a shell command, is its pane's process.
+func PaneOf(out string, pid int) (string, bool) {
+	want := strconv.Itoa(pid)
+	for _, line := range strings.Split(out, "\n") {
+		id, p, ok := strings.Cut(line, "\t")
+		if ok && p == want && strings.HasPrefix(id, "%") {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// pidFormat is how Self asks for each pane's process.
+const pidFormat = "#{pane_id}\t#{pane_pid}"
+
+// Self is the pane that pid, the caller's own process, runs as. ok is false
+// when it runs in no pane on this server.
+func (s Server) Self(pid int) (id string, ok bool, err error) {
+	out, err := s.Run("list-panes", "-a", "-F", pidFormat)
+	if err != nil {
+		return "", false, err
+	}
+	id, ok = PaneOf(out, pid)
+	return id, ok, nil
 }
 
 // Panes lists every pane on the server. No server means no panes.

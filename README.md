@@ -40,7 +40,9 @@ in `<home>/overview/digests/`.
 ## The view
 
 `overview` runs in a tmux server of its own, on the socket `overview`, and
-attaches your terminal to it. The list of sessions runs down the left side,
+attaches your terminal to it. `--socket <name>` or a `socket =` line in the
+config file picks another name, which keeps a trial run off the server you
+use. The list of sessions runs down the left side,
 and the selected session itself takes the rest, live, so you can read it and
 type into it without leaving the list. Run `overview` again from
 any terminal and you get the same view back, with every session still running.
@@ -116,12 +118,16 @@ environment variable overview sets or reads.
 overview takes its settings from flags and from one file,
 `~/.config/overview/config`, and reads them once when it starts. `--config
 <dir>` uses another directory in place of `~/.config/overview`, for the
-file, the themes and `tmux.conf` alike. The file holds `key = value` lines,
-and lines starting with `#` are comments:
+file, the themes and `tmux.conf` alike. The file holds `key = value` lines
+for `home`, `theme`, `socket` and `claude`, each taking what its flag takes.
+Lines starting with `#` are comments, and a comment cannot follow a value on
+the same line:
 
 ```
-home   = work          # what --home takes
-theme  = revdiff       # what --theme takes
+# the Claude Code config directory to watch
+home   = work
+theme  = revdiff
+socket = overview
 claude = /opt/bin/claude
 ```
 
@@ -130,6 +136,11 @@ an error. `--claude` and `claude =` pick the claude that overview runs, by
 default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
+
+The list itself runs as `overview view`, which overview starts in its tmux
+with every setting given as a flag, including the path of the tmux socket.
+It finds its own pane by its process id and talks to no other tmux server.
+You never need to run it yourself.
 
 ## Themes
 
