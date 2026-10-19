@@ -31,8 +31,9 @@ type Home struct {
 
 // ResolveHome finds the config directory that spec names, as --home or the
 // config file's home line gives it. A bare name such as "work" means
-// ~/.claude-work, and ~ is user, the user's home directory. There is no default: someone with several config
-// directories would see an empty fleet from a guess, with nothing saying why.
+// ~/.claude-work, and ~ is user, the user's home directory. There is no
+// default: someone with several config directories would see an empty
+// fleet from a guess, with nothing saying why.
 func ResolveHome(spec, user string) (string, error) {
 	dir := spec
 	if dir == "" {

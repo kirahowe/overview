@@ -11,10 +11,20 @@ See README.md for behaviour and docs/ for design notes.
   commit. `scripts/check --deep [n]` also reruns property tests with n
   cases each, 2000 by default.
 - A single package: `go test -race ./internal/fleet`.
-- `scripts/e2e` builds the binary and drives it in two private tmux servers
-  (`ovtest-e2e-<pid>`, `ovtest-e2e-term-<pid>`): launch, the holder, `c`,
-  splits and the list's width. It builds only with `-tags e2e`, so the gate
-  skips it; run it after changing launch, the view or tmux handling.
+- `scripts/e2e` builds the binary and drives it in pairs of private tmux
+  servers (`ovtest-e2e-<tag><pid>` and `ovtest-e2e-term-<tag><pid>`, the
+  second holding the terminals overview is launched in). It covers launch
+  and the holder; `c` and the list moving into a session's window; splits
+  staying with their window and the list keeping its dragged width; a
+  relaunch restarting the view for new flags, a theme given as a relative
+  path and a changed config file, and only attaching otherwise; `t`, a
+  terminal's place in the list and the keyboard moving into it; a session
+  that exits beside a split leaving its window as a terminal; `x` closing
+  a terminal with the list in it; pinned projects, `c` in one and `a` with
+  a typed path and `tab`; the list staying put while a terminal becomes a
+  session under the keyboard; and `q` detaching only the terminal it was
+  typed in. It builds only with `-tags e2e`, so the gate skips it; run it
+  after changing launch, the view or tmux handling.
 - Never point a test or a trial run at the `overview` socket, not even to
   read it. Use `--socket <name>` and `--config <dir>`.
 - Go 1.27 or later, no cgo.

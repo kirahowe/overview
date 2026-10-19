@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# The end-to-end test: builds overview and drives it in two private tmux
-# servers, ovtest-e2e-<pid> and ovtest-e2e-term-<pid>, which it kills when
-# it ends. It never touches the overview socket. Needs tmux.
+# The end-to-end tests: build overview and drive it in pairs of private
+# tmux servers, ovtest-e2e-<tag><pid> and ovtest-e2e-term-<tag><pid>,
+# which each test kills, removing their sockets, when it ends. They never
+# touch the overview socket. Needs tmux.
 #   scripts/e2e [go test flags]
 set -euo pipefail
 cd "$(dirname "$0")/.."

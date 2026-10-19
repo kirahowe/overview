@@ -13,8 +13,9 @@ overview digest             # write a digest now
 `--home` takes a path or a short name: `work` means `~/.claude-work`. Without
 the flag, the `home =` line of overview's config file decides. With neither,
 overview stops rather than guess, so pass `--home ~/.claude` for Claude
-Code's default directory. One process looks at one config directory, and all of its state lives in `<home>/overview/`, so personal and
-work sessions never appear together.
+Code's default directory. One process looks at one config directory, and
+all of its state lives in `<home>/overview/`, so personal and work
+sessions never appear together.
 
 ## How it works
 
@@ -104,16 +105,17 @@ matches across two of them. The cursor moves to the first match, `up` and
 `tab`) moves the keyboard into the selected session, and `ctrl+[` brings it
 back to the list from any pane on the right. On a background session,
 `enter` first attaches to it in a window of its own; the attach stays there
-for when you come back to it. On a session in another app, `enter` brings that app to the front. While you are
-searching, `enter` acts on the selected match and clears the search. On a
+for when you come back to it. On a session in another app, `enter` brings
+that app to the front. While you are searching, `enter` acts on the
+selected match and clears the search. On a
 terminal, `enter` moves the keyboard into the pane right of the list, and of
 several splits there, the one you used last. `x` stops a background session
 or closes a terminal, and asks first; closing a terminal kills what runs in
 it. `y` copies the attach command. To end a session in another app, close
 it in that app. `c` starts a new session at the root of the selected entry's
-project, or where overview was started when the list is empty, and shows it
-on the right. `t` opens a terminal there instead, shows it and moves the
-keyboard into it. `d` shows the digests,
+project, or where overview was started when the list is empty, shows it on
+the right and moves the keyboard into it. `t` does the same with a
+terminal. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `q`
 detaches, leaving the view and its sessions running, and `Q` quits the view.
 `?` lists every key.
@@ -134,8 +136,8 @@ The mouse works too. A click selects a session, a double click moves the
 keyboard into it as `enter` does, and the wheel moves through the list and
 scrolls the digests. A click also closes help and cancels a stop. tmux has
 the mouse on, so a click on a pane focuses it, and you can drag the borders
-between panes. The list keeps the width you drag it to. Most terminals, Ghostty included, select text when
-you hold shift.
+between panes. The list keeps the width you drag it to. Most terminals,
+Ghostty included, select text when you hold shift.
 
 The first run writes overview's tmux settings to `tmux.conf` in overview's
 config directory (`~/.config/overview` unless `--config` names another).
@@ -172,8 +174,8 @@ claude = /opt/bin/claude
 A flag wins over the file, and the file over the default. An unknown key is
 an error. A theme or claude given as a path, with a `/` in it, may start
 with `~/`. A relative one is from the current directory in a flag and from
-the config directory in the file. `--claude` and `claude =` pick the claude that overview runs, by
-default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
+the config directory in the file. `--claude` and `claude =` pick the claude
+that overview runs, by default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
 
