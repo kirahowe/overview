@@ -1394,3 +1394,24 @@ type failSpawn struct{ *fakeMux }
 func (f failSpawn) Spawn(string, string, []string, ...string) (tmux.Pane, error) {
 	return tmux.Pane{}, errors.New("boom")
 }
+
+// A terminal closed while a spawn is in flight: the listing that comes
+// back is not taken, but the closed window's panes go all the same, so no
+// move aims at them.
+func TestATerminalClosedMidSpawnLeavesNoDeadPanes(t *testing.T) {
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "t")
+	win := m.sel
+	m, cmd := press(m, "x", "y")
+	m.spawns++ // a spawn asked for meanwhile
+	m = settle(t, m, cmd)
+	for _, p := range m.panes {
+		if p.Window == win {
+			t.Fatalf("%s of the closed window %s is still listed", p.ID, win)
+		}
+	}
+	if m.stageOf(m.panes) != f.stage() {
+		t.Fatalf("the model has the list in %s, tmux in %s", m.stageOf(m.panes), f.stage())
+	}
+}

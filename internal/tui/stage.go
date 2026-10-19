@@ -504,6 +504,11 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m = m.say(msg.note)
 		if m.current(msg.gen) {
 			m = m.setPanes(msg.panes, msg.roots)
+		} else {
+			// The rest may be stale, but the window is gone and the list
+			// is where it went, so no move aims at a closed pane.
+			gone := slices.DeleteFunc(slices.Clone(m.panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
+			m.panes = movedSelf(gone, msg.panes, m.self)
 		}
 	}
 	return m, nil
@@ -538,11 +543,12 @@ func (m model) shown(key string) bool {
 
 // closedMsg answers closeCmd with the panes after the window closed.
 type closedMsg struct {
-	note  string
-	panes []tmux.Pane
-	roots roots
-	gen   int
-	err   error
+	note   string
+	window string // the window closed
+	panes  []tmux.Pane
+	roots  roots
+	gen    int
+	err    error
 }
 
 // closeCmd closes a terminal's window, and everything that runs in it.
@@ -570,7 +576,7 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 			return fail(err)
 		}
 		panes, rs, err := readPanes(mux, find)
-		return closedMsg{"closed " + t.Title, panes, rs, gen, err}
+		return closedMsg{"closed " + t.Title, t.Window, panes, rs, gen, err}
 	}
 }
 
