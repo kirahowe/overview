@@ -177,7 +177,9 @@ A flag wins over the file, and the file over the default. An unknown key is
 an error. A theme or claude given as a path, with a `/` in it, may start
 with `~/`. A relative one is from the current directory in a flag and from
 the config directory in the file. `--claude` and `claude =` pick the claude
-that overview runs, by default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
+that overview runs, by default `claude` on your PATH, which overview looks
+up as it starts so the view and its panes run that one whatever PATH its
+tmux has. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
 

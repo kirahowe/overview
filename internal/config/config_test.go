@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,5 +90,21 @@ func TestLoad(t *testing.T) {
 	}
 	if _, err := Load(dir, Values{}, "/u", "/w"); err == nil {
 		t.Fatal("a misspelt key should fail")
+	}
+}
+
+// A claude named without a path is looked up once, and a path is kept.
+func TestFindClaude(t *testing.T) {
+	look := func(name string) (string, error) {
+		if name == "claude" {
+			return "/opt/bin/claude", nil
+		}
+		return "", errors.New(name + ": not found")
+	}
+	for in, want := range map[string]string{"claude": "/opt/bin/claude", "nope": "nope", "/x/claude": "/x/claude"} {
+		c := Config{Dir: "/d", User: "/u", Values: Values{Claude: in}}
+		if got := c.FindClaude(look).Claude; got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
 	}
 }

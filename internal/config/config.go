@@ -123,6 +123,20 @@ func Resolve(dir string, flags, file Values, user, cwd string) (Config, error) {
 	return c, nil
 }
 
+// FindClaude gives c the full path of a claude named without one, as look,
+// exec.LookPath outside tests, finds it on PATH. The processes overview
+// starts in tmux then run that claude, whatever the tmux server's PATH.
+// One look cannot find is left as it is, to fail where it is run.
+func (c Config) FindClaude(look func(string) (string, error)) Config {
+	if strings.ContainsRune(c.Claude, '/') {
+		return c
+	}
+	if p, err := look(c.Claude); err == nil {
+		c.Claude = absolute(p, c.User, c.Dir)
+	}
+	return c
+}
+
 // absolute makes v absolute when it is a path, one with a slash in it: a
 // leading ~/ is user, and a relative path is from base. A name, or a path
 // already absolute, is left as it is.
