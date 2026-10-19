@@ -45,6 +45,7 @@ type multiplexer interface {
 	Select(pane string) error
 	SelectBeside(pane string) error
 	KillWindow(window string) error
+	KillPane(pane string) error
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
@@ -227,6 +228,12 @@ func spawnCmd(mux multiplexer, sp spawn) tea.Cmd {
 		p, mark := sp.marked(p)
 		if mark != nil {
 			err = mark(mux)
+		}
+		// An unmarked holder is a holder no listing finds, so the next one
+		// would start another: it goes. Other panes run the user's work and
+		// stay, unmarked.
+		if err != nil && sp.kind == spawnHolder {
+			return spawnedMsg{sp, tmux.Pane{}, errors.Join(err, mux.KillPane(p.ID))}
 		}
 		return spawnedMsg{sp, p, err}
 	}
@@ -438,7 +445,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.failed = ""
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
-			return m.startPane(spawn{kind: spawnHolder, session: m.session, command: []string{m.exe, "stage"}})
+			return m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
 		}
 	case stagedMsg:
 		m.staging = false

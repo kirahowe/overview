@@ -256,6 +256,12 @@ func (s Server) SelectBeside(pane string) error {
 	return err
 }
 
+// KillPane closes a pane and ends what runs in it.
+func (s Server) KillPane(pane string) error {
+	_, err := s.run("kill-pane", "-t", pane)
+	return err
+}
+
 // KillWindow closes a window and ends everything that runs in it.
 func (s Server) KillWindow(window string) error {
 	_, err := s.run("kill-window", "-t", window)

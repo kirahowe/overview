@@ -146,6 +146,14 @@ func (f *fakeMux) KillWindow(window string) error {
 	return nil
 }
 
+func (f *fakeMux) KillPane(pane string) error {
+	if f.find(pane) < 0 {
+		return errors.New("can't find pane " + pane)
+	}
+	f.exit(pane)
+	return nil
+}
+
 // SelectBeside focuses a pane right of pane in its window: the first one
 // listed, which stands in for the one used last.
 func (f *fakeMux) SelectBeside(pane string) error {
@@ -1336,4 +1344,53 @@ func TestASearchLostWhileTypingKeepsTheListOnReturn(t *testing.T) {
 	if m.sel != sel || f.stage() != cur || m.filter != "" {
 		t.Fatalf("back in the list: sel %s, list in %s, filter %q", m.sel, f.stage(), m.filter)
 	}
+}
+
+// failMark is a tmux on which marking the holder fails.
+type failMark struct{ *fakeMux }
+
+func (f failMark) SetPaneOption(pane, name, value string) error {
+	if name == tmux.HolderOption {
+		return errors.New("set-option: boom")
+	}
+	return f.fakeMux.SetPaneOption(pane, name, value)
+}
+
+// A holder that cannot be marked is closed again, so listing after listing
+// does not leave a window of unmarked holders behind.
+func TestAHolderThatCannotBeMarkedIsClosed(t *testing.T) {
+	f := newFakeMux()
+	f.exit("%1")
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	m.mux = failMark{f}
+	for range 5 {
+		m = settle(t, m, listPanes(m.mux, m.deps.roots, m.landed))
+	}
+	for _, p := range f.panes {
+		if p.Command == "overview" {
+			t.Fatalf("a holder was left behind: %+v", f.panes)
+		}
+	}
+	if len(f.spawned) < 2 || !strings.Contains(m.note, "could not start the details pane") {
+		t.Fatalf("spawned %d, note %q", len(f.spawned), m.note)
+	}
+}
+
+// A spawn that fails lands all the same, so later listings are taken.
+func TestAFailedSpawnLetsListingsThrough(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	m.mux = failSpawn{f}
+	m = pressSettled(t, m, "t")
+	extra := f.add("ov", "ttys444")
+	m = settle(t, m, listPanes(m.mux, m.deps.roots, m.landed))
+	if m.spawns != m.landed || !m.alive(extra.ID) {
+		t.Fatalf("spawns %d, landed %d, listing taken %v", m.spawns, m.landed, m.alive(extra.ID))
+	}
+}
+
+type failSpawn struct{ *fakeMux }
+
+func (f failSpawn) Spawn(string, string, []string, ...string) (tmux.Pane, error) {
+	return tmux.Pane{}, errors.New("boom")
 }
