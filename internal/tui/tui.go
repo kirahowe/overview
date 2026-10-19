@@ -323,6 +323,48 @@ func stuck(win string, stillThere bool, es []entry) (string, bool) {
 	return "", false
 }
 
+// nearest is where the cursor goes when the entry it was on, sel, has gone:
+// to the first entry after sel in the old order that is still listed, or
+// else to the last one before it. ok is false when sel was not in the old
+// order, or nothing from it is left.
+func nearest(old []string, sel string, listed func(string) bool) (string, bool) {
+	i := slices.Index(old, sel)
+	if i < 0 {
+		return "", false
+	}
+	for _, k := range old[i+1:] {
+		if listed(k) {
+			return k, true
+		}
+	}
+	for j := i - 1; j >= 0; j-- {
+		if listed(old[j]) {
+			return old[j], true
+		}
+	}
+	return "", false
+}
+
+// keepNear applies nearest across one update, from the model before it,
+// when the entry under the cursor is no longer shown.
+func (m model) keepNear(before model) model {
+	if m.shown(m.sel) {
+		return m
+	}
+	var old []string
+	for _, e := range before.ordered() {
+		old = append(old, e.key())
+	}
+	now := map[string]bool{}
+	for _, e := range m.ordered() {
+		now[e.key()] = true
+	}
+	if key, ok := nearest(old, m.sel, func(k string) bool { return now[k] }); ok {
+		m.sel, m.confirm = key, ""
+	}
+	return m
+}
+
 // stick applies stuck across one update, from the model before it.
 func (m model) stick(before model) model {
 	e, _, ok := before.selected(before.ordered())
@@ -344,7 +386,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m = next.(model)
 	// Rows and panes come and go: keep the cursor on a shown entry, and in
 	// the window it was in when its session ended there.
-	m = m.stick(before).keepSel()
+	m = m.stick(before).keepNear(before).keepSel()
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
 		e, _, _ := m.selected(m.ordered())
@@ -395,7 +437,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pinned = msg.pinned
 		}
 		// Keep the cursor on a visible row after sessions come and go.
-		m = m.adopt().keepSel()
+		m = m.adopt()
 	case digestMsg:
 		m.digesting = false
 		switch {

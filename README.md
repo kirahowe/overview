@@ -61,7 +61,9 @@ sessions, marked `$`, and a project you pinned is listed even with nothing
 in it. A session that another app started, such as
 an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
 in a last section, "in other apps", dimmed and named after the app that runs
-it. A session appears once, and each row shows its state.
+it. A session appears once, and each row shows its state. When the entry
+under the cursor goes away, the cursor moves to the one after it, or to the
+one before it when it was last.
 
 A terminal is a window in overview's tmux that runs no Claude session: a
 shell for a one-off command, or a dev server. `t` opens one at the root of

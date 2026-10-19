@@ -805,3 +805,37 @@ func TestPropStuck(t *testing.T) {
 		}
 	})
 }
+
+// nearest picks the first surviving key after the lost one, else the last
+// surviving one before it, and nothing when it was not listed or none
+// survives.
+func TestPropNearest(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		n := rapid.IntRange(0, 8).Draw(t, "n")
+		old := make([]string, n)
+		left := map[string]bool{}
+		for i := range old {
+			old[i] = fmt.Sprintf("k%d", i)
+			left[old[i]] = rapid.Bool().Draw(t, "left")
+		}
+		sel := rapid.SampledFrom(append(slices.Clone(old), "gone")).Draw(t, "sel")
+		left[sel] = false
+		got, ok := nearest(old, sel, func(k string) bool { return left[k] })
+		i := slices.Index(old, sel)
+		want, wantOK := "", false
+		if i >= 0 {
+			for j := i + 1; j < n && !wantOK; j++ {
+				want, wantOK = old[j], left[old[j]]
+			}
+			for j := i - 1; j >= 0 && !wantOK; j-- {
+				want, wantOK = old[j], left[old[j]]
+			}
+		}
+		if !wantOK {
+			want = ""
+		}
+		if ok != wantOK || got != want {
+			t.Fatalf("nearest(%v, %s) = %q %v, want %q %v (left %v)", old, sel, got, ok, want, wantOK, left)
+		}
+	})
+}

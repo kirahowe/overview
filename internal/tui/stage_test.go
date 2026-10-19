@@ -871,9 +871,49 @@ func TestXClosesATerminalAfterAYes(t *testing.T) {
 		t.Fatalf("killed %v, list %d", f.killed, f.find("%0"))
 	}
 	// The list left the window before it closed, and the cursor is on
-	// what is left.
-	if m.sel == win || m.shown(win) || !strings.Contains(m.note, "closed zsh") || !f.staged(paneWithTTY(f, "ttys011")) {
+	// the entry before it, the last in the list.
+	if m.sel != "s1" || m.shown(win) || !strings.Contains(m.note, "closed zsh") || !f.staged(paneWithTTY(f, "ttys011")) {
 		t.Fatalf("sel %s, note %q, list in %s", m.sel, m.note, f.stage())
+	}
+}
+
+// Closing a terminal puts the cursor on the entry after it.
+func TestClosingATerminalSelectsTheNextEntry(t *testing.T) {
+	recordDraws(t)
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "t")
+	first := m.sel
+	m = pressSettled(t, m, "t")
+	second := m.sel
+	m = pressSettled(t, m, "k")
+	if m.sel != first {
+		t.Fatalf("sel %s, want the first terminal %s", m.sel, first)
+	}
+	m = pressSettled(t, m, "x", "y")
+	if m.sel != second || !f.staged(f.panes[len(f.panes)-1].ID) {
+		t.Fatalf("sel %s, want the next terminal %s; list in %s", m.sel, second, f.stage())
+	}
+}
+
+// A session that ends leaves the cursor on its neighbour, not the top.
+func TestAnEndedSessionSelectsTheNextEntry(t *testing.T) {
+	recordDraws(t)
+	f := newFakeMux()
+	a, b, c := row("s1", "a", "", 11), row("s2", "b", "", 12), row("s3", "c", "", 13)
+	m := stagedModel(t, f, a, b, c)
+	m = pressSettled(t, m, "j")
+	if m.sel != "s2" {
+		t.Fatalf("sel %s", m.sel)
+	}
+	// Its claude exits and its pane closes, and then claude drops it.
+	f.exit(paneWithTTY(f, "ttys012"))
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	m, cmd = step(m, rowsMsg{rows: []fleet.Row{a, c}, ttys: map[int]string{11: "ttys011", 13: "ttys013"}})
+	m = settle(t, m, cmd)
+	if m.sel != "s3" || !f.staged(paneWithTTY(f, "ttys013")) {
+		t.Fatalf("sel %s, want s3", m.sel)
 	}
 }
 
