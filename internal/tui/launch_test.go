@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"overview/internal/fleet"
@@ -87,9 +89,10 @@ func TestEnsureView(t *testing.T) {
 	if pid() != before {
 		t.Fatal("the same flags restarted the view")
 	}
-	// The view quits but its stage lives on: a new view goes beside it.
+	// The view quits while a session lives on: a new view opens in a
+	// window of its own, which is the one shown.
 	panes, _ := srv.Panes()
-	stage, err := srv.SplitLeft(panes[0].ID, "70%", nil, "sleep 300")
+	other, err := srv.Spawn("ov", "", nil, "sleep 300")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,113 @@ func TestEnsureView(t *testing.T) {
 	if l, all := count(); l != 1 || all != 2 {
 		t.Fatalf("relaunch: %d list panes of %d", l, all)
 	}
-	if _, err := srv.Run("display", "-p", "-t", stage.ID, ""); err != nil {
-		t.Fatal("the stage did not survive")
+	panes, _ = srv.Panes()
+	where := map[string]tmux.Pane{}
+	for _, p := range panes {
+		where[p.ID] = p
+	}
+	shown, _ := srv.Run("display-message", "-p", "-t", "=ov:", "#{pane_id}")
+	if p := where[strings.TrimSpace(shown)]; !p.List || p.Window == where[other.ID].Window {
+		t.Fatalf("shown %q, panes %+v", shown, panes)
+	}
+}
+
+func TestConfFor(t *testing.T) {
+	for _, c := range []struct {
+		name, now string
+		found     bool
+		want      string
+		upgraded  bool
+	}{
+		{"none yet", "", false, defaultConf, false},
+		{"an old default", oldConfs[0], true, defaultConf, true},
+		{"the default", defaultConf, true, defaultConf, false},
+		{"edited", oldConfs[0] + "set -g status on\n", true, oldConfs[0] + "set -g status on\n", false},
+		{"empty", "", true, "", false},
+	} {
+		got, upgraded := confFor(c.now, c.found)
+		if got != c.want || upgraded != c.upgraded {
+			t.Errorf("%s: upgraded %v, conf %.40q", c.name, upgraded, got)
+		}
+	}
+}
+
+func TestWriteConfUpgradesOnlyAnUneditedFile(t *testing.T) {
+	dir := t.TempDir()
+	fresh, old, edited := filepath.Join(dir, "a", "tmux.conf"), filepath.Join(dir, "old.conf"), filepath.Join(dir, "edited.conf")
+	mine := oldConfs[0] + "set -g status on\n"
+	if err := os.WriteFile(old, []byte(oldConfs[0]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(edited, []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]struct {
+		conf     string
+		upgraded bool
+	}{fresh: {defaultConf, false}, old: {defaultConf, true}, edited: {mine, false}} {
+		upgraded, err := writeConf(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(path); string(b) != want.conf || upgraded != want.upgraded {
+			t.Errorf("%s: upgraded %v, holds %.40q", filepath.Base(path), upgraded, b)
+		}
+	}
+}
+
+// ctrl+[ from a pane deep in the splits of a session's window goes to the
+// list, and from the list to the right. tmux runs the binding's command as
+// it would for the key.
+func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "tmux.conf")
+	if err := os.WriteFile(conf, []byte(defaultConf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var binding string
+	for _, line := range strings.Split(defaultConf, "\n") {
+		if cmd, ok := strings.CutPrefix(line, "bind -n C-[ "); ok {
+			binding = cmd
+		}
+	}
+	key := filepath.Join(dir, "key.conf")
+	if err := os.WriteFile(key, []byte(binding+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := tmux.On(fmt.Sprintf("ovtest-bracket-%d", os.Getpid()), conf)
+	t.Cleanup(func() { srv.Run("kill-server") }) //nolint:errcheck
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := srv.Run(args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(out)
+	}
+	list := run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")
+	if err := srv.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	a := run("new-window", "-d", "-t", "=ov:", "-P", "-F", "#{pane_id}", "sleep 300")
+	b := run("split-window", "-d", "-h", "-t", a, "-P", "-F", "#{pane_id}", "sleep 300")
+	deep := run("split-window", "-d", "-v", "-t", b, "-P", "-F", "#{pane_id}", "sleep 300")
+	if err := srv.Move(list, deep, "60"); err != nil {
+		t.Fatal(err)
+	}
+	focused := func() string { return run("display-message", "-p", "-t", "=ov:", "#{pane_id}") }
+	for _, from := range []string{deep, a, b} {
+		run("select-pane", "-t", from)
+		run("source-file", key)
+		if got := focused(); got != list {
+			t.Fatalf("ctrl+[ from %s went to %s, not the list %s", from, got, list)
+		}
+		run("source-file", key)
+		if got := focused(); got == list {
+			t.Fatal("ctrl+[ from the list stayed there")
+		}
 	}
 }

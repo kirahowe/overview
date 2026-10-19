@@ -286,8 +286,8 @@ func TestFilterEnterFocusesTheMatchAndClearsTheFilter(t *testing.T) {
 	if m.sel != "s2" || !m.filtering {
 		t.Fatalf("cursor should sit on the first match: sel=%q filtering=%v", m.sel, m.filtering)
 	}
-	if want := paneWithTTY(f, "ttys012"); f.stage() != want {
-		t.Fatalf("stage %s, want the match's %s", f.stage(), want)
+	if want := paneWithTTY(f, "ttys012"); !f.staged(want) {
+		t.Fatalf("the list is in %s, not with the match's %s", f.stage(), want)
 	}
 	m = pressSettled(t, m, "enter")
 	if m.filter != "" || m.filtering || m.sel != "s2" {

@@ -123,9 +123,10 @@ func (s Server) Spawn(session, dir string, env []string, command ...string) (Pan
 	return s.create(args, dir, env, command)
 }
 
-// SplitLeft runs command in a new pane to the left of pane, size wide.
-func (s Server) SplitLeft(pane, size string, env []string, command ...string) (Pane, error) {
-	return s.create([]string{"split-window", "-h", "-b", "-d", "-l", size, "-t", pane}, "", env, command)
+// Open runs command in a new window of session and makes it the session's
+// current window.
+func (s Server) Open(session string, env []string, command ...string) (Pane, error) {
+	return s.create([]string{"new-window", "-t", "=" + session + ":"}, "", env, command)
 }
 
 func (s Server) create(args []string, dir string, env, command []string) (Pane, error) {
@@ -147,15 +148,29 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 	return Pane{ID: id, TTY: strings.TrimPrefix(tty, "/dev/")}, nil
 }
 
-// Swap exchanges two panes' places, leaving the focus where it was.
-func (s Server) Swap(a, b string) error {
-	_, err := s.Run("swap-pane", "-d", "-s", a, "-t", b)
+// Move puts pane list in target's window as a full-height column on the
+// left, size wide, and makes that window current and list its active pane.
+// A window that list leaves empty closes.
+func (s Server) Move(list, target, size string) error {
+	_, err := s.Run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
 	return err
 }
 
-// Join moves pane to the right of beside, size wide, without focusing it.
-func (s Server) Join(pane, beside, size string) error {
-	_, err := s.Run("join-pane", "-h", "-d", "-l", size, "-s", pane, "-t", beside)
+// Layout reads a window's layout, as select-layout takes it.
+func (s Server) Layout(window string) (string, error) {
+	out, err := s.Run("display-message", "-p", "-t", window, "#{window_layout}")
+	return strings.TrimSpace(out), err
+}
+
+// SetLayout gives a window a layout that Layout read.
+func (s Server) SetLayout(window, layout string) error {
+	_, err := s.Run("select-layout", "-t", window, layout)
+	return err
+}
+
+// MoveWindow moves a window to the end of session, in the background.
+func (s Server) MoveWindow(window, session string) error {
+	_, err := s.Run("move-window", "-d", "-s", window, "-t", "="+session+":")
 	return err
 }
 

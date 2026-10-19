@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"path"
 	"reflect"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
+	"overview/internal/tmux"
 )
 
 var (
@@ -479,6 +482,45 @@ func TestPropWindow(t *testing.T) {
 		}
 		if top <= max(n-h, 0) && top <= selTop && selBottom <= top+h && got != top {
 			t.Fatalf("window moved from %d to %d with the row in view", top, got)
+		}
+	})
+}
+
+// plan moves the list exactly when the wanted pane is in another window,
+// always into that pane's window, as wide as the list is unless it is
+// alone, and asks for the layout fix-up only when its window keeps two or
+// more panes.
+func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		var panes []tmux.Pane
+		for i := range rapid.IntRange(1, 8).Draw(t, "n") {
+			panes = append(panes, tmux.Pane{
+				ID:     fmt.Sprintf("%%%d", i),
+				Window: fmt.Sprintf("@%d", rapid.IntRange(0, 3).Draw(t, "win")),
+				W:      rapid.IntRange(1, 200).Draw(t, "w"),
+			})
+		}
+		self := rapid.SampledFrom(panes).Draw(t, "self")
+		want := rapid.SampledFrom(append(slices.Clone(panes), tmux.Pane{ID: "%99"})).Draw(t, "want")
+		mv, ok := plan(self.ID, want.ID, panes)
+		if ok != (want.ID != "%99" && want.Window != self.Window) {
+			t.Fatalf("move %v for want %+v, list %+v", ok, want, self)
+		}
+		if !ok {
+			return
+		}
+		beside := 0
+		for _, p := range panes {
+			if p.Window == self.Window {
+				beside++
+			}
+		}
+		size := strconv.Itoa(self.W)
+		if beside == 1 {
+			size = listShare
+		}
+		if mv != (shift{to: want.ID, from: self.Window, size: size, fix: beside > 2}) {
+			t.Fatalf("plan %+v for want %s, list %+v, %d in its window", mv, want.ID, self, beside)
 		}
 	})
 }

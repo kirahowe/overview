@@ -98,16 +98,16 @@ type model struct {
 	cwd string
 
 	// tmux, as stage.go describes. mux is nil outside tmux, and then
-	// nothing is staged. The view runs in pane self of session, and parks
-	// the panes not on the stage in session parked. exe starts the holder.
-	mux                     multiplexer
-	self, session, parked   string
-	exe                     string
-	panes                   []tmux.Pane
-	onStage, holder, failed string
-	staging, entering       bool
-	spawningHolder          bool
-	holderShown             string
+	// nothing is staged. The view runs in pane self of session, and stage
+	// is the window self is in. exe starts the holder.
+	mux                   multiplexer
+	self, session         string
+	exe                   string
+	panes                 []tmux.Pane
+	stage, holder, failed string
+	staging, entering     bool
+	spawningHolder        bool
+	holderShown           string
 	// attached maps a background session's ID to its attach pane. A map,
 	// so copies of the model share it, and only Update writes to it.
 	attached map[string]string
@@ -141,8 +141,11 @@ func Run(home fleet.Home, llm string, theme Theme) error {
 	if err := srv.MarkList(self); err != nil {
 		return err
 	}
-	m.mux, m.self, m.session, m.parked, m.exe = srv, self, session, session+"-parked", exe
+	m.mux, m.self, m.session, m.exe = srv, self, session, exe
 	m.holder = srv.Option(session, holderOption)
+	if err := unpark(srv, session); err != nil {
+		m = m.say("could not move the sessions from the parked session: " + err.Error())
+	}
 	panes, err := srv.Panes()
 	if err != nil {
 		return err
@@ -553,11 +556,11 @@ func (m model) act(row fleet.Row) (model, tea.Cmd) {
 	attach := m.home.AttachCmd(row.Live)
 	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
 	return m.say("attaching to " + row.Name + "…"),
-		spawnCmd(m.mux, spawnAttach, row.ID, row.Name, m.parked, row.Cwd, env, attach.Args...)
+		spawnCmd(m.mux, spawnAttach, row.ID, row.Name, m.session, row.Cwd, env, attach.Args...)
 }
 
-// start runs a new claude at the root of row's project, in a parked pane
-// that the stage shows until the session joins the list.
+// start runs a new claude at the root of row's project, in a window of its
+// own that the stage shows until the session joins the list.
 func (m model) start(row fleet.Row) (model, tea.Cmd) {
 	dir, where := m.projects.root(row.Cwd), m.projects.name(row.Cwd)
 	if dir == "" {
@@ -568,7 +571,7 @@ func (m model) start(row fleet.Row) (model, tea.Cmd) {
 	}
 	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
 	return m.say("starting a session in " + where + "…"),
-		spawnCmd(m.mux, spawnSession, "", "a session in "+where, m.parked, dir, env, m.home.NewCmd().Args...)
+		spawnCmd(m.mux, spawnSession, "", "a session in "+where, m.session, dir, env, m.home.NewCmd().Args...)
 }
 
 // awayNote says where a session that runs inside another app is.

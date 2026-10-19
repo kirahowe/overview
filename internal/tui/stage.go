@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -14,21 +16,22 @@ import (
 	"overview/internal/tmux"
 )
 
-// The view runs in a pane of overview's own tmux server, and the pane
-// beside it is the stage. The stage shows the selected session's own
-// terminal: the claude running in a tmux pane, or `claude attach` for a
-// background session once enter has opened one. A session with neither,
-// such as one inside another app, gets the holder, a pane the view draws
-// that session's details into. Panes off the stage wait in windows of the
-// parked session, and moving the cursor swaps one in.
+// The view runs in a pane of overview's own tmux server, and the window it
+// is in is the stage. Every pane the view starts gets a window of its own
+// in the view's session: the claude that c starts, `claude attach` for a
+// background session once enter has opened one, and the holder, a pane the
+// view draws a session's details into when it has neither, such as one
+// inside another app. Moving the cursor moves the list into the window of
+// the selected session's pane, as a full-height column on the left, so any
+// splits the user made in that window come along and stay with it.
 
 const (
 	// panesEvery is how often the view rereads tmux's panes, so a session
 	// that exits leaves the stage within about this long.
 	panesEvery = 500 * time.Millisecond
-	// stageSize is the stage's share of the window when it has to be put
-	// back beside the list.
-	stageSize = "70%"
+	// listShare is the list's width when it has no width of its own to
+	// keep, because it is alone in its window.
+	listShare = "30%"
 	// holderOption is the session option that remembers the holder pane.
 	holderOption = "@overview-holder"
 )
@@ -37,8 +40,10 @@ const (
 type multiplexer interface {
 	Panes() ([]tmux.Pane, error)
 	Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error)
-	Swap(a, b string) error
-	Join(pane, beside, size string) error
+	Move(list, target, size string) error
+	Layout(window string) (string, error)
+	SetLayout(window, layout string) error
+	MoveWindow(window, session string) error
 	Select(pane string) error
 	Detach() error
 	SetOption(session, name, value string) error
@@ -90,22 +95,91 @@ func listPanes(mux multiplexer) tea.Cmd {
 	}
 }
 
-// stageCmd puts pane to on the stage: swapped with what is there, or
-// joined beside the list when the stage has gone.
-func stageCmd(mux multiplexer, list, from, to string) tea.Cmd {
+// without is tmux.Without, the layout a window takes once a pane leaves it.
+// Tests replace it.
+var without = tmux.Without
+
+// shift is a step that puts the list beside the pane it wants: the list
+// goes from window from into the window of pane to, size wide. fix says
+// from keeps two or more panes, whose layout is then put right.
+type shift struct {
+	to, from, size string
+	fix            bool
+}
+
+// plan decides how the list, pane self, gets beside pane want, given every
+// pane on the server. It reports false when no move is needed, because want
+// is already in the list's window, or is not listed.
+func plan(self, want string, panes []tmux.Pane) (shift, bool) {
+	var list, target tmux.Pane
+	for _, p := range panes {
+		switch p.ID {
+		case self:
+			list = p
+		case want:
+			target = p
+		}
+	}
+	if list.ID == "" || target.ID == "" || target.Window == list.Window {
+		return shift{}, false
+	}
+	n := 0
+	for _, p := range panes {
+		if p.Window == list.Window {
+			n++
+		}
+	}
+	// The list goes as wide as it is, so a width the user dragged it to is
+	// kept, unless it is alone and so as wide as the whole window.
+	size := listShare
+	if n > 1 && list.W > 0 {
+		size = strconv.Itoa(list.W)
+	}
+	return shift{to: want, from: list.Window, size: size, fix: n > 2}, true
+}
+
+// stageCmd carries out a shift. tmux gives the list's width to the column
+// beside it, so a window left with two or more panes gets its old layout
+// back with the list taken out and its space shared out. That fix-up is
+// cosmetic, so it fails quietly.
+func stageCmd(mux multiplexer, list string, mv shift) tea.Cmd {
 	return func() tea.Msg {
-		var err error
-		if from == "" {
-			err = mux.Join(to, list, stageSize)
-		} else {
-			err = mux.Swap(to, from)
+		layout, lerr := "", errors.New("no fix-up")
+		if mv.fix {
+			layout, lerr = mux.Layout(mv.from)
+		}
+		err := mux.Move(list, mv.to, mv.size)
+		if err == nil && lerr == nil {
+			if fixed, err := without(layout, list); err == nil {
+				mux.SetLayout(mv.from, fixed) //nolint:errcheck
+			}
 		}
 		panes, perr := mux.Panes()
 		if err == nil {
 			err = perr
 		}
-		return stagedMsg{to, panes, err}
+		return stagedMsg{mv.to, panes, err}
 	}
+}
+
+// unpark moves the windows of the parked session, where overview used to
+// keep the panes off the stage, into session, so sessions started before
+// an upgrade are kept.
+func unpark(mux multiplexer, session string) error {
+	panes, err := mux.Panes()
+	if err != nil {
+		return err
+	}
+	moved := map[string]bool{}
+	var errs []error
+	for _, p := range panes {
+		if p.Session != session+"-parked" || moved[p.Window] {
+			continue
+		}
+		moved[p.Window] = true
+		errs = append(errs, mux.MoveWindow(p.Window, session))
+	}
+	return errors.Join(errs...)
 }
 
 func spawnCmd(mux multiplexer, kind spawnKind, key, name, session, dir string, env []string, command ...string) tea.Cmd {
@@ -149,17 +223,11 @@ func (m model) alive(id string) bool {
 	return ok
 }
 
-// stageOf is the pane beside the list, "" when there is none.
+// stageOf is the window the list is in, "" when the listing lacks it.
 func (m model) stageOf(panes []tmux.Pane) string {
-	win := ""
 	for _, p := range panes {
 		if p.ID == m.self {
-			win = p.Window
-		}
-	}
-	for _, p := range panes {
-		if p.Window == win && win != "" && p.ID != m.self {
-			return p.ID
+			return p.Window
 		}
 	}
 	return ""
@@ -183,7 +251,7 @@ func (m model) paneOf(r fleet.Row) string {
 	return ""
 }
 
-// want is the pane that belongs on the stage: a session just started with
+// want is the pane whose window the list belongs in: a session just started with
 // c until it shows up in the list, else the selected session's own pane,
 // else the holder.
 func (m model) want() string {
@@ -203,22 +271,22 @@ func (m model) want() string {
 
 // setPanes takes a fresh listing of tmux's panes.
 func (m model) setPanes(panes []tmux.Pane) model {
-	m.panes, m.onStage = panes, m.stageOf(panes)
+	m.panes, m.stage = panes, m.stageOf(panes)
 	return m
 }
 
-// restage brings tmux in line with the model after every update: it swaps
-// the wanted pane onto the stage, one swap at a time, then moves the focus
+// restage brings tmux in line with the model after every update: it moves
+// the list to the wanted pane, one move at a time, then moves the focus
 // there if enter asked for it, and redraws the holder when it shows and its
 // text has changed.
 func (m model) restage() (model, tea.Cmd) {
 	want := m.want()
-	switch {
-	case m.mux == nil || m.staging || want == "" || want == m.failed:
+	if m.mux == nil || m.staging || want == "" || want == m.failed {
 		return m, nil
-	case want != m.onStage:
+	}
+	if mv, ok := plan(m.self, want, m.panes); ok {
 		m.staging = true
-		return m, stageCmd(m.mux, m.self, m.onStage, want)
+		return m, stageCmd(m.mux, m.self, mv)
 	}
 	var cmds []tea.Cmd
 	if m.entering {
@@ -249,12 +317,12 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
 		}
-		// A swap that failed is tried again once tmux has been reread.
+		// A move that failed is tried again once tmux has been reread.
 		m = m.setPanes(msg.panes)
 		m.failed = ""
 		if !m.alive(m.holder) && !m.spawningHolder {
 			m.spawningHolder = true
-			return m, spawnCmd(m.mux, spawnHolder, "", "", m.parked, "", nil, m.exe, "stage")
+			return m, spawnCmd(m.mux, spawnHolder, "", "", m.session, "", nil, m.exe, "stage")
 		}
 	case stagedMsg:
 		m.staging = false
@@ -265,7 +333,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if msg.panes != nil {
 			m = m.setPanes(msg.panes)
 		}
-		// The holder was resized or put back, so draw it afresh.
+		// The holder may have been resized, so draw it afresh.
 		m.holderShown = ""
 	case spawnedMsg:
 		if msg.kind == spawnHolder {

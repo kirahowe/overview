@@ -40,9 +40,9 @@ in `<home>/overview/digests/`.
 ## The view
 
 `overview` runs in a tmux server of its own, on the socket `overview`, and
-attaches your terminal to it. The window has two panes. The left one lists the
-sessions, and the right one is the selected session itself, live, so you can
-read it and type into it without leaving the list. Run `overview` again from
+attaches your terminal to it. The list of sessions runs down the left side,
+and the selected session itself takes the rest, live, so you can read it and
+type into it without leaving the list. Run `overview` again from
 any terminal and you get the same view back, with every session still running.
 If you run it with flags other than the ones the view started with, such as
 another `--theme`, the view restarts with them in the same pane, and the
@@ -59,12 +59,18 @@ an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
 in a last section, "in other apps", dimmed and named after the app that runs
 it. A session appears once, and each row shows its state.
 
-The right pane follows the cursor. A session that runs in overview's tmux is
-shown as it is, and moving the cursor swaps another one in, while the rest
-wait out of sight in the tmux session `overview-<home>-parked`. A session
-with no pane there, such as a background session, one in another app, or one
-started in some other terminal, gets a pane that shows where it runs, what it
-is waiting on, and its last few turns from the transcript.
+The right side follows the cursor. Each session that runs in overview's tmux
+has a tmux window of its own in the session `overview-<home>`, and moving the
+cursor moves the list into the selected session's window. A session with no
+pane there, such as a background session, one in another app, or one started
+in some other terminal, gets a pane that shows where it runs, what it is
+waiting on, and its last few turns from the transcript.
+
+You can split the right side as you would any tmux window. The prefix is
+tmux's default `ctrl+b`, and `ctrl+b %` and `ctrl+b "` split the current pane
+in its own directory. The splits belong to the session's window, so they go
+when you move to another session and come back with it. `ctrl+[` returns to
+the list from any of them.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
 searches. Search looks at the project, title, last prompt, name and label, and
@@ -73,14 +79,14 @@ space-separated word has to match one of those fields, and a word never
 matches across two of them. The cursor moves to the first match, `up` and
 `down` step through the matches, and `esc` clears the search. `enter` (or
 `tab`) moves the keyboard into the selected session, and `ctrl+[` brings it
-back to the list. On a background session, `enter` first attaches to it in
-the right pane; the attach stays there for when you come back to it. On a
-session in another app, `enter` brings that app to the front. While you are
+back to the list from any pane on the right. On a background session,
+`enter` first attaches to it in a window of its own; the attach stays there
+for when you come back to it. On a session in another app, `enter` brings that app to the front. While you are
 searching, `enter` acts on the selected match and clears the search. `x` stops
 a background session (it asks first), and `y` copies the attach command. To
 end a session in another app, close it in that app. `c` starts a new session
 at the root of the selected session's project, or where overview was started
-when the list is empty, and shows it in the right pane. `d` shows the digests,
+when the list is empty, and shows it on the right. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `q`
 detaches, leaving the view and its sessions running, and `Q` quits the view.
 `?` lists every key.
@@ -88,15 +94,17 @@ detaches, leaving the view and its sessions running, and `Q` quits the view.
 The mouse works too. A click selects a session, a double click moves the
 keyboard into it as `enter` does, and the wheel moves through the list and
 scrolls the digests. A click also closes help and cancels a stop. tmux has
-the mouse on, so a click on the right pane focuses it, and you can drag the
-border between the panes. Most terminals, Ghostty included, select text when
+the mouse on, so a click on a pane focuses it, and you can drag the borders
+between panes. The list keeps the width you drag it to. Most terminals, Ghostty included, select text when
 you hold shift.
 
 The first run writes overview's tmux settings to
 `~/.config/overview/tmux.conf`, and from then on the file is yours to change.
 tmux reads it when the server starts. After an edit, run
 `tmux -L overview source-file ~/.config/overview/tmux.conf`. The `ctrl+[`
-binding lives there. tmux can only tell `ctrl+[` from Esc when the terminal
+binding and the splits live there. A file you never edited is replaced when
+a newer overview brings new settings, and a running server reads it again
+then. tmux can only tell `ctrl+[` from Esc when the terminal
 sends extended keys. A terminal that does not sends a plain Esc, which goes
 to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
 set to the config directory it is watching, so they show up in the list.
@@ -186,5 +194,5 @@ install it, and logs to `~/Library/Logs/overview/`.
 - The view never sends a session a message. It shows you the session's own
   terminal, and stopping keeps its conversation.
 - Only sessions started inside overview's tmux can be shown live. A session
-  started in another terminal stays there, and the right pane only describes
+  started in another terminal stays there, and the right side only describes
   it.
