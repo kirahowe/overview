@@ -9,8 +9,8 @@
 #   scripts/launchd print <home>     print the agent without installing it
 #
 # <home> is what --home takes: a short name such as "work" for
-# ~/.claude-work, or a path. The agent runs whichever overview and claude
-# are on PATH now, so install them first.
+# ~/.claude-work, or a path. The agent runs the overview and claude on
+# PATH now, by their full paths, so install them first.
 set -euo pipefail
 
 usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -36,9 +36,7 @@ agent() {
   overview=$(command -v overview) || { echo "overview is not on PATH" >&2; exit 1; }
   claude=$(command -v claude) || { echo "claude is not on PATH" >&2; exit 1; }
   log="$HOME/Library/Logs/overview/orchestrator-$name.log"
-  # launchd starts with a bare PATH, and ensure runs claude.
-  local path
-  path="$(dirname "$overview"):$(dirname "$claude"):/usr/bin:/bin"
+  # launchd starts with a bare PATH, so both are given by their paths.
   cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,14 +51,9 @@ agent() {
     <string>ensure</string>
     <string>--home</string>
     <string>$(xml "$home")</string>
+    <string>--claude</string>
+    <string>$(xml "$claude")</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>$(xml "$path")</string>
-    <key>HOME</key>
-    <string>$(xml "$HOME")</string>
-  </dict>
   <key>StartInterval</key>
   <integer>900</integer>
   <key>RunAtLoad</key>

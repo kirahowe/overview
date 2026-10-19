@@ -8,7 +8,8 @@ See README.md for behaviour and docs/ for design notes.
 
 - `scripts/check` is the gate: gofmt, go vet, staticcheck (if installed),
   `go test -race`, and a build to `bin/overview`. It must pass before every
-  commit. `scripts/check --deep` also reruns property tests with 2000 cases.
+  commit. `scripts/check --deep [n]` also reruns property tests with n
+  cases each, 2000 by default.
 - A single package: `go test -race ./internal/fleet`.
 - `scripts/e2e` builds the binary and drives it in two private tmux servers
   (`ovtest-e2e-<pid>`, `ovtest-e2e-term-<pid>`): launch, the holder, `c`,

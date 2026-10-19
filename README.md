@@ -256,8 +256,9 @@ it when it goes silent:
 scripts/launchd install work    # or remove, or print to see the agent first
 ```
 
-The agent uses whichever `overview` and `claude` are on your PATH when you
-install it, and logs to `~/Library/Logs/overview/`.
+The agent runs the `overview` and `claude` that are on your PATH when you
+install it, by their full paths, so it needs no PATH of its own. It logs
+to `~/Library/Logs/overview/`.
 
 ## Limits
 
