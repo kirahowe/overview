@@ -562,7 +562,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pickedMsg:
 		if m.pick.open && msg.source == m.pick.from {
 			m.pick.paths, m.pick.read = msg.paths, true
-			m.pick.sel = max(0, min(m.pick.sel, len(m.pickMatches())-1))
+			if m.pick.sel >= 0 {
+				m.pick.sel = max(0, min(m.pick.sel, len(m.pickMatches())-1))
+			}
 		}
 	case pinnedMsg:
 		m.pinsLanded++
@@ -762,8 +764,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		n := len(m.pickMatches())
 		m.pick.sel = max(0, min(m.pick.sel+a.n, n-1))
 	case pickTab:
-		if ms := m.pickMatches(); m.pick.sel < len(ms) {
-			return m.setPickQuery(pickComplete(m.pick.query, m.user, ms[m.pick.sel]))
+		if ms, i := m.pickMatches(), max(m.pick.sel, 0); i < len(ms) {
+			return m.setPickQuery(pickComplete(m.pick.query, m.user, ms[i]))
 		}
 	case pickEnter:
 		path, typed := pickTarget(m.pick.query, m.user, m.pickMatches(), m.pick.sel)
@@ -816,6 +818,9 @@ func (m model) pickMatches() []string {
 // needs when they are not the ones read already.
 func (m model) setPickQuery(q string) (model, tea.Cmd) {
 	m.pick.query, m.pick.sel = q, 0
+	if _, prefix := splitPathQuery(q, m.user); isPathQuery(q) && prefix == "" {
+		m.pick.sel = -1 // enter adds the directory itself
+	}
 	if src := pickSource(q, m.user); src != m.pick.from {
 		m.pick.from, m.pick.paths, m.pick.read = src, nil, false
 		return m.readPicks()

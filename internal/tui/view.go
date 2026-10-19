@@ -105,8 +105,13 @@ func (m model) pickerView() []string {
 	case len(matches) == 0:
 		lines = append(lines, wrap(dim.Render("Nothing matches. A path starting with / or ~ looks anywhere."), w)...)
 	default:
+		if m.pick.sel < 0 {
+			dir, _ := splitPathQuery(m.pick.query, m.user)
+			lines = append(lines, wrap(dim.Render("enter adds "+m.short(dir)+", down picks a folder in it."), w)...)
+		}
 		room := max(h-len(lines), 1)
-		start := window(0, m.pick.sel, m.pick.sel+1, len(matches), room)
+		sel := max(m.pick.sel, 0)
+		start := window(0, sel, sel+1, len(matches), room)
 		for i := start; i < min(start+room, len(matches)); i++ {
 			text := "  " + m.short(matches[i])
 			if i == m.pick.sel {

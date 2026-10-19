@@ -278,3 +278,39 @@ func TestPickerKeys(t *testing.T) {
 		t.Fatal("esc did not cancel")
 	}
 }
+
+// A query such as ~x is words, not a path, and typing it does not panic.
+func TestATildeWordIsNotAPath(t *testing.T) {
+	for _, q := range []string{"~x", "~kira", "~.config"} {
+		if isPathQuery(q) || pickSource(q, testHome) != "" {
+			t.Errorf("%q is taken for a path", q)
+		}
+	}
+	f := newFakeMux()
+	m := pickerModel(t, f)
+	useDirs(&m, fakeDirs{"/code": {"app", "kit"}})
+	m = pressSettled(t, m, "a", "~", "k")
+	if got := m.pickMatches(); m.pick.query != "~k" || len(got) != 0 {
+		t.Fatalf("query %q, matches %v", m.pick.query, got)
+	}
+}
+
+// Tab completes to a directory, and enter then pins that directory, not
+// the first folder in it, unless one was chosen with down.
+func TestEnterAfterTabPinsTheDirectory(t *testing.T) {
+	for _, c := range []struct {
+		keys []string
+		want string
+	}{
+		{[]string{"tab", "enter"}, "/work/x"},
+		{[]string{"tab", "down", "enter"}, "/work/x/one"},
+	} {
+		f := newFakeMux()
+		m := pickerModel(t, f)
+		useDirs(&m, fakeDirs{"/work": {"x"}, "/work/x": {"one", "two"}, "/work/x/one": {}})
+		m = pressSettled(t, m, append(append([]string{"a"}, typed("/work/x")...), c.keys...)...)
+		if got := m.home.Projects(); !slices.Equal(got, []string{c.want}) {
+			t.Errorf("%v pinned %v, want %s", c.keys, got, c.want)
+		}
+	}
+}

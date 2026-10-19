@@ -119,10 +119,12 @@ detaches, leaving the view and its sessions running, and `Q` quits the view.
 
 `a` adds a project to the list. A picker takes the list's place and offers
 the folders beside the projects already listed, and typing words narrows
-them down as search does. A query that starts with `/` or `~` is a path
+them down as search does. A query that starts with `/` or `~/` is a path
 instead: the picker offers the directories in it, and `tab` completes the
 selected one. `enter` pins the project the selected directory belongs to,
-or the path you typed when nothing matches, and `esc` closes the picker. A
+or the path you typed when nothing matches. A path that ends in `/`, as
+`tab` leaves it, selects nothing until you press `down`, so `enter` pins
+that directory's project. `esc` closes the picker. A
 pinned project stays in the list when nothing runs in it, on a row of its
 own, and `c` or `t` there starts something in it. `x` on that row unpins
 the project. The pinned projects are kept in `<home>/overview/projects`.

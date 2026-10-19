@@ -20,7 +20,10 @@ import (
 type picker struct {
 	open  bool
 	query string
-	sel   int
+	// sel is the selected match, -1 for none: after a path query that
+	// ends in a directory, enter adds that directory until a match is
+	// chosen.
+	sel int
 	// from names what paths answers: "" for the folders beside the known
 	// projects, else the directory a path query is in. An answer read for
 	// another source is stale and dropped.
@@ -64,8 +67,11 @@ func readDirs(dir string) ([]string, error) {
 	return names, nil
 }
 
-// isPathQuery says whether a query is a path rather than words.
-func isPathQuery(q string) bool { return strings.HasPrefix(q, "/") || strings.HasPrefix(q, "~") }
+// isPathQuery says whether a query is a path rather than words: it starts
+// with /, or is ~ or starts with ~/. A word such as ~x is a word.
+func isPathQuery(q string) bool {
+	return strings.HasPrefix(q, "/") || q == "~" || strings.HasPrefix(q, "~/")
+}
 
 // expandPath turns a path query into a path: a leading ~ or ~/ is home.
 func expandPath(q, home string) string {
@@ -86,6 +92,9 @@ func splitPathQuery(q, home string) (dir, prefix string) {
 		return home, ""
 	}
 	i := strings.LastIndexByte(p, '/')
+	if i < 0 {
+		return "", p // not a path query
+	}
 	dir, prefix = p[:i], p[i+1:]
 	if dir == "" {
 		dir = "/"
@@ -172,6 +181,7 @@ func pickComplete(query, home, match string) string {
 
 // pickTarget is what enter pins: the selected match, or else, for a path
 // query, the path typed, which the Cmd pins only if it is a directory.
+// sel is -1 when no match is selected.
 func pickTarget(query, home string, matches []string, sel int) (path string, typed bool) {
 	if sel >= 0 && sel < len(matches) {
 		return matches[sel], false
