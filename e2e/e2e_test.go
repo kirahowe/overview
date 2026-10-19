@@ -17,11 +17,12 @@ import (
 // pane is one line of the private server's pane listing.
 type pane struct {
 	id, window, session, command string
-	list                         bool
+	list, holder                 bool
 	left, top, w, h, winH, pid   int
 }
 
-const paneFormat = "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_command}\t#{@overview-list}\t" +
+// The pid comes last: run trims the output, and with it an empty last field.
+const paneFormat = "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_command}\t#{@overview-list}\t#{@overview-holder}\t" +
 	"#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_height}\t#{pane_pid}"
 
 // server is a private tmux server, addressed by a name that is never
@@ -70,12 +71,12 @@ func (s server) panes() []pane {
 	var ps []pane
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 11 {
+		if len(f) != 12 {
 			continue
 		}
 		n := func(i int) int { v, _ := strconv.Atoi(f[i]); return v }
-		ps = append(ps, pane{id: f[0], window: f[1], session: f[2], command: f[3], list: f[4] == "1",
-			left: n(5), top: n(6), w: n(7), h: n(8), winH: n(9), pid: n(10)})
+		ps = append(ps, pane{id: f[0], window: f[1], session: f[2], command: f[3], list: f[4] == "1", holder: f[5] == "1",
+			left: n(6), top: n(7), w: n(8), h: n(9), winH: n(10), pid: n(11)})
 	}
 	return ps
 }
@@ -180,8 +181,14 @@ func launch(t *testing.T, tag string) *rig {
 		"env", "-u", "TMUX", r.bin, "--socket", r.ov.name, "--config", r.config, "--home", r.home)
 
 	waitFor(t, "the view and its holder", func() (bool, string) {
-		r.holder, _ = r.ov.run("show-options", "-qv", "-t", "overview-e2e", "@overview-holder")
-		ok, say := beside(r.ov.panes(), r.holder, 0)
+		ps := r.ov.panes()
+		r.holder = ""
+		for _, p := range ps {
+			if p.holder && p.session == "overview-e2e" {
+				r.holder = p.id
+			}
+		}
+		ok, say := beside(ps, r.holder, 0)
 		return ok && r.holder != "", "holder " + r.holder + ": " + say
 	})
 	r.list = listPane(r.ov.panes())

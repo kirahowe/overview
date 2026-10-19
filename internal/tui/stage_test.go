@@ -32,7 +32,6 @@ type fakeMux struct {
 	layouts []string          // the windows whose layout was read
 	set     map[string]string // the layouts set, by window
 	detach  int
-	options map[string]string
 
 	moveErr error
 }
@@ -45,11 +44,11 @@ type spawnCall struct {
 // newFakeMux holds the view's pane %0, alone in its window, and a holder
 // %1 in a window of its own, both in session ov.
 func newFakeMux() *fakeMux {
-	f := &fakeMux{options: map[string]string{}, set: map[string]string{},
+	f := &fakeMux{set: map[string]string{},
 		current: map[string]string{"ov": "@0"}, next: 2}
 	f.panes = []tmux.Pane{
 		{ID: "%0", TTY: "ttys900", Session: "ov", Window: "@0", W: 160, H: 40, List: true},
-		{ID: "%1", TTY: "ttys901", Session: "ov", Window: "@1", W: 160, H: 40},
+		{ID: "%1", TTY: "ttys901", Session: "ov", Window: "@1", W: 160, H: 40, Holder: true},
 	}
 	return f
 }
@@ -117,10 +116,16 @@ func (f *fakeMux) SetWindowOption(target, name, value string) error {
 
 func (f *fakeMux) SetPaneOption(pane, name, value string) error {
 	i := f.find(pane)
-	if name != tmux.AttachOption || i < 0 {
+	switch {
+	case i < 0:
+		return errors.New("can't find pane " + pane)
+	case name == tmux.AttachOption:
+		f.panes[i].Attach = value
+	case name == tmux.HolderOption:
+		f.panes[i].Holder = value == "1"
+	default:
 		return fmt.Errorf("unexpected pane option %s on %s", name, pane)
 	}
-	f.panes[i].Attach = value
 	return nil
 }
 
@@ -206,11 +211,6 @@ func (f *fakeMux) Select(pane string) error {
 
 func (f *fakeMux) Detach() error { f.detach++; return nil }
 
-func (f *fakeMux) SetOption(_, name, value string) error {
-	f.options[name] = value
-	return nil
-}
-
 // exit ends a pane's process, which closes it.
 func (f *fakeMux) exit(id string) {
 	if i := f.find(id); i >= 0 {
@@ -261,7 +261,7 @@ func recordDraws(t testing.TB) drawn {
 func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
 	m.projects.exists = func(string) bool { return false }
-	m.mux, m.self, m.session, m.holder, m.exe = f, "%0", "ov", "%1", "overview"
+	m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 	ttys := map[int]string{}
 	for _, r := range rows {
 		if r.PID > 0 && !r.Background() {
@@ -604,8 +604,8 @@ func TestAHolderThatClosedIsStartedAgain(t *testing.T) {
 	if len(f.spawned) != 1 || strings.Join(f.spawned[0].command, " ") != "overview stage" || f.spawned[0].session != "ov" {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
-	if m.holder == "%1" || f.options[holderOption] != m.holder || !f.staged(paneWithTTY(f, "ttys011")) {
-		t.Fatalf("holder %s, option %q, list in %s", m.holder, f.options[holderOption], f.stage())
+	if h := m.holder(); h == "%1" || h == "" || !f.panes[f.find(h)].Holder || !f.staged(paneWithTTY(f, "ttys011")) {
+		t.Fatalf("holder %s, panes %+v, list in %s", h, f.panes, f.stage())
 	}
 	// One holder, however many listings arrive before it is up.
 	m.spawningHolder = true
@@ -668,7 +668,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 		}
 		m := newModel(caseHome(t, root), "")
 		m.projects.exists = func(string) bool { return false }
-		m.mux, m.self, m.session, m.holder, m.exe = f, "%0", "ov", "%1", "overview"
+		m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 		m = m.setPanes(f.panes)
 		m, cmd := step(m, tea.WindowSizeMsg{Width: 50, Height: 30})
 		m = settle(t, m, cmd)

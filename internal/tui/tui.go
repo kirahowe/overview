@@ -107,7 +107,7 @@ type model struct {
 	self, session     string
 	exe               string
 	panes             []tmux.Pane
-	holder, failed    string
+	failed            string
 	staging, entering bool
 	spawningHolder    bool
 	holderShown       string
@@ -153,7 +153,6 @@ func Run(home fleet.Home, llm string, theme Theme, socket, session string) error
 		return err
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
-	m.holder = srv.Option(session, holderOption)
 	panes, err := srv.Panes()
 	if err != nil {
 		return err
@@ -236,7 +235,7 @@ func (m model) terminals() []terminal {
 			claude[tty] = true
 		}
 	}
-	return terminals(m.panes, m.session, m.self, m.holder, m.opened.ID, claude, m.projects.root)
+	return terminals(m.panes, m.session, m.self, m.opened.ID, claude, m.projects.root)
 }
 
 // hostOf names the app a session runs inside, for one that has no terminal.
@@ -517,7 +516,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.self, m.holder, c.term, m.panes, m.spawns)
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.self, m.holder(), c.term, m.panes, m.spawns)
 			}
 		}
 		for _, r := range m.rows {

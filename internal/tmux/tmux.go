@@ -24,13 +24,17 @@ const ProjectOption = "@overview-project"
 // one, so a split beside the attach is not taken for it.
 const AttachOption = "@overview-attach"
 
+// HolderOption marks the pane the view draws a session's details into. A
+// pane option, so the listing says which pane it is.
+const HolderOption = "@overview-holder"
+
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}" +
-	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{pane_current_path}"
+	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 11
+const paneFields = 12
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -44,6 +48,7 @@ type Pane struct {
 	Path    string // the foreground process's directory
 	Project string // the window's ProjectOption, "" when unset
 	Attach  string // the pane's AttachOption, "" when unset
+	Holder  bool   // the pane's HolderOption is set
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -122,7 +127,7 @@ func ParsePanes(out string) []Pane {
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, List: f[6] == "1",
-			Command: f[7], Project: f[8], Attach: f[9], Path: f[10],
+			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", Path: f[11],
 		})
 	}
 	return panes
@@ -254,22 +259,6 @@ func (s Server) KillWindow(window string) error {
 // Detach detaches the client the calling pane is shown in.
 func (s Server) Detach() error {
 	_, err := s.run("detach-client")
-	return err
-}
-
-// Option reads a session option, "" when unset. The option commands do not
-// take the "=" that pins a name exactly, but an exact name still wins.
-func (s Server) Option(session, name string) string {
-	out, err := s.run("show-options", "-qv", "-t", session, name)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
-
-// SetOption sets a session option.
-func (s Server) SetOption(session, name, value string) error {
-	_, err := s.run("set-option", "-t", session, name, value)
 	return err
 }
 

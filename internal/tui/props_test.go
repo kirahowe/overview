@@ -714,6 +714,9 @@ func TestPropTerminals(t *testing.T) {
 			return rapid.SampledFrom(panes).Draw(t, label).ID
 		}
 		self, holder, opened := pick("self"), pick("holder"), pick("opened")
+		for i := range panes {
+			panes[i].Holder = panes[i].ID == holder
+		}
 		claude := map[string]bool{}
 		for _, p := range panes {
 			if rapid.IntRange(0, 4).Draw(t, "claude") == 0 {
@@ -721,7 +724,7 @@ func TestPropTerminals(t *testing.T) {
 			}
 		}
 		root := func(p string) string { return "root:" + p }
-		got := terminals(panes, "ov", self, holder, opened, claude, root)
+		got := terminals(panes, "ov", self, opened, claude, root)
 
 		want := map[string][]tmux.Pane{}
 		bad := map[string]bool{}

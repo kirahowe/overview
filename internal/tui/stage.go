@@ -32,8 +32,6 @@ const (
 	// listShare is the list's width when it has no width of its own to
 	// keep, because it is alone in its window.
 	listShare = "30%"
-	// holderOption is the session option that remembers the holder pane.
-	holderOption = "@overview-holder"
 )
 
 // multiplexer is the part of tmux.Server the view needs. Tests fake it.
@@ -47,7 +45,6 @@ type multiplexer interface {
 	SelectBeside(pane string) error
 	KillWindow(window string) error
 	Detach() error
-	SetOption(session, name, value string) error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
 }
@@ -74,10 +71,13 @@ type spawn struct {
 
 // marked is the spawned pane as the listing will show it once the Cmd has
 // set its options: a session's or a terminal's window names its project,
-// and an attach pane names its background session. It also says which
-// option to set, as a pane or a window option.
+// an attach pane names its background session, and the holder is marked
+// as such. It also says which option to set, as a pane or a window option.
 func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
 	switch sp.kind {
+	case spawnHolder:
+		p.Holder = true
+		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.HolderOption, "1") }
 	case spawnSession, spawnTerminal:
 		p.Project = sp.dir
 		return p, func(mux multiplexer) error { return mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir) }
@@ -237,6 +237,17 @@ func (m model) pane(id string) (tmux.Pane, bool) {
 	return tmux.Pane{}, false
 }
 
+// holder is the pane the view draws details into, "" when the listing has
+// none in the view's session.
+func (m model) holder() string {
+	for _, p := range m.panes {
+		if p.Holder && p.Session == m.session {
+			return p.ID
+		}
+	}
+	return ""
+}
+
 func (m model) alive(id string) bool {
 	_, ok := m.pane(id)
 	return ok
@@ -291,8 +302,8 @@ func (m model) want() string {
 			}
 		}
 	}
-	if m.alive(m.holder) {
-		return m.holder
+	if h := m.holder(); h != "" {
+		return h
 	}
 	return ""
 }
@@ -341,7 +352,7 @@ func (m model) restage() (model, tea.Cmd) {
 			return nil
 		})
 	}
-	if p, ok := m.pane(m.holder); ok && want == m.holder {
+	if p, ok := m.pane(want); ok && want == m.holder() {
 		if text := m.holderText(p.W, p.H); text != m.holderShown {
 			m.holderShown = text
 			cmds = append(cmds, drawCmd(p.TTY, text))
@@ -365,7 +376,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// A move that failed is tried again once tmux has been reread.
 		m = m.setPanes(msg.panes)
 		m.failed = ""
-		if !m.alive(m.holder) && !m.spawningHolder {
+		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
 			return m, spawnCmd(m.mux, spawn{kind: spawnHolder, session: m.session, command: []string{m.exe, "stage"}})
 		}
@@ -393,19 +404,10 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// Known now, though the next listing is yet to come. A listing
 		// asked for before this point may lack it or its options.
 		m.panes = append(m.panes, msg.pane)
-		if msg.kind != spawnHolder {
-			m.spawns++
-		}
+		m.spawns++
 		switch msg.kind {
 		case spawnHolder:
-			m.holder, m.holderShown = msg.pane.ID, ""
-			mux, session, id := m.mux, m.session, msg.pane.ID
-			return m, func() tea.Msg {
-				if err := mux.SetOption(session, holderOption, id); err != nil {
-					return noteMsg(err.Error())
-				}
-				return nil
-			}
+			m.holderShown = ""
 		case spawnAttach:
 			m.entering = true
 		case spawnSession:

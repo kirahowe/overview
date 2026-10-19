@@ -275,7 +275,7 @@ var shells = map[string]bool{
 // and the list has yet to adopt. The list's own pane is left out, so a
 // window with only the list is no terminal. A terminal's project is its
 // window's ProjectOption, or else the root of its first pane's directory.
-func terminals(panes []tmux.Pane, session, self, holder, opened string, claude map[string]bool, root func(string) string) []terminal {
+func terminals(panes []tmux.Pane, session, self, opened string, claude map[string]bool, root func(string) string) []terminal {
 	byWindow := map[string][]tmux.Pane{}
 	skip := map[string]bool{}
 	var order []string
@@ -287,7 +287,7 @@ func terminals(panes []tmux.Pane, session, self, holder, opened string, claude m
 			order = append(order, p.Window)
 		}
 		byWindow[p.Window] = append(byWindow[p.Window], p)
-		if p.ID == holder || p.Attach != "" || (p.TTY != "" && claude[p.TTY]) || (opened != "" && p.ID == opened) {
+		if p.Holder || p.Attach != "" || (p.TTY != "" && claude[p.TTY]) || (opened != "" && p.ID == opened) {
 			skip[p.Window] = true
 		}
 	}

@@ -16,17 +16,17 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t/w\n" +
-		"%3\t/dev/ttys009\toverview-work-parked\t@2\t80\t24\t\tnode\t/w/app\tbg1\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview", Path: "/w"},
-		{ID: "%3", TTY: "ttys009", Session: "overview-work-parked", Window: "@2", W: 80, H: 24,
-			Command: "node", Project: "/w/app", Attach: "bg1", Path: "/w/app/odd\tdir"},
+		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24,
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -48,17 +48,20 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Command: rapid.SampledFrom([]string{"", "zsh", "node", "claude", "-zsh"}).Draw(t, "cmd"),
 				Project: rapid.SampledFrom([]string{"", "/w/app", "/w/a b"}).Draw(t, "project"),
 				Attach:  rapid.SampledFrom([]string{"", "bg1"}).Draw(t, "attach"),
+				Holder:  rapid.Bool().Draw(t, "holder"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
 		var b strings.Builder
 		for _, p := range panes {
-			list := ""
-			if p.List {
-				list = "1"
+			flag := func(on bool) string {
+				if on {
+					return "1"
+				}
+				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, list, p.Command, p.Project, p.Attach, p.Path)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -349,15 +352,18 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	if err := s.SetPaneOption(b.ID, AttachOption, "bg1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SetPaneOption(split, HolderOption, "1"); err != nil {
+		t.Fatal(err)
+	}
 	panes := byID(t, s)
 	for _, id := range []string{a.ID, split} {
 		p := panes[id]
-		if p.Project != "/w/a b" || p.Attach != "" || p.Command != "sleep" || p.Path != dir || p.Window != a.Window {
+		if p.Project != "/w/a b" || p.Attach != "" || p.Holder != (id == split) || p.Command != "sleep" || p.Path != dir || p.Window != a.Window {
 			t.Fatalf("%s: %+v", id, p)
 		}
 	}
 	shell := panes[b.ID]
-	if shell.Project != "" || shell.Attach != "bg1" || shell.Command == "" || shell.Command == "sleep" || shell.Path != "/" {
+	if shell.Project != "" || shell.Attach != "bg1" || shell.Holder || shell.Command == "" || shell.Command == "sleep" || shell.Path != "/" {
 		t.Fatalf("the shell: %+v", shell)
 	}
 	if err := s.KillWindow(a.Window); err != nil {
