@@ -14,15 +14,17 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\n" +
-		"%3\t/dev/ttys009\toverview-work-parked\t@2\t80\t24\t\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-work-parked\t@2\t80\t24\t\tnode\t/w/app\tbg1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t/\n" +
+		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
-		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true},
-		{ID: "%3", TTY: "ttys009", Session: "overview-work-parked", Window: "@2", W: 80, H: 24},
+		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview", Path: "/w"},
+		{ID: "%3", TTY: "ttys009", Session: "overview-work-parked", Window: "@2", W: 80, H: 24,
+			Command: "node", Project: "/w/app", Attach: "bg1", Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -41,6 +43,10 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				W:       rapid.IntRange(1, 500).Draw(t, "w"),
 				H:       rapid.IntRange(1, 200).Draw(t, "h"),
 				List:    rapid.Bool().Draw(t, "list"),
+				Command: rapid.SampledFrom([]string{"", "zsh", "node", "claude", "-zsh"}).Draw(t, "cmd"),
+				Project: rapid.SampledFrom([]string{"", "/w/app", "/w/a b"}).Draw(t, "project"),
+				Attach:  rapid.SampledFrom([]string{"", "bg1"}).Draw(t, "attach"),
+				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
 		var b strings.Builder
@@ -49,7 +55,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 			if p.List {
 				list = "1"
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\n", p.ID, p.TTY, p.Session, p.Window, p.W, p.H, list)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, list, p.Command, p.Project, p.Attach, p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -325,5 +332,108 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	out, _ = s.Run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
 	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
 		t.Fatalf("after respawn: %q", out)
+	}
+}
+
+// byID lists the server's panes by ID.
+func byID(t *testing.T, s Server) map[string]Pane {
+	t.Helper()
+	panes, err := s.Panes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]Pane{}
+	for _, p := range panes {
+		m[p.ID] = p
+	}
+	return m
+}
+
+// The fields the view derives terminals and attaches from parse from what
+// a real tmux writes: a window option shows on every pane of its window and
+// on no other, a pane option only on its pane, and the command and path are
+// the foreground process's.
+func TestPaneFieldsFromRealTmux(t *testing.T) {
+	s := testServer(t)
+	dir := t.TempDir()
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	a, err := s.Spawn("ov", dir, nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Session != "ov" || !strings.HasPrefix(a.Window, "@") || a.Path != dir {
+		t.Fatalf("spawned %+v", a)
+	}
+	split := strings.TrimSpace(must(t)(s.Run("split-window", "-d", "-c", dir, "-P", "-F", "#{pane_id}", "-t", a.ID, "sleep 301")))
+	b, err := s.Spawn("ov", "/", nil) // tmux's default shell
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWindowOption(a.ID, ProjectOption, "/w/a b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPaneOption(b.ID, AttachOption, "bg1"); err != nil {
+		t.Fatal(err)
+	}
+	panes := byID(t, s)
+	for _, id := range []string{a.ID, split} {
+		p := panes[id]
+		if p.Project != "/w/a b" || p.Attach != "" || p.Command != "sleep" || p.Path != dir || p.Window != a.Window {
+			t.Fatalf("%s: %+v", id, p)
+		}
+	}
+	shell := panes[b.ID]
+	if shell.Project != "" || shell.Attach != "bg1" || shell.Command == "" || shell.Command == "sleep" || shell.Path != "/" {
+		t.Fatalf("the shell: %+v", shell)
+	}
+	if err := s.KillWindow(a.Window); err != nil {
+		t.Fatal(err)
+	}
+	panes = byID(t, s)
+	if _, ok := panes[a.ID]; ok || len(panes) != 1 {
+		t.Fatalf("after kill-window: %+v", panes)
+	}
+	if err := s.KillWindow(a.Window); err == nil {
+		t.Fatal("killing a window that is gone did not fail")
+	}
+}
+
+// SelectBeside from the list on the left picks, of the panes to its right,
+// the one used last, so enter on a terminal lands where the user was.
+func TestSelectBesidePicksTheLastUsedPane(t *testing.T) {
+	s := testServer(t)
+	run := func(args ...string) string {
+		t.Helper()
+		return strings.TrimSpace(must(t)(s.Run(args...)))
+	}
+	list := run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")
+	top := run("split-window", "-h", "-t", list, "-P", "-F", "#{pane_id}", "sleep 300")
+	bottom := run("split-window", "-v", "-t", top, "-P", "-F", "#{pane_id}", "sleep 300")
+	active := func() string { return run("display-message", "-p", "-t", "=ov:", "#{pane_id}") }
+	for _, last := range []string{top, bottom, top} {
+		if err := s.Select(last); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Select(list); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SelectBeside(list); err != nil {
+			t.Fatal(err)
+		}
+		if got := active(); got != last {
+			t.Fatalf("after using %s, select-pane -R chose %s", last, got)
+		}
+	}
+}
+
+func must(t *testing.T) func(string, error) string {
+	return func(out string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
 }

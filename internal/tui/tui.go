@@ -108,9 +108,10 @@ type model struct {
 	staging, entering     bool
 	spawningHolder        bool
 	holderShown           string
-	// attached maps a background session's ID to its attach pane. A map,
-	// so copies of the model share it, and only Update writes to it.
-	attached map[string]string
+	// spawns counts the panes started with options to set. A listing asked
+	// for before the latest of them came back is dropped, since it may show
+	// that pane before its options were set.
+	spawns int
 	// opened is the pane c started, shown until its session is listed.
 	opened tmux.Pane
 	// blurred is set while the focus is in another pane.
@@ -161,7 +162,7 @@ func Run(home fleet.Home, llm string, theme Theme, socket, session string) error
 
 func newModel(home fleet.Home, llm string) model {
 	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
-		attached: map[string]string{}, reveal: openApp}
+		reveal: openApp}
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
@@ -189,7 +190,7 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.refresh, tick(), nextFrame()}
 	if m.mux != nil {
 		// The first listing also starts a holder when there is none.
-		cmds = append(cmds, listPanes(m.mux), panesEveryTick())
+		cmds = append(cmds, listPanes(m.mux, m.spawns), panesEveryTick())
 	}
 	return tea.Batch(cmds...)
 }
@@ -559,8 +560,8 @@ func (m model) act(row fleet.Row) (model, tea.Cmd) {
 	}
 	attach := m.home.AttachCmd(row.Live)
 	env := []string{m.home.ClaudeEnv()}
-	return m.say("attaching to " + row.Name + "…"),
-		spawnCmd(m.mux, spawnAttach, row.ID, row.Name, m.session, row.Cwd, env, attach.Args...)
+	return m.say("attaching to " + row.Name + "…"), spawnCmd(m.mux, spawn{kind: spawnAttach, key: row.ID, name: row.Name,
+		session: m.session, dir: row.Cwd, env: env, command: attach.Args})
 }
 
 // start runs a new claude at the root of row's project, in a window of its
@@ -574,8 +575,8 @@ func (m model) start(row fleet.Row) (model, tea.Cmd) {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	env := []string{m.home.ClaudeEnv()}
-	return m.say("starting a session in " + where + "…"),
-		spawnCmd(m.mux, spawnSession, "", "a session in "+where, m.session, dir, env, m.home.NewCmd().Args...)
+	return m.say("starting a session in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnSession, name: "a session in " + where,
+		session: m.session, dir: dir, env: env, command: m.home.NewCmd().Args})
 }
 
 // awayNote says where a session that runs inside another app is.

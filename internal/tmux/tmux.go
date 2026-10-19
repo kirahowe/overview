@@ -15,8 +15,22 @@ import (
 // whether the view is still there.
 const ListOption = "@overview-list"
 
+// ProjectOption is the window option that names the project a window was
+// started for, its root directory. Every pane in the window reads it.
+const ProjectOption = "@overview-project"
+
+// AttachOption is the pane option set on a pane that runs claude attach,
+// holding the background session's ID. It is a pane option, not a window
+// one, so a split beside the attach is not taken for it.
+const AttachOption = "@overview-attach"
+
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
-const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}"
+// The path comes last, so a tab in it cannot shift the other fields.
+const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}" +
+	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{pane_current_path}"
+
+// paneFields is how many fields a line of paneFormat has, the path's last.
+const paneFields = 11
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -25,7 +39,11 @@ type Pane struct {
 	Session string
 	Window  string // "@2"
 	W, H    int
-	List    bool // the view runs here
+	List    bool   // the view runs here
+	Command string // what runs in the foreground: "zsh", "node"
+	Path    string // the foreground process's directory
+	Project string // the window's ProjectOption, "" when unset
+	Attach  string // the pane's AttachOption, "" when unset
 }
 
 // Server is overview's tmux server. Run runs one tmux command and returns
@@ -92,8 +110,8 @@ func runner(base []string) func(args ...string) (string, error) {
 func ParsePanes(out string) []Pane {
 	var panes []Pane
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) != 7 || !strings.HasPrefix(f[0], "%") {
+		f := strings.SplitN(line, "\t", paneFields)
+		if len(f) != paneFields || !strings.HasPrefix(f[0], "%") {
 			continue
 		}
 		w, err1 := strconv.Atoi(f[4])
@@ -104,6 +122,7 @@ func ParsePanes(out string) []Pane {
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, List: f[6] == "1",
+			Command: f[7], Project: f[8], Attach: f[9], Path: f[10],
 		})
 	}
 	return panes
@@ -155,7 +174,9 @@ func noServer(err error) bool {
 }
 
 // Spawn runs command in a new window of session, which it creates when
-// missing, and leaves the window in the background. dir may be "".
+// missing, and leaves the window in the background. dir may be "". With no
+// command the window runs tmux's default shell. The pane returned knows its
+// ID, tty, session and window.
 func (s Server) Spawn(session, dir string, env []string, command ...string) (Pane, error) {
 	var args []string
 	if _, err := s.Run("has-session", "-t", "="+session); err == nil {
@@ -179,16 +200,16 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
-	args = append(args, "-P", "-F", "#{pane_id}\t#{pane_tty}")
+	args = append(args, "-P", "-F", "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}")
 	out, err := s.Run(append(args, command...)...)
 	if err != nil {
 		return Pane{}, err
 	}
-	id, tty, ok := strings.Cut(strings.TrimSpace(out), "\t")
-	if !ok || !strings.HasPrefix(id, "%") {
+	f := strings.Split(strings.TrimSpace(out), "\t")
+	if len(f) != 4 || !strings.HasPrefix(f[0], "%") {
 		return Pane{}, fmt.Errorf("tmux %s: unexpected output %q", args[0], out)
 	}
-	return Pane{ID: id, TTY: strings.TrimPrefix(tty, "/dev/")}, nil
+	return Pane{ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3], Path: dir}, nil
 }
 
 // Move puts pane list in target's window as a full-height column on the
@@ -223,6 +244,19 @@ func (s Server) Select(pane string) error {
 	return err
 }
 
+// SelectBeside focuses the pane to the right of pane. Of several there,
+// tmux picks the one used most recently.
+func (s Server) SelectBeside(pane string) error {
+	_, err := s.Run("select-pane", "-R", "-t", pane)
+	return err
+}
+
+// KillWindow closes a window and ends everything that runs in it.
+func (s Server) KillWindow(window string) error {
+	_, err := s.Run("kill-window", "-t", window)
+	return err
+}
+
 // Detach detaches the client the calling pane is shown in.
 func (s Server) Detach() error {
 	_, err := s.Run("detach-client")
@@ -242,6 +276,13 @@ func (s Server) Option(session, name string) string {
 // SetOption sets a session option.
 func (s Server) SetOption(session, name, value string) error {
 	_, err := s.Run("set-option", "-t", session, name, value)
+	return err
+}
+
+// SetWindowOption sets an option on target's window. target may name the
+// window or any pane in it.
+func (s Server) SetWindowOption(target, name, value string) error {
+	_, err := s.Run("set-option", "-w", "-t", target, name, value)
 	return err
 }
 

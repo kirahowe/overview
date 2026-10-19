@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +25,8 @@ type fakeMux struct {
 	next    int
 	current map[string]string // each session's current window
 	selects []string
+	besides []string // the panes SelectBeside went right from
+	killed  []string // the windows KillWindow closed
 	spawned []spawnCall
 	moves   []string          // the size each move asked for
 	layouts []string          // the windows whose layout was read
@@ -71,9 +74,11 @@ func (f *fakeMux) add(session, tty string) tmux.Pane {
 }
 
 // split adds a pane beside pane id, in its window, as a user's split does.
+// It reads the window's options, and has none of its own.
 func (f *fakeMux) split(id string) tmux.Pane {
 	beside := f.panes[f.find(id)]
-	p := tmux.Pane{ID: fmt.Sprintf("%%%d", f.next), TTY: fmt.Sprintf("ttys%d", 300+f.next), Session: beside.Session, Window: beside.Window, W: 80, H: 40}
+	p := tmux.Pane{ID: fmt.Sprintf("%%%d", f.next), TTY: fmt.Sprintf("ttys%d", 300+f.next), Session: beside.Session, Window: beside.Window, W: 80, H: 40,
+		Command: "zsh", Path: beside.Path, Project: beside.Project}
 	f.next++
 	f.panes = append(f.panes, p)
 	return p
@@ -81,7 +86,56 @@ func (f *fakeMux) split(id string) tmux.Pane {
 
 func (f *fakeMux) Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error) {
 	f.spawned = append(f.spawned, spawnCall{session, dir, env, command})
-	return f.add(session, fmt.Sprintf("ttys%d", 500+f.next)), nil
+	p := f.add(session, fmt.Sprintf("ttys%d", 500+f.next))
+	cmd := "zsh"
+	if len(command) > 0 {
+		cmd = path.Base(command[0])
+	}
+	i := f.find(p.ID)
+	f.panes[i].Command, f.panes[i].Path = cmd, dir
+	return f.panes[i], nil
+}
+
+func (f *fakeMux) SetWindowOption(target, name, value string) error {
+	if name != tmux.ProjectOption {
+		return fmt.Errorf("unexpected window option %s", name)
+	}
+	w := f.window(target)
+	if strings.HasPrefix(target, "@") {
+		w = target
+	}
+	if f.inWindow(w) == 0 {
+		return errors.New("can't find window " + target)
+	}
+	for i, p := range f.panes {
+		if p.Window == w {
+			f.panes[i].Project = value
+		}
+	}
+	return nil
+}
+
+func (f *fakeMux) SetPaneOption(pane, name, value string) error {
+	i := f.find(pane)
+	if name != tmux.AttachOption || i < 0 {
+		return fmt.Errorf("unexpected pane option %s on %s", name, pane)
+	}
+	f.panes[i].Attach = value
+	return nil
+}
+
+func (f *fakeMux) KillWindow(window string) error {
+	if f.inWindow(window) == 0 {
+		return errors.New("can't find window " + window)
+	}
+	f.killed = append(f.killed, window)
+	f.panes = slices.DeleteFunc(f.panes, func(p tmux.Pane) bool { return p.Window == window })
+	return nil
+}
+
+func (f *fakeMux) SelectBeside(pane string) error {
+	f.besides = append(f.besides, pane)
+	return nil
 }
 
 func (f *fakeMux) Move(list, target, size string) error {
@@ -334,7 +388,10 @@ func TestEnterOnABackgroundSessionAttachesBesideTheList(t *testing.T) {
 	if !slices.Contains(call.env, m.home.ClaudeEnv()) {
 		t.Fatalf("env %v", call.env)
 	}
-	attach := m.attached["abc123"]
+	attach := m.paneOf(bg)
+	if p, ok := m.pane(attach); !ok || p.Attach != "abc123" || f.panes[f.find(attach)].Attach != "abc123" {
+		t.Fatalf("the attach pane %s is not marked: %+v", attach, f.panes)
+	}
 	if !f.staged(attach) || len(f.selects) != 1 || f.selects[0] != attach {
 		t.Fatalf("list in %s, selects %v, attach pane %s", f.stage(), f.selects, attach)
 	}
@@ -345,7 +402,7 @@ func TestEnterOnABackgroundSessionAttachesBesideTheList(t *testing.T) {
 	}
 	// Detaching ends the attach, and the list goes to the holder.
 	f.exit(attach)
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	settle(t, m, cmd)
 	if !f.staged("%1") {
 		t.Fatalf("list in %s after the attach ended", f.stage())
@@ -364,6 +421,9 @@ func TestNewSessionStartsAtTheProjectRootAndIsAdopted(t *testing.T) {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
 	opened := m.opened
+	if got := f.panes[f.find(opened.ID)].Project; got != "/code/app" {
+		t.Fatalf("the new window's project is %q", got)
+	}
 	if !f.staged(opened.ID) || len(f.selects) != 1 || f.selects[0] != opened.ID {
 		t.Fatalf("list in %s, selects %v, want the new pane %s", f.stage(), f.selects, opened.ID)
 	}
@@ -373,6 +433,36 @@ func TestNewSessionStartsAtTheProjectRootAndIsAdopted(t *testing.T) {
 	m = settle(t, m, cmd)
 	if m.sel != "s9" || m.opened.ID != "" || !f.staged(opened.ID) {
 		t.Fatalf("sel %s, opened %v, list in %s", m.sel, m.opened, f.stage())
+	}
+}
+
+// A listing tmux answered between creating the attach pane and marking it
+// shows the pane unmarked. It is dropped rather than taken to mean the
+// attach has gone.
+func TestAListingFromBeforeASpawnIsDropped(t *testing.T) {
+	f := newFakeMux()
+	bg := row("b1", "bgwork", "nightly", 0)
+	bg.Kind, bg.ID = "background", "abc123"
+	m := stagedModel(t, f, bg)
+	gen := m.spawns
+	m = pressSettled(t, m, "enter")
+	attach := m.paneOf(bg)
+	if attach == "" || m.spawns != gen+1 {
+		t.Fatalf("attach %q, spawns %d", attach, m.spawns)
+	}
+	unmarked := slices.Clone(f.panes)
+	unmarked[f.find(attach)].Attach = ""
+	moves := len(f.moves)
+	m, cmd := step(m, panesMsg{panes: unmarked, gen: gen})
+	m = settle(t, m, cmd)
+	if m.paneOf(bg) != attach || len(f.moves) != moves {
+		t.Fatalf("a stale listing lost the attach: pane %q, moves %d then %d", m.paneOf(bg), moves, len(f.moves))
+	}
+	f.panes = unmarked
+	m, cmd = step(m, panesMsg{panes: unmarked, gen: m.spawns})
+	m = settle(t, m, cmd)
+	if m.paneOf(bg) != "" || !f.staged("%1") {
+		t.Fatalf("a current listing was not taken: pane %q, list in %s", m.paneOf(bg), f.stage())
 	}
 }
 
@@ -394,7 +484,7 @@ func TestAFailedMoveWaitsForTheNextListing(t *testing.T) {
 		t.Fatalf("note %q, failed %q", m.note, m.failed)
 	}
 	f.moveErr = nil
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	settle(t, m, cmd)
 	if !f.staged(paneWithTTY(f, "ttys011")) {
 		t.Fatalf("list in %s after the retry", f.stage())
@@ -409,7 +499,7 @@ func TestAListLeftAloneMovesOn(t *testing.T) {
 	// and the pane closes. Until the list loses blue, the holder stands in.
 	moves, left := len(f.moves), f.stage()
 	f.exit(paneWithTTY(f, "ttys012"))
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.moves) != moves+1 || !f.staged("%1") || f.inWindow(left) != 0 {
 		t.Fatalf("moves %d then %d, list in %s, %d panes left in %s", moves, len(f.moves), f.stage(), f.inWindow(left), left)
@@ -434,7 +524,7 @@ func TestTheListKeepsItsWidth(t *testing.T) {
 	}
 	// The user drags the border, and the next listing has the new width.
 	f.panes[f.find("%0")].W = 42
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	m = settle(t, m, cmd)
 	moves := len(f.moves)
 	pressSettled(t, m, "j")
@@ -452,7 +542,7 @@ func TestASplitStaysWithItsSession(t *testing.T) {
 	blue := paneWithTTY(f, "ttys012")
 	split := f.split(blue)
 	moves := len(f.moves)
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.moves) != moves {
 		t.Fatalf("a split in the list's window moved the list: %v", f.moves)
@@ -500,7 +590,7 @@ func TestAHolderThatClosedIsStartedAgain(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	f.exit("%1")
-	m, cmd := step(m, panesMsg{panes: f.panes})
+	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.spawned) != 1 || strings.Join(f.spawned[0].command, " ") != "overview stage" || f.spawned[0].session != "ov" {
 		t.Fatalf("spawned %+v", f.spawned)
@@ -510,7 +600,7 @@ func TestAHolderThatClosedIsStartedAgain(t *testing.T) {
 	}
 	// One holder, however many listings arrive before it is up.
 	m.spawningHolder = true
-	m, cmd = step(m, panesMsg{panes: f.panes[:len(f.panes)-1]})
+	m, cmd = step(m, panesMsg{panes: f.panes[:len(f.panes)-1], gen: m.spawns})
 	settle(t, m, cmd)
 	if len(f.spawned) != 1 {
 		t.Fatalf("a second holder was started: %+v", f.spawned)
@@ -619,7 +709,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 				f.split(rapid.SampledFrom(ids).Draw(t, "beside"))
 				var cmd tea.Cmd
-				m, cmd = step(m, panesMsg{panes: f.panes})
+				m, cmd = step(m, panesMsg{panes: f.panes, gen: m.spawns})
 				m = settle(t, m, cmd)
 			},
 			"exit": func(t *rapid.T) {
@@ -636,7 +726,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 				f.exit(rapid.SampledFrom(ids).Draw(t, "pane"))
 				var cmd tea.Cmd
-				m, cmd = step(m, panesMsg{panes: f.panes})
+				m, cmd = step(m, panesMsg{panes: f.panes, gen: m.spawns})
 				m = settle(t, m, cmd)
 			},
 			"refresh": func(t *rapid.T) {

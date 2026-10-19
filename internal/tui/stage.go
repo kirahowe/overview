@@ -45,34 +45,68 @@ type multiplexer interface {
 	SetLayout(window, layout string) error
 	MoveWindow(window, session string) error
 	Select(pane string) error
+	SelectBeside(pane string) error
+	KillWindow(window string) error
 	Detach() error
 	SetOption(session, name, value string) error
+	SetWindowOption(target, name, value string) error
+	SetPaneOption(pane, name, value string) error
 }
 
 type spawnKind int
 
 const (
-	spawnHolder  spawnKind = iota
-	spawnAttach            // claude attach for a background session
-	spawnSession           // a new claude, from c
+	spawnHolder   spawnKind = iota
+	spawnAttach             // claude attach for a background session
+	spawnSession            // a new claude, from c
+	spawnTerminal           // a shell, from t
 )
+
+// spawn is a pane to start in a window of its own.
+type spawn struct {
+	kind    spawnKind
+	key     string // the background session's ID, for spawnAttach
+	name    string // what to call it in a note
+	session string
+	dir     string // the project root, for spawnSession and spawnTerminal
+	env     []string
+	command []string
+}
+
+// marked is the spawned pane as the listing will show it once the Cmd has
+// set its options: a session's or a terminal's window names its project,
+// and an attach pane names its background session. It also says which
+// option to set, as a pane or a window option.
+func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
+	switch sp.kind {
+	case spawnSession, spawnTerminal:
+		p.Project = sp.dir
+		return p, func(mux multiplexer) error { return mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir) }
+	case spawnAttach:
+		p.Attach = sp.key
+		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.AttachOption, sp.key) }
+	}
+	return p, nil
+}
 
 type (
 	panesTick time.Time
-	panesMsg  struct {
+	// panesMsg is a listing of tmux's panes. gen is the model's spawns
+	// when it was asked for: see model.spawns.
+	panesMsg struct {
 		panes []tmux.Pane
+		gen   int
 		err   error
 	}
 	// stagedMsg answers a stage Cmd with the panes as they are afterwards.
 	stagedMsg struct {
 		to    string
 		panes []tmux.Pane
+		gen   int
 		err   error
 	}
 	spawnedMsg struct {
-		kind spawnKind
-		key  string // the background session's ID, for spawnAttach
-		name string // what to call it in a note
+		spawn
 		pane tmux.Pane
 		err  error
 	}
@@ -88,10 +122,10 @@ func panesEveryTick() tea.Cmd {
 	return tea.Tick(panesEvery, func(t time.Time) tea.Msg { return panesTick(t) })
 }
 
-func listPanes(mux multiplexer) tea.Cmd {
+func listPanes(mux multiplexer, gen int) tea.Cmd {
 	return func() tea.Msg {
 		panes, err := mux.Panes()
-		return panesMsg{panes, err}
+		return panesMsg{panes, gen, err}
 	}
 }
 
@@ -142,7 +176,7 @@ func plan(self, want string, panes []tmux.Pane) (shift, bool) {
 // beside it, so a window left with two or more panes gets its old layout
 // back with the list taken out and its space shared out. That fix-up is
 // cosmetic, so it fails quietly.
-func stageCmd(mux multiplexer, list string, mv shift) tea.Cmd {
+func stageCmd(mux multiplexer, list string, mv shift, gen int) tea.Cmd {
 	return func() tea.Msg {
 		layout, lerr := "", errors.New("no fix-up")
 		if mv.fix {
@@ -158,7 +192,7 @@ func stageCmd(mux multiplexer, list string, mv shift) tea.Cmd {
 		if err == nil {
 			err = perr
 		}
-		return stagedMsg{mv.to, panes, err}
+		return stagedMsg{mv.to, panes, gen, err}
 	}
 }
 
@@ -182,10 +216,20 @@ func unpark(mux multiplexer, session string) error {
 	return errors.Join(errs...)
 }
 
-func spawnCmd(mux multiplexer, kind spawnKind, key, name, session, dir string, env []string, command ...string) tea.Cmd {
+// spawnCmd starts sp's pane and sets its options straight after, so a
+// listing taken later sees them. One taken in between is dropped: see
+// model.spawns.
+func spawnCmd(mux multiplexer, sp spawn) tea.Cmd {
 	return func() tea.Msg {
-		p, err := mux.Spawn(session, dir, env, command...)
-		return spawnedMsg{kind, key, name, p, err}
+		p, err := mux.Spawn(sp.session, sp.dir, sp.env, sp.command...)
+		if err != nil {
+			return spawnedMsg{sp, tmux.Pane{}, err}
+		}
+		p, mark := sp.marked(p)
+		if mark != nil {
+			err = mark(mux)
+		}
+		return spawnedMsg{sp, p, err}
 	}
 }
 
@@ -237,8 +281,10 @@ func (m model) stageOf(panes []tmux.Pane) string {
 // its claude runs in, or the attach opened for a background session.
 func (m model) paneOf(r fleet.Row) string {
 	if r.Background() {
-		if id := m.attached[r.ID]; m.alive(id) {
-			return id
+		for _, p := range m.panes {
+			if r.ID != "" && p.Attach == r.ID && p.Session == m.session {
+				return p.ID
+			}
 		}
 		return ""
 	}
@@ -286,7 +332,7 @@ func (m model) restage() (model, tea.Cmd) {
 	}
 	if mv, ok := plan(m.self, want, m.panes); ok {
 		m.staging = true
-		return m, stageCmd(m.mux, m.self, mv)
+		return m, stageCmd(m.mux, m.self, mv, m.spawns)
 	}
 	var cmds []tea.Cmd
 	if m.entering {
@@ -312,17 +358,20 @@ func (m model) restage() (model, tea.Cmd) {
 func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case panesTick:
-		return m, tea.Batch(listPanes(m.mux), panesEveryTick())
+		return m, tea.Batch(listPanes(m.mux, m.spawns), panesEveryTick())
 	case panesMsg:
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
+		}
+		if msg.gen < m.spawns {
+			return m, nil // it may show a spawned pane without its options
 		}
 		// A move that failed is tried again once tmux has been reread.
 		m = m.setPanes(msg.panes)
 		m.failed = ""
 		if !m.alive(m.holder) && !m.spawningHolder {
 			m.spawningHolder = true
-			return m, spawnCmd(m.mux, spawnHolder, "", "", m.session, "", nil, m.exe, "stage")
+			return m, spawnCmd(m.mux, spawn{kind: spawnHolder, session: m.session, command: []string{m.exe, "stage"}})
 		}
 	case stagedMsg:
 		m.staging = false
@@ -330,7 +379,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.failed = msg.to
 			m = m.say("could not show the session: " + msg.err.Error())
 		}
-		if msg.panes != nil {
+		if msg.panes != nil && msg.gen >= m.spawns {
 			m = m.setPanes(msg.panes)
 		}
 		// The holder may have been resized, so draw it afresh.
@@ -339,11 +388,18 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if msg.kind == spawnHolder {
 			m.spawningHolder = false
 		}
-		if msg.err != nil {
+		if msg.pane.ID == "" {
 			return m.say("could not start " + msg.name + ": " + msg.err.Error()), nil
 		}
-		// Known now, though the next listing is yet to come.
+		if msg.err != nil {
+			m = m.say("could not mark " + msg.name + ": " + msg.err.Error())
+		}
+		// Known now, though the next listing is yet to come. A listing
+		// asked for before this point may lack it or its options.
 		m.panes = append(m.panes, msg.pane)
+		if msg.kind != spawnHolder {
+			m.spawns++
+		}
 		switch msg.kind {
 		case spawnHolder:
 			m.holder, m.holderShown = msg.pane.ID, ""
@@ -355,7 +411,6 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 				return nil
 			}
 		case spawnAttach:
-			m.attached[msg.key] = msg.pane.ID
 			m.entering = true
 		case spawnSession:
 			m.opened, m.entering = msg.pane, true
