@@ -10,6 +10,12 @@ See README.md for behaviour and docs/ for design notes.
   `go test -race`, and a build to `bin/overview`. It must pass before every
   commit. `scripts/check --deep` also reruns property tests with 2000 cases.
 - A single package: `go test -race ./internal/fleet`.
+- `scripts/e2e` builds the binary and drives it in two private tmux servers
+  (`ovtest-e2e-<pid>`, `ovtest-e2e-term-<pid>`): launch, the holder, `c`,
+  splits and the list's width. It builds only with `-tags e2e`, so the gate
+  skips it; run it after changing launch, the view or tmux handling.
+- Never point a test or a trial run at the `overview` socket, not even to
+  read it. Use `--socket <name>` and `--config <dir>`.
 - Go 1.27 or later, no cgo.
 
 ## Testing rules

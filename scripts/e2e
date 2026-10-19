@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# The end-to-end test: builds overview and drives it in two private tmux
+# servers, ovtest-e2e-<pid> and ovtest-e2e-term-<pid>, which it kills when
+# it ends. It never touches the overview socket. Needs tmux.
+#   scripts/e2e [go test flags]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+go test -tags e2e -count=1 "$@" ./e2e

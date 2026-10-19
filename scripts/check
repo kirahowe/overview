@@ -19,6 +19,8 @@ fi
 
 step "go vet"
 go vet ./...
+# The end-to-end test builds only with its tag; scripts/e2e runs it.
+go vet -tags e2e ./e2e
 
 step "staticcheck"
 if command -v staticcheck >/dev/null; then
