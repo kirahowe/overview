@@ -42,8 +42,8 @@ type pinnedMsg struct {
 }
 
 // readDirs lists the directories in dir by name, hidden ones and symlinks
-// to directories included. Tests replace it.
-var readDirs = func(dir string) ([]string, error) {
+// to directories included.
+func readDirs(dir string) ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -181,13 +181,13 @@ func pickTarget(query, home string, matches []string, sel int) (path string, typ
 	return "", false
 }
 
-// readPathsCmd reads the directories in each of dirs and answers for
-// source. A directory that cannot be read adds nothing.
-func readPathsCmd(source string, dirs []string) tea.Cmd {
+// readPathsCmd reads the directories in each of dirs with read, and
+// answers for source. A directory that cannot be read adds nothing.
+func readPathsCmd(read func(string) ([]string, error), source string, dirs []string) tea.Cmd {
 	return func() tea.Msg {
 		var paths []string
 		for _, d := range dirs {
-			names, _ := readDirs(d)
+			names, _ := read(d)
 			for _, n := range names {
 				paths = append(paths, filepath.Join(d, n))
 			}
@@ -198,10 +198,10 @@ func readPathsCmd(source string, dirs []string) tea.Cmd {
 
 // pinCmd pins the project path is in, after checking that a typed path is
 // a directory. The project is the repo root, as for a session's directory.
-func pinCmd(pin func(string) error, path string, typed bool, resolve func(string) string, exists func(string) bool) tea.Cmd {
+func pinCmd(read func(string) ([]string, error), pin func(string) error, path string, typed bool, resolve func(string) string, exists func(string) bool) tea.Cmd {
 	return func() tea.Msg {
 		if typed {
-			if _, err := readDirs(path); err != nil {
+			if _, err := read(path); err != nil {
 				return pinnedMsg{err: err}
 			}
 		}

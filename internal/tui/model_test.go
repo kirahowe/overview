@@ -26,6 +26,7 @@ func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
 	m.projects.exists = func(string) bool { return false }
+	m.deps = fakeDeps(nil)
 	ttys := map[int]string{}
 	for _, r := range rows {
 		if r.PID > 0 && !r.Background() {
@@ -277,9 +278,8 @@ func TestClickClosesOverlays(t *testing.T) {
 
 func TestCopyRunsAsACommand(t *testing.T) {
 	var got string
-	defer func(old func(string) error) { copyText = old }(copyText)
-	copyText = func(s string) error { got = s; return nil }
 	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m.deps.copyText = func(s string) error { got = s; return nil }
 	m, cmd := press(m, "y")
 	if got != "" || cmd == nil {
 		t.Fatal("y copied inside Update")

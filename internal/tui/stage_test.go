@@ -33,6 +33,8 @@ type fakeMux struct {
 	set     map[string]string // the layouts set, by window
 	detach  int
 
+	drawn map[string]string // what the view wrote to each tty
+
 	moveErr error
 }
 
@@ -44,7 +46,7 @@ type spawnCall struct {
 // newFakeMux holds the view's pane %0, alone in its window, and a holder
 // %1 in a window of its own, both in session ov.
 func newFakeMux() *fakeMux {
-	f := &fakeMux{set: map[string]string{},
+	f := &fakeMux{drawn: map[string]string{}, set: map[string]string{},
 		current: map[string]string{"ov": "@0"}, next: 2}
 	f.panes = []tmux.Pane{
 		{ID: "%0", TTY: "ttys900", Session: "ov", Window: "@0", W: 160, H: 40, List: true},
@@ -245,14 +247,25 @@ func (f *fakeMux) inWindow(w string) int {
 	return n
 }
 
-// drawn records what the view wrote to each tty.
-type drawn map[string]string
+// draw records what the view writes to a tty, as the model's writeTTY.
+func (f *fakeMux) draw(tty string, b []byte) error {
+	f.drawn[tty] = string(b)
+	return nil
+}
 
-func recordDraws(t testing.TB) drawn {
-	d := drawn{}
-	old := writeTTY
-	writeTTY = func(tty string, b []byte) error { d[tty] = string(b); return nil }
-	t.Cleanup(func() { writeTTY = old })
+// fakeDeps stand in for the system in a test model: nothing is running,
+// and the holder's text goes to f.
+func fakeDeps(f *fakeMux) deps {
+	d := systemDeps()
+	d.psTable = func() ([]byte, error) { return nil, nil }
+	d.copyText = func(string) error { return errors.New("no clipboard in tests") }
+	d.reveal = func(string) error { return errors.New("no apps in tests") }
+	d.readDirs = func(dir string) ([]string, error) { return nil, errors.New(dir + ": no directories in tests") }
+	if f != nil {
+		d.writeTTY = f.draw
+	} else {
+		d.writeTTY = func(string, []byte) error { return errors.New("no ttys in tests") }
+	}
 	return d
 }
 
@@ -262,6 +275,7 @@ func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
 	m.projects.exists = func(string) bool { return false }
 	m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
+	m.deps = fakeDeps(f)
 	ttys := map[int]string{}
 	for _, r := range rows {
 		if r.PID > 0 && !r.Background() {
@@ -366,7 +380,6 @@ func TestEnterFocusesTheSession(t *testing.T) {
 }
 
 func TestSessionOutsideTmuxGetsTheHolder(t *testing.T) {
-	d := recordDraws(t)
 	f := newFakeMux()
 	m := stagedModel(t, f)
 	// A session in some other terminal: it has a tty, but no pane here.
@@ -375,7 +388,7 @@ func TestSessionOutsideTmuxGetsTheHolder(t *testing.T) {
 	if !f.staged("%1") {
 		t.Fatalf("the list is in %s, want the holder's window", f.stage())
 	}
-	text := ansi.Strip(d["ttys901"])
+	text := ansi.Strip(f.drawn["ttys901"])
 	if !strings.Contains(text, "ttys777") || !strings.Contains(text, "outside overview's tmux") {
 		t.Fatalf("holder shows %q", text)
 	}
@@ -384,10 +397,10 @@ func TestSessionOutsideTmuxGetsTheHolder(t *testing.T) {
 		t.Fatalf("enter: selects %v, note %q", f.selects, m.note)
 	}
 	// Drawn once, and again only when what it shows changes.
-	delete(d, "ttys901")
+	delete(f.drawn, "ttys901")
 	m, cmd = step(m, tea.FocusMsg{})
 	settle(t, m, cmd)
-	if _, again := d["ttys901"]; again {
+	if _, again := f.drawn["ttys901"]; again {
 		t.Fatal("the holder was redrawn with nothing changed")
 	}
 }
@@ -645,9 +658,6 @@ func TestFocusDimsTheCursor(t *testing.T) {
 // do, once the view settles the list is in the wanted pane's window, and
 // every other pane stays in the window it started in.
 func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
-	old := writeTTY
-	writeTTY = func(string, []byte) error { return nil }
-	defer func() { writeTTY = old }()
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		f := newFakeMux()
@@ -669,6 +679,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 		m := newModel(caseHome(t, root), "")
 		m.projects.exists = func(string) bool { return false }
 		m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
+		m.deps = fakeDeps(f)
 		m = m.setPanes(f.panes)
 		m, cmd := step(m, tea.WindowSizeMsg{Width: 50, Height: 30})
 		m = settle(t, m, cmd)
@@ -814,7 +825,6 @@ func repoModel(t *testing.T, f *fakeMux) model {
 }
 
 func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "t")
@@ -850,7 +860,6 @@ func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
 }
 
 func TestTWithASearchHidingItClearsTheSearch(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "/", "a", "u", "t", "h", "enter")
@@ -862,7 +871,6 @@ func TestTWithASearchHidingItClearsTheSearch(t *testing.T) {
 }
 
 func TestXClosesATerminalAfterAYes(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "t")
@@ -888,7 +896,6 @@ func TestXClosesATerminalAfterAYes(t *testing.T) {
 
 // Closing a terminal puts the cursor on the entry after it.
 func TestClosingATerminalSelectsTheNextEntry(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "t")
@@ -907,7 +914,6 @@ func TestClosingATerminalSelectsTheNextEntry(t *testing.T) {
 
 // A session that ends leaves the cursor on its neighbour, not the top.
 func TestAnEndedSessionSelectsTheNextEntry(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	a, b, c := row("s1", "a", "", 11), row("s2", "b", "", 12), row("s3", "c", "", 13)
 	m := stagedModel(t, f, a, b, c)
@@ -930,7 +936,6 @@ func TestAnEndedSessionSelectsTheNextEntry(t *testing.T) {
 // stays in that window, now a terminal, so the list does not hop away from
 // where the user is typing.
 func TestTheCursorStaysInAWindowWhoseSessionEnded(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
 	m := stagedModel(t, f, red, blue)
@@ -959,7 +964,6 @@ func TestTheCursorStaysInAWindowWhoseSessionEnded(t *testing.T) {
 // A claude started by hand in a terminal exits back to its shell: the row
 // goes, the pane stays, and so does the cursor.
 func TestTheCursorStaysWhenClaudeExitsToItsShell(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
 	m := stagedModel(t, f, red, blue)
@@ -972,7 +976,6 @@ func TestTheCursorStaysWhenClaudeExitsToItsShell(t *testing.T) {
 }
 
 func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
-	d := recordDraws(t)
 	f := newFakeMux()
 	m := stagedModel(t, f)
 	if err := m.home.PinProject("/code/empty"); err != nil {
@@ -984,7 +987,7 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 	if !ok || e.kind != projectEntry || m.sel != "project:/code/empty" || !f.staged("%1") {
 		t.Fatalf("sel %s, entry %+v, list in %s", m.sel, e, f.stage())
 	}
-	if text := ansi.Strip(d["ttys901"]); !strings.Contains(text, "No sessions in /code/empty. c starts Claude here") {
+	if text := ansi.Strip(f.drawn["ttys901"]); !strings.Contains(text, "No sessions in /code/empty. c starts Claude here") {
 		t.Fatalf("holder shows %q", text)
 	}
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "no sessions") || !strings.Contains(view, "x unpin") {
@@ -1010,7 +1013,6 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 }
 
 func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
-	recordDraws(t)
 	f := newFakeMux()
 	m := stagedModel(t, f)
 	m, cmd := step(m, rowsMsg{pinned: []string{"/code/empty"}})

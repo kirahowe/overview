@@ -94,8 +94,7 @@ func sameAs(t *rapid.T, what string, got, want model) {
 
 // mouseAt sends a mouse press through Update, stamped at at.
 func mouseAt(m model, b tea.MouseButton, x, y int, at time.Time) model {
-	defer func(old func() time.Time) { now = old }(now)
-	now = func() time.Time { return at }
+	m.deps.now = func() time.Time { return at }
 	return update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: b})
 }
 
@@ -115,6 +114,7 @@ func TestStateMachine(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
 		m.projects.exists = func(string) bool { return false }
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys := genStateRows(t)

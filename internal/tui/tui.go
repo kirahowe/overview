@@ -95,8 +95,7 @@ type model struct {
 
 	projects *projects
 
-	// reveal brings an app to the front. Tests replace it.
-	reveal func(path string) error
+	deps deps
 	// cwd is where c starts a session when the list is empty.
 	cwd string
 
@@ -164,7 +163,22 @@ func Run(home fleet.Home, llm string, theme Theme, socket, session string) error
 
 func newModel(home fleet.Home, llm string) model {
 	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
-		reveal: openApp}
+		deps: systemDeps()}
+}
+
+// deps are the model's ways out to the system. Each runs inside a Cmd,
+// apart from now, which stamps input as it arrives. Tests replace them.
+type deps struct {
+	now      func() time.Time
+	reveal   func(path string) error // brings an app to the front
+	copyText func(text string) error // puts text on the clipboard
+	psTable  func() ([]byte, error)
+	readDirs func(dir string) ([]string, error)
+	writeTTY func(tty string, b []byte) error
+}
+
+func systemDeps() deps {
+	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY}
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
@@ -207,7 +221,7 @@ func nextFrame() tea.Cmd {
 
 func (m model) refresh() tea.Msg {
 	rows, err := m.home.Rows()
-	out, _ := psTable()
+	out, _ := m.deps.psTable()
 	ttys, hosts := places(parseProcs(string(out)), rows)
 	return rowsMsg{rows, ttys, hosts, m.home.Projects(), err}
 }
@@ -218,7 +232,7 @@ func (m model) runDigest() tea.Msg {
 }
 
 func (m model) say(note string) model {
-	m.note, m.noteAt = note, time.Now()
+	m.note, m.noteAt = note, m.deps.now()
 	return m
 }
 
@@ -407,14 +421,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handle(m.keyActions(msg))
 	case tea.MouseMsg:
 		// The input's time is read here, at the door, so apply stays pure.
-		return m.handle(m.mouseActions(msg, now()))
+		return m.handle(m.mouseActions(msg, m.deps.now()))
 	case noteMsg:
 		m = m.say(string(msg))
 	case frameMsg:
 		m.frame++
 		return m, nextFrame()
 	case tickMsg:
-		if !m.noteAt.IsZero() && time.Since(m.noteAt) > noteFor {
+		if !m.noteAt.IsZero() && time.Time(msg).Sub(m.noteAt) > noteFor {
 			m.note = ""
 		}
 		// The orchestrator publishes digests on its own schedule. Follow the
@@ -648,7 +662,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.say("nothing to add"), nil
 		}
 		m.pick = picker{}
-		return m.say("adding " + path + "…"), pinCmd(m.home.PinProject, path, typed, m.projects.resolve, m.projects.exists)
+		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.projects.resolve, m.projects.exists)
 	case pickCancel:
 		m.pick = picker{}
 	case copyID:
@@ -659,7 +673,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if row.Background() {
 			text = "claude attach " + row.ID
 		}
-		return m, func() tea.Msg { return copied(text, copyText(text)) }
+		put := m.deps.copyText
+		return m, func() tea.Msg { return copied(text, put(text)) }
 	}
 	return m, nil
 }
@@ -707,7 +722,7 @@ func (m model) readPicks() (model, tea.Cmd) {
 	if m.pick.from == "" {
 		dirs = pickParents(append(m.knownRoots(), m.projects.root(m.cwd)))
 	}
-	return m, readPathsCmd(m.pick.from, dirs)
+	return m, readPathsCmd(m.deps.readDirs, m.pick.from, dirs)
 }
 
 // toProject puts the cursor on a project's first entry, clearing a search
@@ -748,11 +763,8 @@ func (m model) rootOf(e entry, ok bool) string {
 	return m.projects.root(e.row.Cwd)
 }
 
-// now is the clock that stamps mouse input. Tests replace it.
-var now = time.Now
-
-// copyText puts text on the clipboard. Tests replace it.
-var copyText = func(text string) error {
+// copyText puts text on the clipboard.
+func copyText(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
@@ -782,10 +794,10 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	}
 	row := e.row
 	if h, away := m.hosts[row.PID]; away && !row.Background() {
-		if h.Path == "" || m.reveal == nil {
+		if h.Path == "" || m.deps.reveal == nil {
 			return m.say(awayNote(row.Name, h)), nil
 		}
-		reveal := m.reveal
+		reveal := m.deps.reveal
 		return m.say("opening " + h.Name + "…"), func() tea.Msg {
 			return doneMsg{row.Name + " is in " + h.Name, reveal(h.Path)}
 		}

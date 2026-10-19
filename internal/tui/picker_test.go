@@ -160,10 +160,9 @@ func TestPropPickMatchesPath(t *testing.T) {
 // name.
 type fakeDirs map[string][]string
 
-func useDirs(t testing.TB, d fakeDirs) *[]string {
+func useDirs(m *model, d fakeDirs) *[]string {
 	var reads []string
-	old := readDirs
-	readDirs = func(dir string) ([]string, error) {
+	m.deps.readDirs = func(dir string) ([]string, error) {
 		reads = append(reads, dir)
 		names, ok := d[dir]
 		if !ok {
@@ -171,7 +170,6 @@ func useDirs(t testing.TB, d fakeDirs) *[]string {
 		}
 		return names, nil
 	}
-	t.Cleanup(func() { readDirs = old })
 	return &reads
 }
 
@@ -192,10 +190,9 @@ func pickerModel(t *testing.T, f *fakeMux) model {
 }
 
 func TestAPinsAPickedProjectAndShowsIt(t *testing.T) {
-	recordDraws(t)
-	reads := useDirs(t, fakeDirs{"/code": {"app", "blog", "shop", ".cache"}})
 	f := newFakeMux()
 	m := pickerModel(t, f)
+	reads := useDirs(&m, fakeDirs{"/code": {"app", "blog", "shop", ".cache"}})
 	m = pressSettled(t, m, "a")
 	if !m.pick.open || !slices.Equal(*reads, []string{"/code"}) {
 		t.Fatalf("open %v, read %v", m.pick.open, *reads)
@@ -222,10 +219,9 @@ func TestAPinsAPickedProjectAndShowsIt(t *testing.T) {
 }
 
 func TestAPathQueryCompletesAndPinsWhatWasTyped(t *testing.T) {
-	recordDraws(t)
-	reads := useDirs(t, fakeDirs{"/code": {"app"}, testHome: {"code", "Documents", ".config"}, testHome + "/code": {}, testHome + "/code/new": {}})
 	f := newFakeMux()
 	m := pickerModel(t, f)
+	reads := useDirs(&m, fakeDirs{"/code": {"app"}, testHome: {"code", "Documents", ".config"}, testHome + "/code": {}, testHome + "/code/new": {}})
 	m = pressSettled(t, m, "a", "~", "/")
 	if got := m.pickMatches(); !slices.Equal(got, []string{testHome + "/code", testHome + "/Documents"}) {
 		t.Fatalf("matches %v", got)
@@ -247,10 +243,9 @@ func TestAPathQueryCompletesAndPinsWhatWasTyped(t *testing.T) {
 
 // An answer for a query that has moved on is dropped.
 func TestAStalePickAnswerIsDropped(t *testing.T) {
-	recordDraws(t)
-	useDirs(t, fakeDirs{"/code": {"app", "blog"}, "/": {"code"}})
 	f := newFakeMux()
 	m := pickerModel(t, f)
+	useDirs(&m, fakeDirs{"/code": {"app", "blog"}, "/": {"code"}})
 	m, cmd := press(m, "a")
 	stale := cmd
 	m = pressSettled(t, m, "/")
@@ -261,10 +256,9 @@ func TestAStalePickAnswerIsDropped(t *testing.T) {
 }
 
 func TestPickerKeys(t *testing.T) {
-	recordDraws(t)
-	useDirs(t, fakeDirs{"/code": {"a1", "a2", "a3"}})
 	f := newFakeMux()
 	m := pickerModel(t, f)
+	useDirs(&m, fakeDirs{"/code": {"a1", "a2", "a3"}})
 	m = pressSettled(t, m, "a", "down", "down", "down")
 	if m.pick.sel != 2 {
 		t.Fatalf("sel %d", m.pick.sel)

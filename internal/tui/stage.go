@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -208,8 +209,8 @@ func spawnCmd(mux multiplexer, sp spawn) tea.Cmd {
 	}
 }
 
-// writeTTY writes to a pane's terminal. Tests replace it.
-var writeTTY = func(tty string, b []byte) error {
+// writeTTY writes to a pane's terminal.
+func writeTTY(tty string, b []byte) error {
 	f, err := os.OpenFile("/dev/"+tty, os.O_WRONLY|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return err
@@ -219,9 +220,9 @@ var writeTTY = func(tty string, b []byte) error {
 	return err
 }
 
-func drawCmd(tty, text string) tea.Cmd {
+func drawCmd(write func(string, []byte) error, tty, text string) tea.Cmd {
 	return func() tea.Msg {
-		if err := writeTTY(tty, []byte(text)); err != nil {
+		if err := write(tty, []byte(text)); err != nil {
 			return noteMsg("could not draw the details: " + err.Error())
 		}
 		return nil
@@ -355,7 +356,7 @@ func (m model) restage() (model, tea.Cmd) {
 	if p, ok := m.pane(want); ok && want == m.holder() {
 		if text := m.holderText(p.W, p.H); text != m.holderShown {
 			m.holderShown = text
-			cmds = append(cmds, drawCmd(p.TTY, text))
+			cmds = append(cmds, drawCmd(m.deps.writeTTY, p.TTY, text))
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -403,7 +404,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		// Known now, though the next listing is yet to come. A listing
 		// asked for before this point may lack it or its options.
-		m.panes = append(m.panes, msg.pane)
+		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
 		m.spawns++
 		switch msg.kind {
 		case spawnHolder:

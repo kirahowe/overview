@@ -28,8 +28,8 @@ func (h host) label() string {
 	return h.Name
 }
 
-// psTable lists every process as `pid ppid tty comm`. Tests replace it.
-var psTable = func() ([]byte, error) {
+// psTable lists every process as `pid ppid tty comm`.
+func psTable() ([]byte, error) {
 	return exec.Command("ps", "-A", "-o", "pid=,ppid=,tty=,comm=").Output()
 }
 

@@ -149,7 +149,7 @@ func awayModel(t *testing.T) (model, *[]string) {
 	obs.Cwd = "/"
 	m := newTestModel(t, row("s1", "red", "auth", 11), obs)
 	var opened []string
-	m.reveal = func(path string) error { opened = append(opened, path); return nil }
+	m.deps.reveal = func(path string) error { opened = append(opened, path); return nil }
 	m = update(m, rowsMsg{rows: m.rows, ttys: map[int]string{11: "ttys1"},
 		hosts: map[int]host{63381: {Name: "Obsidian", Path: "/Applications/Obsidian.app"}}})
 	return m, &opened
