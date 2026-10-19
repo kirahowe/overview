@@ -2,10 +2,9 @@ package tmux
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
 	"testing"
+
+	"overview/internal/tmuxtest"
 )
 
 // Layouts captured from tmux 3.8 in a 200x50 window.
@@ -111,15 +110,7 @@ func TestWithoutJSONForm(t *testing.T) {
 // tmux itself is the judge of whether the result is a layout it accepts:
 // remove each pane of a real window, then apply the result to what is left.
 func TestWithoutAcceptedByTmux(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
-	sock := fmt.Sprintf("overview-layout-test-%d", os.Getpid())
-	tm := func(args ...string) (string, error) {
-		out, err := exec.Command("tmux", append([]string{"-L", sock, "-f", "/dev/null"}, args...)...).CombinedOutput()
-		return strings.TrimSpace(string(out)), err
-	}
-	t.Cleanup(func() { tm("kill-server") }) //nolint:errcheck
+	tm := tmuxtest.New(t, "").Run
 	for victim := 0; victim < 6; victim++ {
 		tm("kill-server") //nolint:errcheck
 		if out, err := tm("new-session", "-d", "-x", "200", "-y", "50", "sleep 300"); err != nil {

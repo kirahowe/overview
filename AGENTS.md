@@ -33,6 +33,11 @@ See README.md for behaviour and docs/ for design notes.
   a function variable or an interface, set by tests. Logic must be testable
   without those programs installed or running.
 - Tests use a `t.TempDir()` home and never touch the real `~/.claude-*`.
+  A property test makes one per case under a `t.TempDir()` taken outside
+  `rapid.Check`.
+- A test that needs a real tmux gets a private server from
+  `internal/tmuxtest`, which puts the socket in a short directory under
+  `/tmp` and removes it afterwards. tmux never deletes its socket files.
 
 ## Hook rules
 

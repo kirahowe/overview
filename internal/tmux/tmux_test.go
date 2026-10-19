@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"pgregory.net/rapid"
+
+	"overview/internal/tmuxtest"
 )
 
 func TestParsePanes(t *testing.T) {
@@ -64,29 +66,11 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 	})
 }
 
-// testServer is a real tmux server on a socket of its own, killed when the
-// test ends.
+// testServer is a real tmux server on a private socket, killed and its
+// socket removed when the test ends.
 func testServer(t *testing.T) Server {
 	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
-	return private(t, fmt.Sprintf("overview-test-%d", os.Getpid()))
-}
-
-// private is the server on the private socket name, killed when the test
-// ends.
-func private(t *testing.T, name string) Server {
-	t.Helper()
-	if name == "overview" {
-		t.Fatal("tests never use overview's own socket")
-	}
-	s, err := Named(name, "/dev/null")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Run("kill-server") }) //nolint:errcheck
-	return s
+	return At(tmuxtest.New(t, "").Path, "/dev/null")
 }
 
 func TestAgainstRealTmux(t *testing.T) {
@@ -186,10 +170,7 @@ func TestAgainstRealTmux(t *testing.T) {
 // leaves closes when it is empty, and otherwise keeps its panes, splits
 // included, for when the list comes back.
 func TestMoveTakesTheListAcrossWindows(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
-	s := private(t, fmt.Sprintf("ovtest-move-%d", os.Getpid()))
+	s := testServer(t)
 	run := func(args ...string) string {
 		t.Helper()
 		out, err := s.Run(args...)
@@ -270,7 +251,13 @@ func TestSocketPathIsTheNamedSocket(t *testing.T) {
 		t.Fatalf("path %q for %s", path, name)
 	}
 	s := At(path, "/dev/null")
-	t.Cleanup(func() { s.Run("kill-server") }) //nolint:errcheck
+	t.Cleanup(func() {
+		s.Run("kill-server") //nolint:errcheck
+		// tmux leaves the socket file behind. The name is this test's own.
+		if filepath.Base(path) == name {
+			os.Remove(path)
+		}
+	})
 	if panes, err := s.Panes(); err != nil || panes != nil {
 		t.Fatalf("asking for the path left a server: %v, %v", panes, err)
 	}

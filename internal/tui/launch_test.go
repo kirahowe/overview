@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,24 +9,15 @@ import (
 	"testing"
 
 	"overview/internal/tmux"
+	"overview/internal/tmuxtest"
 )
 
-// privateServer is a real tmux server on a socket of its own, killed when
-// the test ends.
-func privateServer(t *testing.T, name, conf string) tmux.Server {
+// privateServer is a real tmux server on a private socket, which reads
+// conf when it starts. It is killed and its socket removed when the test
+// ends.
+func privateServer(t *testing.T, conf string) tmux.Server {
 	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
-	if name == "overview" {
-		t.Fatal("tests never use overview's own socket")
-	}
-	srv, err := tmux.Named(name, conf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { srv.Run("kill-server") }) //nolint:errcheck
-	return srv
+	return tmux.At(tmuxtest.New(t, conf).Path, conf)
 }
 
 func TestViewCommandAddressesTheServerByPath(t *testing.T) {
@@ -39,7 +29,7 @@ func TestViewCommandAddressesTheServerByPath(t *testing.T) {
 }
 
 func TestEnsureView(t *testing.T) {
-	srv := privateServer(t, fmt.Sprintf("overview-launch-%d", os.Getpid()), "/dev/null")
+	srv := privateServer(t, "/dev/null")
 	// The view's stand-in marks its own pane, as Run does.
 	view := []string{"sh", "-c", `tmux -S "$1" set-option -p -t "$TMUX_PANE" @overview-list 1; sleep 300`, "sh", srv.Socket()}
 
@@ -186,9 +176,6 @@ func TestWriteConfUpgradesOnlyAnUneditedFile(t *testing.T) {
 // list, and from the list to the right. tmux runs the binding's command as
 // it would for the key.
 func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "tmux.conf")
 	if err := os.WriteFile(conf, []byte(defaultConf), 0o644); err != nil {
@@ -204,7 +191,7 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 	if err := os.WriteFile(key, []byte(binding+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srv := privateServer(t, fmt.Sprintf("ovtest-bracket-%d", os.Getpid()), conf)
+	srv := privateServer(t, conf)
 	run := func(args ...string) string {
 		t.Helper()
 		out, err := srv.Run(args...)

@@ -641,6 +641,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 	old := writeTTY
 	writeTTY = func(string, []byte) error { return nil }
 	defer func() { writeTTY = old }()
+	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		f := newFakeMux()
 		var rows []fleet.Row
@@ -658,7 +659,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 			}
 			rows = append(rows, r)
 		}
-		m := newModel(fleet.Home{Dir: t.Name()}, "")
+		m := newModel(caseHome(t, root), "")
 		m.projects.exists = func(string) bool { return false }
 		m.mux, m.self, m.session, m.holder, m.exe = f, "%0", "ov", "%1", "overview"
 		m = m.setPanes(f.panes)
@@ -761,9 +762,10 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 }
 
 func TestPropHolderTextFillsThePane(t *testing.T) {
+	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		rows, ttys := genStateRows(t)
-		m := newModel(fleet.Home{Dir: t.Name()}, "")
+		m := newModel(caseHome(t, root), "")
 		m.projects.exists = func(string) bool { return false }
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		w := rapid.IntRange(3, 200).Draw(t, "w")

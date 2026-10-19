@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,16 @@ func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	}
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	return update(m, rowsMsg{rows: rows, ttys: ttys})
+}
+
+// caseHome is a config directory of its own under root, for one case of a
+// property test, which has no TempDir of its own.
+func caseHome(t tester, root string) fleet.Home {
+	dir, err := os.MkdirTemp(root, "case")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fleet.Home{Dir: dir}
 }
 
 func update(m model, msg tea.Msg) model {

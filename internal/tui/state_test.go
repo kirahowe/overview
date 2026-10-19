@@ -112,8 +112,9 @@ func shownLine(m model, id string) int {
 }
 
 func TestStateMachine(t *testing.T) {
+	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
-		m := newModel(fleet.Home{Dir: t.Name()}, "")
+		m := newModel(caseHome(t, root), "")
 		m.projects.exists = func(string) bool { return false }
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys := genStateRows(t)
