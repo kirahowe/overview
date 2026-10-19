@@ -129,14 +129,14 @@ the mouse on, so a click on a pane focuses it, and you can drag the borders
 between panes. The list keeps the width you drag it to. Most terminals, Ghostty included, select text when
 you hold shift.
 
-The first run writes overview's tmux settings to
-`~/.config/overview/tmux.conf`, and from then on the file is yours to change.
-tmux reads it when the server starts. After an edit, run
-`tmux -L overview source-file ~/.config/overview/tmux.conf`. The `ctrl+[`
-binding and the splits live there. A file you never edited is replaced when
-a newer overview brings new settings, and a running server reads it again
-then. tmux can only tell `ctrl+[` from Esc when the terminal
-sends extended keys. A terminal that does not sends a plain Esc, which goes
+The first run writes overview's tmux settings to `tmux.conf` in overview's
+config directory (`~/.config/overview` unless `--config` names another).
+From then on the file is yours to change, and overview never writes it
+again. tmux reads it when the server starts. To apply an edit to the
+running server, press `ctrl+b :` inside overview and run `source-file`
+with the file's path. The `ctrl+[` binding and the splits live there.
+tmux can only tell `ctrl+[` from Esc when the terminal sends extended
+keys. A terminal that does not sends a plain Esc, which goes
 to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
 set to the config directory it is watching, so they show up in the list.
 Terminals get it too, so a `claude` you type into one shows up as well.

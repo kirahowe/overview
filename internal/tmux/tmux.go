@@ -46,10 +46,10 @@ type Pane struct {
 	Attach  string // the pane's AttachOption, "" when unset
 }
 
-// Server is overview's tmux server. Run runs one tmux command and returns
-// its output; tests replace it.
+// Server is overview's tmux server. run runs one tmux command and returns
+// its output.
 type Server struct {
-	Run    func(args ...string) (string, error)
+	run    func(args ...string) (string, error)
 	socket string
 }
 
@@ -63,7 +63,7 @@ func At(path, conf string) Server {
 	if conf != "" {
 		base = append(base, "-f", conf)
 	}
-	return Server{socket: path, Run: runner(base)}
+	return Server{socket: path, run: runner(base)}
 }
 
 // Named returns the server on the socket that tmux -L name would use, found
@@ -148,7 +148,7 @@ const pidFormat = "#{pane_id}\t#{pane_pid}"
 // Self is the pane that pid, the caller's own process, runs as. ok is false
 // when it runs in no pane on this server.
 func (s Server) Self(pid int) (id string, ok bool, err error) {
-	out, err := s.Run("list-panes", "-a", "-F", pidFormat)
+	out, err := s.run("list-panes", "-a", "-F", pidFormat)
 	if err != nil {
 		return "", false, err
 	}
@@ -158,7 +158,7 @@ func (s Server) Self(pid int) (id string, ok bool, err error) {
 
 // Panes lists every pane on the server. No server means no panes.
 func (s Server) Panes() ([]Pane, error) {
-	out, err := s.Run("list-panes", "-a", "-F", paneFormat)
+	out, err := s.run("list-panes", "-a", "-F", paneFormat)
 	if err != nil {
 		if noServer(err) {
 			return nil, nil
@@ -179,7 +179,7 @@ func noServer(err error) bool {
 // ID, tty, session and window.
 func (s Server) Spawn(session, dir string, env []string, command ...string) (Pane, error) {
 	var args []string
-	if _, err := s.Run("has-session", "-t", "="+session); err == nil {
+	if _, err := s.run("has-session", "-t", "="+session); err == nil {
 		args = []string{"new-window", "-d", "-t", "=" + session + ":"}
 	} else {
 		args = []string{"new-session", "-d", "-s", session}
@@ -201,7 +201,7 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 		args = append(args, "-e", e)
 	}
 	args = append(args, "-P", "-F", "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}")
-	out, err := s.Run(append(args, command...)...)
+	out, err := s.run(append(args, command...)...)
 	if err != nil {
 		return Pane{}, err
 	}
@@ -216,57 +216,51 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 // left, size wide, and makes that window current and list its active pane.
 // A window that list leaves empty closes.
 func (s Server) Move(list, target, size string) error {
-	_, err := s.Run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
+	_, err := s.run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
 	return err
 }
 
 // Layout reads a window's layout, as select-layout takes it.
 func (s Server) Layout(window string) (string, error) {
-	out, err := s.Run("display-message", "-p", "-t", window, "#{window_layout}")
+	out, err := s.run("display-message", "-p", "-t", window, "#{window_layout}")
 	return strings.TrimSpace(out), err
 }
 
 // SetLayout gives a window a layout that Layout read.
 func (s Server) SetLayout(window, layout string) error {
-	_, err := s.Run("select-layout", "-t", window, layout)
-	return err
-}
-
-// MoveWindow moves a window to the end of session, in the background.
-func (s Server) MoveWindow(window, session string) error {
-	_, err := s.Run("move-window", "-d", "-s", window, "-t", "="+session+":")
+	_, err := s.run("select-layout", "-t", window, layout)
 	return err
 }
 
 // Select focuses a pane.
 func (s Server) Select(pane string) error {
-	_, err := s.Run("select-pane", "-t", pane)
+	_, err := s.run("select-pane", "-t", pane)
 	return err
 }
 
 // SelectBeside focuses the pane to the right of pane. Of several there,
 // tmux picks the one used most recently.
 func (s Server) SelectBeside(pane string) error {
-	_, err := s.Run("select-pane", "-R", "-t", pane)
+	_, err := s.run("select-pane", "-R", "-t", pane)
 	return err
 }
 
 // KillWindow closes a window and ends everything that runs in it.
 func (s Server) KillWindow(window string) error {
-	_, err := s.Run("kill-window", "-t", window)
+	_, err := s.run("kill-window", "-t", window)
 	return err
 }
 
 // Detach detaches the client the calling pane is shown in.
 func (s Server) Detach() error {
-	_, err := s.Run("detach-client")
+	_, err := s.run("detach-client")
 	return err
 }
 
 // Option reads a session option, "" when unset. The option commands do not
 // take the "=" that pins a name exactly, but an exact name still wins.
 func (s Server) Option(session, name string) string {
-	out, err := s.Run("show-options", "-qv", "-t", session, name)
+	out, err := s.run("show-options", "-qv", "-t", session, name)
 	if err != nil {
 		return ""
 	}
@@ -275,20 +269,20 @@ func (s Server) Option(session, name string) string {
 
 // SetOption sets a session option.
 func (s Server) SetOption(session, name, value string) error {
-	_, err := s.Run("set-option", "-t", session, name, value)
+	_, err := s.run("set-option", "-t", session, name, value)
 	return err
 }
 
 // SetWindowOption sets an option on target's window. target may name the
 // window or any pane in it.
 func (s Server) SetWindowOption(target, name, value string) error {
-	_, err := s.Run("set-option", "-w", "-t", target, name, value)
+	_, err := s.run("set-option", "-w", "-t", target, name, value)
 	return err
 }
 
 // PaneOption reads a pane option, "" when unset.
 func (s Server) PaneOption(pane, name string) string {
-	out, err := s.Run("show-options", "-pqv", "-t", pane, name)
+	out, err := s.run("show-options", "-pqv", "-t", pane, name)
 	if err != nil {
 		return ""
 	}
@@ -297,7 +291,7 @@ func (s Server) PaneOption(pane, name string) string {
 
 // SetPaneOption sets a pane option.
 func (s Server) SetPaneOption(pane, name, value string) error {
-	_, err := s.Run("set-option", "-p", "-t", pane, name, value)
+	_, err := s.run("set-option", "-p", "-t", pane, name, value)
 	return err
 }
 
@@ -308,12 +302,12 @@ func (s Server) Respawn(pane string, env []string, command ...string) error {
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
-	_, err := s.Run(append(args, command...)...)
+	_, err := s.run(append(args, command...)...)
 	return err
 }
 
 // MarkList marks pane as the one the view runs in.
 func (s Server) MarkList(pane string) error {
-	_, err := s.Run("set-option", "-p", "-t", pane, ListOption, "1")
+	_, err := s.run("set-option", "-p", "-t", pane, ListOption, "1")
 	return err
 }

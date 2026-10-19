@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"overview/internal/config"
 	"overview/internal/fleet"
 )
 
@@ -35,7 +36,7 @@ func useTheme(t Theme) {
 }
 
 func init() {
-	t, err := builtinTheme(DefaultTheme)
+	t, err := builtinTheme(config.DefaultTheme)
 	if err != nil {
 		panic(err)
 	}

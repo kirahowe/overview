@@ -16,9 +16,6 @@ import (
 	"overview/internal/config"
 )
 
-// DefaultTheme is the theme used when nothing chooses another.
-const DefaultTheme = config.DefaultTheme
-
 //go:embed themes/*.theme
 var builtinThemes embed.FS
 
@@ -152,7 +149,7 @@ func LoadTheme(name, configDir string) (Theme, error) {
 	if err != nil {
 		return Theme{}, err
 	}
-	base, err := builtinTheme(DefaultTheme)
+	base, err := builtinTheme(config.DefaultTheme)
 	if err != nil {
 		return Theme{}, err
 	}

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"overview/internal/config"
 )
 
 func TestBuiltinThemesSetEveryColour(t *testing.T) {
@@ -27,7 +29,7 @@ func TestBuiltinThemesSetEveryColour(t *testing.T) {
 }
 
 func TestParseThemeErrors(t *testing.T) {
-	base, _ := builtinTheme(DefaultTheme)
+	base, _ := builtinTheme(config.DefaultTheme)
 	for name, src := range map[string]string{
 		"unknown key":  "accnet = #fff",
 		"bad colour":   "accent = orange",
@@ -44,7 +46,7 @@ func TestParseThemeErrors(t *testing.T) {
 }
 
 func TestParseThemeOverridesOnlyWhatItSets(t *testing.T) {
-	base, _ := builtinTheme(DefaultTheme)
+	base, _ := builtinTheme(config.DefaultTheme)
 	got, err := ParseTheme("mine", "# a comment\n\naccent = #123\ncode=42\n", base)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +103,7 @@ func TestLoadTheme(t *testing.T) {
 			t.Errorf("%s: accent %s, want %s", name, th.Accent, accent)
 		}
 	}
-	def, _ := builtinTheme(DefaultTheme)
+	def, _ := builtinTheme(config.DefaultTheme)
 	if calm, _ := LoadTheme("calm", dir); calm.Border != def.Border {
 		t.Errorf("calm should inherit the default's border, got %s", calm.Border)
 	}

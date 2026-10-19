@@ -85,26 +85,20 @@ func TestAgainstRealTmux(t *testing.T) {
 	if err := s.MarkList(list.ID); err != nil {
 		t.Fatal(err)
 	}
-	// "ov" must not also pick out "ov-parked".
-	a, err := s.Spawn("ov-parked", "/", nil, "sleep 300")
+	a, err := s.Spawn("ov", "/", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Spawn("ov-parked", "", nil, "sleep 300")
+	b, err := s.Spawn("ov", "", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// b gets a split of its own, and the list moves in beside both.
-	split, err := s.Run("split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", b.ID, "sleep 300")
+	split, err := s.run("split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", b.ID, "sleep 300")
 	if err != nil {
 		t.Fatal(err)
 	}
 	split = strings.TrimSpace(split)
-	for _, w := range []string{"ov-parked:0", "ov-parked:1"} {
-		if err := s.MoveWindow(w, "ov"); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := s.Move(list.ID, b.ID, "30"); err != nil {
 		t.Fatal(err)
 	}
@@ -144,15 +138,6 @@ func TestAgainstRealTmux(t *testing.T) {
 	if panes, _ = s.Panes(); len(panes) != 4 {
 		t.Fatalf("panes after the second move: %+v", panes)
 	}
-	if err := s.SetOption("ov", "@overview-holder", a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.Option("ov", "@overview-holder"); got != a.ID {
-		t.Fatalf("option %q, want %q", got, a.ID)
-	}
-	if got := s.Option("ov-parked", "@overview-holder"); got != "" {
-		t.Fatalf("the parked session has the option: %q", got)
-	}
 	view, err := s.Open("ov", nil, "sleep 300")
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +145,7 @@ func TestAgainstRealTmux(t *testing.T) {
 	if err := s.Select(view.ID); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := s.Run("display-message", "-p", "-t", "=ov:", "#{pane_id}"); strings.TrimSpace(out) != view.ID {
+	if out, _ := s.run("display-message", "-p", "-t", "=ov:", "#{pane_id}"); strings.TrimSpace(out) != view.ID {
 		t.Fatalf("the opened window is not current: %q", out)
 	}
 }
@@ -173,7 +158,7 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 	s := testServer(t)
 	run := func(args ...string) string {
 		t.Helper()
-		out, err := s.Run(args...)
+		out, err := s.run(args...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -252,7 +237,7 @@ func TestSocketPathIsTheNamedSocket(t *testing.T) {
 	}
 	s := At(path, "/dev/null")
 	t.Cleanup(func() {
-		s.Run("kill-server") //nolint:errcheck
+		s.run("kill-server") //nolint:errcheck
 		// tmux leaves the socket file behind. The name is this test's own.
 		if filepath.Base(path) == name {
 			os.Remove(path)
@@ -294,7 +279,7 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	if _, err := s.Spawn("ov", "", nil, "sleep", "301"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := s.Run("display-message", "-p", "-t", p.ID, "#{pane_pid}")
+	out, err := s.run("display-message", "-p", "-t", p.ID, "#{pane_pid}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +301,7 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	if err := s.Respawn(p.ID, nil, "sleep", "302"); err != nil {
 		t.Fatal(err)
 	}
-	out, _ = s.Run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
+	out, _ = s.run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
 	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
 		t.Fatalf("after respawn: %q", out)
 	}
@@ -353,7 +338,7 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	if a.Session != "ov" || !strings.HasPrefix(a.Window, "@") || a.Path != dir {
 		t.Fatalf("spawned %+v", a)
 	}
-	split := strings.TrimSpace(must(t)(s.Run("split-window", "-d", "-c", dir, "-P", "-F", "#{pane_id}", "-t", a.ID, "sleep 301")))
+	split := strings.TrimSpace(must(t)(s.run("split-window", "-d", "-c", dir, "-P", "-F", "#{pane_id}", "-t", a.ID, "sleep 301")))
 	b, err := s.Spawn("ov", "/", nil) // tmux's default shell
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +378,7 @@ func TestSelectBesidePicksTheLastUsedPane(t *testing.T) {
 	s := testServer(t)
 	run := func(args ...string) string {
 		t.Helper()
-		return strings.TrimSpace(must(t)(s.Run(args...)))
+		return strings.TrimSpace(must(t)(s.run(args...)))
 	}
 	list := run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")
 	top := run("split-window", "-h", "-t", list, "-P", "-F", "#{pane_id}", "sleep 300")

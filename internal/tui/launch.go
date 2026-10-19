@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,8 +19,9 @@ const viewArgs = "@overview-args"
 
 // defaultConf is written to the config directory on the first launch, and
 // is the user's to change from then on.
-const defaultConf = `# overview's tmux. The server reads this when it starts. After a change:
-#   tmux -L overview source-file ~/.config/overview/tmux.conf
+const defaultConf = `# overview's tmux. The server reads this when it starts. To apply a change
+# to a running server, press ctrl+b : inside overview and run source-file
+# with this file's path.
 
 set -g default-terminal "tmux-256color"
 set -as terminal-features ",xterm-ghostty:RGB:extkeys:clipboard:focus:sync:hyperlinks"
@@ -48,60 +48,16 @@ bind % split-window -h -c "#{pane_current_path}"
 bind '"' split-window -v -c "#{pane_current_path}"
 `
 
-// oldConfs are the defaults earlier versions wrote. A file still exactly
-// one of them was never edited, so it gets the new default.
-var oldConfs = []string{`# overview's tmux. The server reads this when it starts. After a change:
-#   tmux -L overview source-file ~/.config/overview/tmux.conf
-
-set -g default-terminal "tmux-256color"
-set -as terminal-features ",xterm-ghostty:RGB:extkeys:clipboard:focus:sync:hyperlinks"
-# always: tmux asks the terminal for extended keys even when the focused app
-# has not, which is what lets ctrl+[ arrive apart from a plain Esc.
-set -s extended-keys always
-set -s extended-keys-format csi-u
-set -s escape-time 10
-set -g focus-events on
-set -g mouse on
-set -g status off
-set -s set-clipboard on
-set -g allow-passthrough on
-set -g history-limit 50000
-
-# ctrl+[ moves between the list and the session beside it. A terminal that
-# cannot send extended keys sends Esc for it instead, which goes to the pane.
-bind -n C-[ if -F "#{@overview-list}" "select-pane -R" "select-pane -L"
-`}
-
-// confFor is what the tmux settings file should hold, given what it holds
-// now (found reports whether it exists): the default when there is none or
-// it is an old default, otherwise the file as it is. upgraded says it
-// replaced an old default.
-func confFor(now string, found bool) (conf string, upgraded bool) {
-	switch {
-	case !found:
-		return defaultConf, false
-	case slices.Contains(oldConfs, now):
-		return defaultConf, true
-	}
-	return now, false
-}
-
-// writeConf brings the tmux settings file at path up to date, as confFor
-// decides, and reports whether it replaced an old default.
-func writeConf(path string) (upgraded bool, err error) {
-	now, err := os.ReadFile(path)
-	found := err == nil
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
-	}
-	conf, upgraded := confFor(string(now), found)
-	if found && !upgraded {
-		return false, nil
+// writeConf writes the default tmux settings to path when there is no file
+// there. A file that exists is the user's and is left as it is.
+func writeConf(path string) error {
+	if _, err := os.Stat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
+		return err
 	}
-	return upgraded, os.WriteFile(path, []byte(conf), 0o644)
+	return os.WriteFile(path, []byte(defaultConf), 0o644)
 }
 
 // Launch puts the view in overview's tmux server, on the socket named
@@ -120,8 +76,7 @@ func Launch(home fleet.Home, socket, dir string, given, view []string) error {
 		return errors.New("overview runs its sessions in tmux, and tmux is not installed")
 	}
 	conf := filepath.Join(dir, "tmux.conf")
-	upgraded, err := writeConf(conf)
-	if err != nil {
+	if err := writeConf(conf); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
@@ -133,11 +88,6 @@ func Launch(home fleet.Home, socket, dir string, given, view []string) error {
 	srv, err := tmux.Named(socket, conf)
 	if err != nil {
 		return err
-	}
-	if upgraded {
-		// A running server takes the new settings now. With no server
-		// this fails, and the server reads them when it starts.
-		srv.Run("source-file", conf) //nolint:errcheck
 	}
 	session := SessionName(home)
 	if err := ensureView(srv, session, viewCommand(exe, srv.Socket(), session, view), given); err != nil {

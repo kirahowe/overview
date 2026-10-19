@@ -43,7 +43,6 @@ type multiplexer interface {
 	Move(list, target, size string) error
 	Layout(window string) (string, error)
 	SetLayout(window, layout string) error
-	MoveWindow(window, session string) error
 	Select(pane string) error
 	SelectBeside(pane string) error
 	KillWindow(window string) error
@@ -129,10 +128,6 @@ func listPanes(mux multiplexer, gen int) tea.Cmd {
 	}
 }
 
-// without is tmux.Without, the layout a window takes once a pane leaves it.
-// Tests replace it.
-var without = tmux.Without
-
 // shift is a step that puts the list beside the pane it wants: the list
 // goes from window from into the window of pane to, size wide. fix says
 // from keeps two or more panes, whose layout is then put right.
@@ -184,7 +179,7 @@ func stageCmd(mux multiplexer, list string, mv shift, gen int) tea.Cmd {
 		}
 		err := mux.Move(list, mv.to, mv.size)
 		if err == nil && lerr == nil {
-			if fixed, err := without(layout, list); err == nil {
+			if fixed, err := tmux.Without(layout, list); err == nil {
 				mux.SetLayout(mv.from, fixed) //nolint:errcheck
 			}
 		}
@@ -194,26 +189,6 @@ func stageCmd(mux multiplexer, list string, mv shift, gen int) tea.Cmd {
 		}
 		return stagedMsg{mv.to, panes, gen, err}
 	}
-}
-
-// unpark moves the windows of the parked session, where overview used to
-// keep the panes off the stage, into session, so sessions started before
-// an upgrade are kept.
-func unpark(mux multiplexer, session string) error {
-	panes, err := mux.Panes()
-	if err != nil {
-		return err
-	}
-	moved := map[string]bool{}
-	var errs []error
-	for _, p := range panes {
-		if p.Session != session+"-parked" || moved[p.Window] {
-			continue
-		}
-		moved[p.Window] = true
-		errs = append(errs, mux.MoveWindow(p.Window, session))
-	}
-	return errors.Join(errs...)
 }
 
 // spawnCmd starts sp's pane and sets its options straight after, so a
@@ -332,7 +307,7 @@ func (m model) besideTerminal(want string) bool {
 
 // setPanes takes a fresh listing of tmux's panes.
 func (m model) setPanes(panes []tmux.Pane) model {
-	m.panes, m.stage = panes, m.stageOf(panes)
+	m.panes = panes
 	return m
 }
 

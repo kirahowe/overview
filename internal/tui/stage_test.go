@@ -156,22 +156,46 @@ func (f *fakeMux) Move(list, target, size string) error {
 	return nil
 }
 
+// Layout is the window's panes side by side, in tmux's classic form, so
+// that tmux.Without reads it as it would a real one.
 func (f *fakeMux) Layout(window string) (string, error) {
 	f.layouts = append(f.layouts, window)
-	return "layout of " + window, nil
+	return fakeLayout(f.panes, window), nil
+}
+
+// fakeLayout lays out a 160x40 window's panes in columns.
+func fakeLayout(panes []tmux.Pane, window string) string {
+	var ids []string
+	for _, p := range panes {
+		if p.Window == window {
+			ids = append(ids, strings.TrimPrefix(p.ID, "%"))
+		}
+	}
+	body := "160x40,0,0"
+	if len(ids) == 1 {
+		body += "," + ids[0]
+	} else {
+		w := (160 - (len(ids) - 1)) / len(ids)
+		var cells []string
+		for i, id := range ids {
+			cw := w
+			if i == len(ids)-1 {
+				cw = 160 - (len(ids)-1)*(w+1)
+			}
+			cells = append(cells, fmt.Sprintf("%dx40,%d,0,%s", cw, i*(w+1), id))
+		}
+		body += "{" + strings.Join(cells, ",") + "}"
+	}
+	var sum uint16
+	for i := 0; i < len(body); i++ {
+		sum = sum>>1 + (sum&1)<<15
+		sum += uint16(body[i])
+	}
+	return fmt.Sprintf("%04x,%s", sum, body)
 }
 
 func (f *fakeMux) SetLayout(window, layout string) error {
 	f.set[window] = layout
-	return nil
-}
-
-func (f *fakeMux) MoveWindow(window, session string) error {
-	for i, p := range f.panes {
-		if p.Window == window {
-			f.panes[i].Session = session
-		}
-	}
 	return nil
 }
 
@@ -313,8 +337,8 @@ func TestTheStageFollowsTheCursor(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	want := paneWithTTY(f, m.ttys[m.ordered()[0].row.PID])
-	if !f.staged(want) || m.stage != f.stage() {
-		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stage, want)
+	if !f.staged(want) || m.stageOf(m.panes) != f.stage() {
+		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stageOf(m.panes), want)
 	}
 	m = pressSettled(t, m, "j")
 	want = paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
@@ -536,9 +560,6 @@ func TestTheListKeepsItsWidth(t *testing.T) {
 }
 
 func TestASplitStaysWithItsSession(t *testing.T) {
-	old := without
-	without = func(layout, pane string) (string, error) { return layout + " without " + pane, nil }
-	t.Cleanup(func() { without = old })
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	blue := paneWithTTY(f, "ttys012")
@@ -549,14 +570,19 @@ func TestASplitStaysWithItsSession(t *testing.T) {
 	if len(f.moves) != moves {
 		t.Fatalf("a split in the list's window moved the list: %v", f.moves)
 	}
-	m = pressSettled(t, m, "j")
 	win := f.window(blue)
+	before := fakeLayout(f.panes, win)
+	m = pressSettled(t, m, "j")
 	if f.window(split.ID) != win || f.staged(blue) || f.inWindow(win) != 2 {
 		t.Fatalf("the split is in %s, blue in %s with %d panes", f.window(split.ID), win, f.inWindow(win))
 	}
 	// Leaving three panes, the list read the layout and put it back
 	// without itself.
-	if !slices.Equal(f.layouts, []string{win}) || f.set[win] != "layout of "+win+" without %0" {
+	want, err := tmux.Without(before, "%0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.layouts, []string{win}) || f.set[win] != want {
 		t.Fatalf("layouts read %v, set %v", f.layouts, f.set)
 	}
 	m = pressSettled(t, m, "k")
@@ -566,25 +592,6 @@ func TestASplitStaysWithItsSession(t *testing.T) {
 	// red's window had only red and the list, so it needed no fix-up.
 	if len(f.layouts) != 1 {
 		t.Fatalf("layouts read %v", f.layouts)
-	}
-}
-
-func TestUnparkKeepsTheParkedSessions(t *testing.T) {
-	f := newFakeMux()
-	a := f.add("ov-parked", "ttys050")
-	f.split(a.ID)
-	b := f.add("ov-parked", "ttys051")
-	f.add("ov-parkedx", "ttys052")
-	if err := unpark(f, "ov"); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range f.panes {
-		if p.Session == "ov-parked" {
-			t.Fatalf("%s is still parked", p.ID)
-		}
-	}
-	if f.inWindow(a.Window) != 2 || f.inWindow(b.Window) != 1 || f.panes[len(f.panes)-1].Session != "ov-parkedx" {
-		t.Fatalf("panes %+v", f.panes)
 	}
 }
 
@@ -675,8 +682,8 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				if want := m.want(); want != "" && !f.staged(want) {
 					t.Fatalf("the list is in %s, the wanted %s in %s", f.stage(), want, f.window(want))
 				}
-				if m.stage != f.stage() {
-					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.stage)
+				if m.stageOf(m.panes) != f.stage() {
+					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.stageOf(m.panes))
 				}
 				seen := map[string]bool{}
 				for _, p := range f.panes {

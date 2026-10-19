@@ -15,9 +15,10 @@ import (
 // privateServer is a real tmux server on a private socket, which reads
 // conf when it starts. It is killed and its socket removed when the test
 // ends.
-func privateServer(t *testing.T, conf string) tmux.Server {
+func privateServer(t *testing.T, conf string) (tmux.Server, tmuxtest.Socket) {
 	t.Helper()
-	return tmux.At(tmuxtest.New(t, conf).Path, conf)
+	sock := tmuxtest.New(t, conf)
+	return tmux.At(sock.Path, conf), sock
 }
 
 func TestViewCommandAddressesTheServerByPath(t *testing.T) {
@@ -29,7 +30,7 @@ func TestViewCommandAddressesTheServerByPath(t *testing.T) {
 }
 
 func TestEnsureView(t *testing.T) {
-	srv := privateServer(t, "/dev/null")
+	srv, sock := privateServer(t, "/dev/null")
 	// The view's stand-in marks its own pane, as Run does.
 	view := []string{"sh", "-c", `tmux -S "$1" set-option -p -t "$TMUX_PANE" @overview-list 1; sleep 300`, "sh", srv.Socket()}
 
@@ -75,7 +76,7 @@ func TestEnsureView(t *testing.T) {
 	// Other flags restart the view in its own pane; no flags reattach.
 	pid := func() string {
 		panes, _ := srv.Panes()
-		out, _ := srv.Run("display", "-p", "-t", panes[0].ID, "#{pane_pid}")
+		out, _ := sock.Run("display", "-p", "-t", panes[0].ID, "#{pane_pid}")
 		return out
 	}
 	before := pid()
@@ -107,7 +108,7 @@ func TestEnsureView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.Run("kill-pane", "-t", panes[0].ID); err != nil {
+	if _, err := sock.Run("kill-pane", "-t", panes[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureView(srv, "ov", view, nil); err != nil {
@@ -122,52 +123,26 @@ func TestEnsureView(t *testing.T) {
 	for _, p := range panes {
 		where[p.ID] = p
 	}
-	shown, _ := srv.Run("display-message", "-p", "-t", "=ov:", "#{pane_id}")
+	shown, _ := sock.Run("display-message", "-p", "-t", "=ov:", "#{pane_id}")
 	if p := where[strings.TrimSpace(shown)]; !p.List || p.Window == where[other.ID].Window {
 		t.Fatalf("shown %q, panes %+v", shown, panes)
 	}
 }
 
-func TestConfFor(t *testing.T) {
-	for _, c := range []struct {
-		name, now string
-		found     bool
-		want      string
-		upgraded  bool
-	}{
-		{"none yet", "", false, defaultConf, false},
-		{"an old default", oldConfs[0], true, defaultConf, true},
-		{"the default", defaultConf, true, defaultConf, false},
-		{"edited", oldConfs[0] + "set -g status on\n", true, oldConfs[0] + "set -g status on\n", false},
-		{"empty", "", true, "", false},
-	} {
-		got, upgraded := confFor(c.now, c.found)
-		if got != c.want || upgraded != c.upgraded {
-			t.Errorf("%s: upgraded %v, conf %.40q", c.name, upgraded, got)
-		}
-	}
-}
-
-func TestWriteConfUpgradesOnlyAnUneditedFile(t *testing.T) {
+// The settings are written when there are none, and a file that exists,
+// edited or not, is left alone.
+func TestWriteConfOnlyWhenMissing(t *testing.T) {
 	dir := t.TempDir()
-	fresh, old, edited := filepath.Join(dir, "a", "tmux.conf"), filepath.Join(dir, "old.conf"), filepath.Join(dir, "edited.conf")
-	mine := oldConfs[0] + "set -g status on\n"
-	if err := os.WriteFile(old, []byte(oldConfs[0]), 0o644); err != nil {
+	fresh, mine := filepath.Join(dir, "a", "tmux.conf"), filepath.Join(dir, "mine.conf")
+	if err := os.WriteFile(mine, []byte("set -g status on\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(edited, []byte(mine), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for path, want := range map[string]struct {
-		conf     string
-		upgraded bool
-	}{fresh: {defaultConf, false}, old: {defaultConf, true}, edited: {mine, false}} {
-		upgraded, err := writeConf(path)
-		if err != nil {
+	for path, want := range map[string]string{fresh: defaultConf, mine: "set -g status on\n"} {
+		if err := writeConf(path); err != nil {
 			t.Fatal(err)
 		}
-		if b, _ := os.ReadFile(path); string(b) != want.conf || upgraded != want.upgraded {
-			t.Errorf("%s: upgraded %v, holds %.40q", filepath.Base(path), upgraded, b)
+		if b, _ := os.ReadFile(path); string(b) != want {
+			t.Errorf("%s holds %.40q", filepath.Base(path), b)
 		}
 	}
 }
@@ -191,10 +166,10 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 	if err := os.WriteFile(key, []byte(binding+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srv := privateServer(t, conf)
+	srv, sock := privateServer(t, conf)
 	run := func(args ...string) string {
 		t.Helper()
-		out, err := srv.Run(args...)
+		out, err := sock.Run(args...)
 		if err != nil {
 			t.Fatal(err)
 		}

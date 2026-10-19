@@ -101,16 +101,16 @@ type model struct {
 	cwd string
 
 	// tmux, as stage.go describes. mux is nil outside tmux, and then
-	// nothing is staged. The view runs in pane self of session, and stage
-	// is the window self is in. exe starts the holder.
-	mux                   multiplexer
-	self, session         string
-	exe                   string
-	panes                 []tmux.Pane
-	stage, holder, failed string
-	staging, entering     bool
-	spawningHolder        bool
-	holderShown           string
+	// nothing is staged. The view runs in pane self of session. exe starts
+	// the holder.
+	mux               multiplexer
+	self, session     string
+	exe               string
+	panes             []tmux.Pane
+	holder, failed    string
+	staging, entering bool
+	spawningHolder    bool
+	holderShown       string
 	// spawns counts the panes started with options to set. A listing asked
 	// for before the latest of them came back is dropped, since it may show
 	// that pane before its options were set.
@@ -154,9 +154,6 @@ func Run(home fleet.Home, llm string, theme Theme, socket, session string) error
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
 	m.holder = srv.Option(session, holderOption)
-	if err := unpark(srv, session); err != nil {
-		m = m.say("could not move the sessions from the parked session: " + err.Error())
-	}
 	panes, err := srv.Panes()
 	if err != nil {
 		return err
