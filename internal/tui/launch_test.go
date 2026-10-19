@@ -59,6 +59,34 @@ func TestEnsureView(t *testing.T) {
 	if l, all := count(); l != 1 || all != 1 {
 		t.Fatalf("second launch: %d list panes of %d", l, all)
 	}
+	// Other flags restart the view in its own pane; no flags reattach.
+	pid := func() string {
+		panes, _ := srv.Panes()
+		out, _ := srv.Run("display", "-p", "-t", panes[0].ID, "#{pane_pid}")
+		return out
+	}
+	before := pid()
+	if err := ensureView(srv, "ov", home, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	if pid() != before {
+		t.Fatal("a launch without flags restarted the view")
+	}
+	themed := append(append([]string{}, view...), "--theme", "one-dark")
+	if err := ensureView(srv, "ov", home, themed); err != nil {
+		t.Fatal(err)
+	}
+	waitForList()
+	if l, all := count(); l != 1 || all != 1 || pid() == before {
+		t.Fatalf("new flags: %d list panes of %d, restarted %v", l, all, pid() != before)
+	}
+	before = pid()
+	if err := ensureView(srv, "ov", home, themed); err != nil {
+		t.Fatal(err)
+	}
+	if pid() != before {
+		t.Fatal("the same flags restarted the view")
+	}
 	// The view quits but its stage lives on: a new view goes beside it.
 	panes, _ := srv.Panes()
 	stage, err := srv.SplitLeft(panes[0].ID, "70%", nil, "sleep 300")

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,6 +16,10 @@ import (
 // envSession tells the view which tmux session it runs in. Launch sets it on
 // the view's pane, and its absence is how a plain `overview` knows to launch.
 const envSession = "OVERVIEW_TMUX"
+
+// viewArgs is the pane option holding the flags the view was started with,
+// so a relaunch with other flags can tell it is running the wrong view.
+const viewArgs = "@overview-args"
 
 // listSize is the list's share of the window when Launch puts the view back
 // beside a stage that outlived it.
@@ -45,7 +50,8 @@ bind -n C-] if -F "#{@overview-list}" "select-pane -R" "select-pane -L"
 `
 
 // Launch puts the view in overview's tmux server and attaches this terminal
-// to it. A session already running is attached as it is; one whose view has
+// to it. A session already running is attached as it is, unless this launch
+// gives the view other flags, which restart it in place; one whose view has
 // quit gets a new view beside its stage. args are the view's own flags.
 // On success it does not return.
 func Launch(home fleet.Home, args []string) error {
@@ -89,30 +95,53 @@ func Launch(home fleet.Home, args []string) error {
 }
 
 // ensureView starts the view's session when it is missing, and a new view
-// in it when the old one has quit.
+// in it when the old one has quit. A view still running is restarted when
+// view carries flags other than its own; with no flags it is kept, so a
+// plain relaunch only reattaches.
 func ensureView(srv tmux.Server, session string, home fleet.Home, view []string) error {
 	panes, err := srv.Panes()
 	if err != nil {
 		return err
 	}
 	env := []string{envSession + "=" + session, "CLAUDE_CONFIG_DIR=" + string(home)}
+	args := quoteArgs(view[1:])
 	var stage string
 	for _, p := range panes {
 		if p.Session != session {
 			continue
 		}
 		if p.List {
-			return nil
+			if len(view) == 1 || srv.PaneOption(p.ID, viewArgs) == args {
+				return nil
+			}
+			if err := srv.Respawn(p.ID, env, view...); err != nil {
+				return err
+			}
+			return srv.SetPaneOption(p.ID, viewArgs, args)
 		}
 		stage = p.ID
 	}
+	var p tmux.Pane
 	if stage == "" {
-		_, err = srv.Spawn(session, "", env, view...)
-		return err
+		if p, err = srv.Spawn(session, "", env, view...); err != nil {
+			return err
+		}
+	} else {
+		if p, err = srv.SplitLeft(stage, listSize, env, view...); err != nil {
+			return err
+		}
+		if err := srv.Select(p.ID); err != nil {
+			return err
+		}
 	}
-	p, err := srv.SplitLeft(stage, listSize, env, view...)
-	if err != nil {
-		return err
+	return srv.SetPaneOption(p.ID, viewArgs, args)
+}
+
+// quoteArgs writes args as one string that tells any two lists apart.
+func quoteArgs(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = strconv.Quote(a)
 	}
-	return srv.Select(p.ID)
+	return strings.Join(q, " ")
 }

@@ -44,6 +44,9 @@ attaches your terminal to it. The window has two panes. The left one lists the
 sessions, and the right one is the selected session itself, live, so you can
 read it and type into it without leaving the list. Run `overview` again from
 any terminal and you get the same view back, with every session still running.
+If you run it with flags other than the ones the view started with, such as
+another `--theme`, the view restarts with them in the same pane, and the
+session beside it keeps running.
 
 The list puts the sessions that need you in a section at the top: a session
 needs you when it is blocked, or when it is idle and its last reply ends with

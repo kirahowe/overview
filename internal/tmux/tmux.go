@@ -187,6 +187,32 @@ func (s Server) SetOption(session, name, value string) error {
 	return err
 }
 
+// PaneOption reads a pane option, "" when unset.
+func (s Server) PaneOption(pane, name string) string {
+	out, err := s.Run("show-options", "-pqv", "-t", pane, name)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(out, "\n")
+}
+
+// SetPaneOption sets a pane option.
+func (s Server) SetPaneOption(pane, name, value string) error {
+	_, err := s.Run("set-option", "-p", "-t", pane, name, value)
+	return err
+}
+
+// Respawn kills what runs in pane and runs command there instead. The pane
+// keeps its place, size and options.
+func (s Server) Respawn(pane string, env []string, command ...string) error {
+	args := []string{"respawn-pane", "-k", "-t", pane}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	_, err := s.Run(append(args, command...)...)
+	return err
+}
+
 // MarkList marks pane as the one the view runs in.
 func (s Server) MarkList(pane string) error {
 	_, err := s.Run("set-option", "-p", "-t", pane, ListOption, "1")
