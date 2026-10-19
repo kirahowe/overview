@@ -1415,3 +1415,14 @@ func TestATerminalClosedMidSpawnLeavesNoDeadPanes(t *testing.T) {
 		t.Fatalf("the model has the list in %s, tmux in %s", m.stageOf(m.panes), f.stage())
 	}
 }
+
+// When the first refresh fails, the holder says why instead of waiting.
+func TestTheHolderShowsAFirstRefreshThatFailed(t *testing.T) {
+	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
+	m.deps = fakeDeps(nil)
+	m = update(m, rowsMsg{err: errors.New("claude agents --json: not found")})
+	text := ansi.Strip(m.holderText(60, 10))
+	if !strings.Contains(text, "claude agents --json: not found") || strings.Contains(text, "reading sessions") {
+		t.Fatalf("holder shows %q", text)
+	}
+}

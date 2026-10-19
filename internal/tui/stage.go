@@ -589,6 +589,8 @@ func (m model) holderText(w, h int) string {
 	var lines []string
 	e, _, ok := m.selected(m.ordered())
 	switch {
+	case !m.loaded && m.rowsErr != nil:
+		lines = wrap(red.Render(m.rowsErr.Error()), cw)
 	case !m.loaded:
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
