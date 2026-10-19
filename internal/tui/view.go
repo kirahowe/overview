@@ -420,7 +420,7 @@ func (m model) helpBox() []string {
 		entry{"/", "search, esc clears"},
 	), section("act",
 		entry{"enter", "type into the session"},
-		entry{"ctrl+]", "back to the list"},
+		entry{"ctrl+[", "back to the list"},
 		entry{"x", "stop (background)"},
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},
@@ -530,7 +530,7 @@ func (m model) statusBar() string {
 	sep := base.Render(" │ ")
 	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
 
-	keys := "↵ type · ^] back · / search · n next · c new · ? help "
+	keys := "↵ type · ^[ back · / search · n next · c new · ? help "
 	if m.screen == digestScreen {
 		keys = "[ ] older/newer · D write · d sessions · ? help "
 	}

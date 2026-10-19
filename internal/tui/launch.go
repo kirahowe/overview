@@ -35,7 +35,9 @@ const defaultConf = `# overview's tmux. The server reads this when it starts. Af
 
 set -g default-terminal "tmux-256color"
 set -as terminal-features ",xterm-ghostty:RGB:extkeys:clipboard:focus:sync:hyperlinks"
-set -s extended-keys on
+# always: tmux asks the terminal for extended keys even when the focused app
+# has not, which is what lets ctrl+[ arrive apart from a plain Esc.
+set -s extended-keys always
 set -s extended-keys-format csi-u
 set -s escape-time 10
 set -g focus-events on
@@ -45,8 +47,9 @@ set -s set-clipboard on
 set -g allow-passthrough on
 set -g history-limit 50000
 
-# ctrl+] moves between the list and the session beside it.
-bind -n C-] if -F "#{@overview-list}" "select-pane -R" "select-pane -L"
+# ctrl+[ moves between the list and the session beside it. A terminal that
+# cannot send extended keys sends Esc for it instead, which goes to the pane.
+bind -n C-[ if -F "#{@overview-list}" "select-pane -R" "select-pane -L"
 `
 
 // Launch puts the view in overview's tmux server and attaches this terminal

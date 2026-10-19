@@ -72,7 +72,7 @@ the app's name for a session in another app, ignoring case. Each
 space-separated word has to match one of those fields, and a word never
 matches across two of them. The cursor moves to the first match, `up` and
 `down` step through the matches, and `esc` clears the search. `enter` (or
-`tab`) moves the keyboard into the selected session, and `ctrl+]` brings it
+`tab`) moves the keyboard into the selected session, and `ctrl+[` brings it
 back to the list. On a background session, `enter` first attaches to it in
 the right pane; the attach stays there for when you come back to it. On a
 session in another app, `enter` brings that app to the front. While you are
@@ -95,8 +95,10 @@ you hold shift.
 The first run writes overview's tmux settings to
 `~/.config/overview/tmux.conf`, and from then on the file is yours to change.
 tmux reads it when the server starts. After an edit, run
-`tmux -L overview source-file ~/.config/overview/tmux.conf`. The `ctrl+]`
-binding lives there. Sessions started from overview get `CLAUDE_CONFIG_DIR`
+`tmux -L overview source-file ~/.config/overview/tmux.conf`. The `ctrl+[`
+binding lives there. tmux can only tell `ctrl+[` from Esc when the terminal
+sends extended keys. A terminal that does not sends a plain Esc, which goes
+to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
 set to the config directory it is watching, so they show up in the list.
 
 ## Themes
