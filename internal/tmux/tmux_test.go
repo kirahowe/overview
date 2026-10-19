@@ -498,3 +498,35 @@ func TestRespawnKeepsPaneOptions(t *testing.T) {
 		t.Fatalf("after respawn: %+v", got)
 	}
 }
+
+// A pane is focused when it is the active pane of the current window and
+// a client is attached to its session.
+func TestFocused(t *testing.T) {
+	sock := tmuxtest.New(t, "")
+	s := At(sock.Path, "/dev/null")
+	list := sock.Must("new-session", "-d", "-s", "ov", "-x", "80", "-y", "24", "-P", "-F", "#{pane_id}", "sleep", "300")
+	other := sock.Must("split-window", "-h", "-t", list, "-P", "-F", "#{pane_id}", "sleep", "300")
+	want := func(pane string, focused bool) {
+		t.Helper()
+		if got, err := s.Focused(pane); err != nil || got != focused {
+			t.Fatalf("Focused(%s) = %v, %v; want %v", pane, got, err, focused)
+		}
+	}
+	sock.Must("select-pane", "-t", list)
+	want(list, false) // no client
+	term := tmuxtest.New(t, "")
+	term.Must("new-session", "-d", "-x", "80", "-y", "24", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
+	for range 100 {
+		if out, _ := sock.Run("list-clients"); out != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	want(list, true)
+	want(other, false)
+	sock.Must("select-pane", "-t", other)
+	want(list, false)
+	want(other, true)
+	sock.Must("new-window", "-t", "=ov:", "sleep", "300")
+	want(other, false) // its window is no longer the current one
+}

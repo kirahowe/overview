@@ -303,6 +303,15 @@ func argv(command []string) []string {
 	return command
 }
 
+// Focused says whether pane has the keyboard: it is the active pane of its
+// session's current window, and a client is attached to the session. A
+// pane learns this from no focus event when it turns focus reporting on,
+// so the view asks once as it starts.
+func (s Server) Focused(pane string) (bool, error) {
+	out, err := s.run("display-message", "-p", "-t", pane, "#{pane_active}#{window_active}#{?session_attached,1,0}")
+	return strings.TrimSpace(out) == "111", err
+}
+
 // MarkList marks pane as the one the view runs in.
 func (s Server) MarkList(pane string) error {
 	_, err := s.run("set-option", "-p", "-t", pane, ListOption, "1")

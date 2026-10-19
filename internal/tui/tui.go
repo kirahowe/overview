@@ -183,6 +183,11 @@ func Run(v View) error {
 		return err
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
+	focused, err := srv.Focused(self)
+	if err != nil {
+		return err
+	}
+	m.blurred = !focused
 	panes, rs, err := readPanes(srv, m.deps.roots)
 	if err != nil {
 		return err
