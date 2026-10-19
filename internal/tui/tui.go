@@ -1,8 +1,10 @@
 // Package tui is the live terminal view: the sessions that need you on top,
-// a detail pane for the one under the cursor, and the digests a key away.
+// the one under the cursor live in the tmux pane beside it, and the digests
+// a key away.
 package tui
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
-	"overview/internal/ghostty"
+	"overview/internal/tmux"
 )
 
 const (
@@ -33,13 +35,6 @@ const (
 	digestScreen
 )
 
-type pane int
-
-const (
-	listPane pane = iota
-	detailPane
-)
-
 type (
 	tickMsg  time.Time
 	frameMsg time.Time
@@ -52,15 +47,6 @@ type (
 	digestMsg struct {
 		d   fleet.Digest
 		err error
-	}
-	// jumpMsg reports how a jump to a Ghostty terminal went. The Cmd that
-	// ran it does not touch the model; Update applies this.
-	jumpMsg struct {
-		seq  int    // which jump this answers
-		key  string // cache key
-		id   string // terminal id to remember, if the jump worked
-		drop bool   // forget the cached id
-		note string // what to tell the user when it failed
 	}
 	// noteMsg is something to tell the user.
 	noteMsg string
@@ -82,9 +68,7 @@ type model struct {
 	loaded  bool
 
 	screen    screen
-	focus     pane
 	sel       string // session id under the cursor, kept across refreshes
-	scroll    int    // detail pane
 	listTop   int    // first list line shown, kept so clicks do not shift it
 	filter    string
 	filtering bool
@@ -102,25 +86,35 @@ type model struct {
 	note   string
 	noteAt time.Time
 
-	// The detail pane is rebuilt only when what it shows changes, not on
+	// The details are rebuilt only when what they show changes, not on
 	// every spinner frame. A pointer, because the model is passed by value.
 	cache *detailCache
 
 	projects *projects
 
-	// jump finds and focuses a session's Ghostty terminal; nil means no
-	// jumping. terms caches session+tty -> terminal id. It is a map, so
-	// copies of the model share it, and only Update writes to it.
-	jump  jumper
-	terms map[string]string
-	// tabs opens new Ghostty tabs; nil means it cannot.
-	tabs tabber
 	// reveal brings an app to the front. Tests replace it.
 	reveal func(path string) error
-	// jumping is the seq of the jump in flight, 0 if none. Only one runs at
-	// a time: two Locates on one tty would each take the other's token for
-	// the terminal's real title.
-	jumping, jumpSeq int
+	// cwd is where c starts a session when the list is empty.
+	cwd string
+
+	// tmux, as stage.go describes. mux is nil outside tmux, and then
+	// nothing is staged. The view runs in pane self of session, and parks
+	// the panes not on the stage in session parked. exe starts the holder.
+	mux                     multiplexer
+	self, session, parked   string
+	exe                     string
+	panes                   []tmux.Pane
+	onStage, holder, failed string
+	staging, entering       bool
+	spawningHolder          bool
+	holderShown             string
+	// attached maps a background session's ID to its attach pane. A map,
+	// so copies of the model share it, and only Update writes to it.
+	attached map[string]string
+	// opened is the pane c started, shown until its session is listed.
+	opened tmux.Pane
+	// blurred is set while the focus is in another pane.
+	blurred bool
 
 	// The last click on a list row, to tell a double click.
 	clickID string
@@ -130,19 +124,37 @@ type model struct {
 }
 
 // Run opens the view in the given theme and blocks until the user quits.
+// It runs in the pane Launch made for it in overview's tmux.
 func Run(home fleet.Home, llm string, theme Theme) error {
 	useTheme(theme)
 	m := newModel(home, llm)
-	gh := ghostty.New()
-	m.jump, m.tabs = gh, gh
-	m = m.loadDigests()
-	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	m.cwd, _ = os.Getwd()
+	session, self := os.Getenv(envSession), os.Getenv("TMUX_PANE")
+	if session == "" || self == "" {
+		return errors.New("the view runs inside overview's tmux: start it with plain `overview`")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	srv := tmux.New("")
+	if err := srv.MarkList(self); err != nil {
+		return err
+	}
+	m.mux, m.self, m.session, m.parked, m.exe = srv, self, session, session+"-parked", exe
+	m.holder = srv.Option(session, holderOption)
+	panes, err := srv.Panes()
+	if err != nil {
+		return err
+	}
+	m = m.setPanes(panes).loadDigests()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus()).Run()
 	return err
 }
 
 func newModel(home fleet.Home, llm string) model {
 	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
-		terms: map[string]string{}, reveal: openApp}
+		attached: map[string]string{}, reveal: openApp}
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
@@ -166,7 +178,14 @@ func (m model) showDigest(i int) model {
 	return m
 }
 
-func (m model) Init() tea.Cmd { return tea.Batch(m.refresh, tick(), nextFrame()) }
+func (m model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.refresh, tick(), nextFrame()}
+	if m.mux != nil {
+		// The first listing also starts a holder when there is none.
+		cmds = append(cmds, listPanes(m.mux), panesEveryTick())
+	}
+	return tea.Batch(cmds...)
+}
 
 func tick() tea.Cmd {
 	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -249,17 +268,19 @@ func (m model) keepSel() model {
 			return m
 		}
 	}
-	m.sel, m.scroll, m.confirm = rows[0].SessionID, 0, ""
+	m.sel, m.confirm = rows[0].SessionID, ""
 	return m
 }
 
+// moveTo puts the cursor on the ith row. Moving it also stops showing a
+// pane c started, so the stage follows the cursor again.
 func (m model) moveTo(rows []fleet.Row, i int) model {
 	if len(rows) == 0 {
 		return m
 	}
 	i = max(0, min(i, len(rows)-1))
 	if rows[i].SessionID != m.sel {
-		m.sel, m.scroll, m.confirm = rows[i].SessionID, 0, ""
+		m.sel, m.confirm, m.opened = rows[i].SessionID, "", tmux.Pane{}
 	}
 	return m
 }
@@ -270,17 +291,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
 		row, _, _ := m.selected(m.ordered())
-		_, lh, _, _ := m.split()
 		_, owners := m.listLines(m.sections(), row.SessionID, 1)
-		m.listTop = m.listStart(owners, row.SessionID, lh-2)
+		m.listTop = m.listStart(owners, row.SessionID, m.boxHeight()-2)
 	}
-	return m, cmd
+	m, stage := m.restage()
+	return m, tea.Batch(cmd, stage)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+	case tea.FocusMsg:
+		m.blurred = false
+	case tea.BlurMsg:
+		m.blurred = true
+	case panesTick, panesMsg, stagedMsg, spawnedMsg:
+		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		return m.handle(m.keyActions(msg))
 	case tea.MouseMsg:
@@ -308,23 +335,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case rowsMsg:
 		m.rows, m.ttys, m.hosts, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.err, true
 		// Keep the cursor on a visible row after sessions come and go.
-		m = m.keepSel()
-	case jumpMsg:
-		if msg.drop {
-			delete(m.terms, msg.key)
-		}
-		if msg.seq == 0 || msg.seq != m.jumping {
-			return m, nil // not the jump in flight
-		}
-		m.jumping = 0
-		// Remember the terminal only while a shown session still has that
-		// tty; the row may have gone, or its session moved, meanwhile.
-		if msg.id != "" && m.hasJumpKey(msg.key) {
-			m.terms[msg.key] = msg.id
-		}
-		if msg.note != "" {
-			m = m.say(msg.note)
-		}
+		m = m.adopt().keepSel()
 	case digestMsg:
 		m.digesting = false
 		switch {
@@ -366,6 +377,17 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	switch a.do {
 	case quit:
 		return m, tea.Quit
+	case detach:
+		if m.mux == nil {
+			return m, tea.Quit
+		}
+		mux := m.mux
+		return m, func() tea.Msg {
+			if err := mux.Detach(); err != nil {
+				return noteMsg(err.Error())
+			}
+			return nil
+		}
 	case openHelp:
 		m.help = true
 	case dismiss:
@@ -407,19 +429,10 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		for d := 1; d <= len(rows); d++ {
 			j := ((i+a.n*d)%len(rows) + len(rows)) % len(rows)
 			if rows[j].NeedsYou() {
-				m.focus = listPane
 				return m.moveTo(rows, j), nil
 			}
 		}
 		return m.say("nothing needs you"), nil
-	case focus:
-		m.focus = pane(a.n)
-	case scroll, scrollTo:
-		if a.do == scroll {
-			a.n += m.scroll
-		}
-		m.scroll = a.n
-		m.scroll = m.clampScroll()
 	case scrollDigest, scrollDigestTo:
 		if a.do == scrollDigest {
 			a.n += m.digestScroll
@@ -428,7 +441,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case stepDigest:
 		m = m.showDigest(m.digestIdx + a.n)
 	case search:
-		m.filtering, m.focus = true, listPane
+		m.filtering = true
 	case typeText, backspace:
 		before := m.filter
 		if a.do == typeText {
@@ -444,7 +457,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.filter, m.filtering = "", false
 	case clearFilter:
 		m.filter = ""
-	case open, attach:
+	case open:
 		if m.filtering {
 			// Act on the match under the cursor, then show everything
 			// again so coming back finds the full list.
@@ -456,7 +469,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		return m.act(row, a.do == open)
+		return m.act(row)
 	case click:
 		double := a.id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
 		m.clickID, m.clickAt = a.id, a.at
@@ -477,11 +490,12 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.say("only background sessions can be stopped from here"), nil
 		}
 		m.confirm = row.SessionID
-	case newSession, newTab:
+	case newSession:
 		if !ok {
-			return m.say("no session selected, so no project to open"), nil
+			// With nothing listed, start where overview itself was started.
+			row = fleet.Row{Live: fleet.Live{Name: "overview", Cwd: m.cwd}}
 		}
-		return m.openTab(row, a.do == newSession)
+		return m.start(row)
 	case copyID:
 		if !ok {
 			return m, nil
@@ -512,18 +526,13 @@ func copied(text string, err error) tea.Msg {
 	return noteMsg("copied " + text)
 }
 
-// act does what enter means for a row. A background session is attached. An
-// interactive one is jumped to in Ghostty when jump is set (enter), and
-// otherwise only reported with its tty (the `a` key). One that runs inside
-// another app brings that app forward, since that is where it is used.
-func (m model) act(row fleet.Row, jump bool) (model, tea.Cmd) {
-	if row.Background() {
-		return m, tea.ExecProcess(m.home.AttachCmd(row.Live), func(err error) tea.Msg {
-			return doneMsg{"back from " + row.Name, err}
-		})
-	}
-	if h, away := m.hosts[row.PID]; away {
-		if !jump || h.Path == "" || m.reveal == nil {
+// act does what enter means for a row: it moves the focus to the session
+// on the stage. A background session gets an attach pane first. One that
+// runs inside another app brings that app forward, since that is where it
+// is used.
+func (m model) act(row fleet.Row) (model, tea.Cmd) {
+	if h, away := m.hosts[row.PID]; away && !row.Background() {
+		if h.Path == "" || m.reveal == nil {
 			return m.say(awayNote(row.Name, h)), nil
 		}
 		reveal := m.reveal
@@ -531,47 +540,41 @@ func (m model) act(row fleet.Row, jump bool) (model, tea.Cmd) {
 			return doneMsg{row.Name + " is in " + h.Name, reveal(h.Path)}
 		}
 	}
-	tty := m.ttys[row.PID]
-	if !jump || m.jump == nil || tty == "" {
-		return m.say(ttyNote(row.Name, tty, "")), nil
+	if m.mux == nil {
+		return m.say("sessions open only inside overview's tmux"), nil
 	}
-	if m.jumping != 0 {
-		// A second enter while the first jump runs. Keep the note up.
-		return m.say("finding " + row.Name + "'s terminal…"), nil
+	if m.paneOf(row) != "" {
+		m.entering = true
+		return m, nil
 	}
-	key := jumpKey(row.SessionID, tty)
-	m.jumpSeq++
-	m.jumping = m.jumpSeq
-	m = m.say("finding " + row.Name + "'s terminal…")
-	return m, jumpCmd(m.jump, m.jumping, row.Name, key, tty, row.PID, m.terms[key])
+	if !row.Background() {
+		return m.say(m.stageHint(row)), nil
+	}
+	attach := m.home.AttachCmd(row.Live)
+	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
+	return m.say("attaching to " + row.Name + "…"),
+		spawnCmd(m.mux, spawnAttach, row.ID, row.Name, m.parked, row.Cwd, env, attach.Args...)
 }
 
-// openTab opens a Ghostty tab at the root of row's project, and starts
-// claude there when session is set.
-func (m model) openTab(row fleet.Row, session bool) (model, tea.Cmd) {
+// start runs a new claude at the root of row's project, in a parked pane
+// that the stage shows until the session joins the list.
+func (m model) start(row fleet.Row) (model, tea.Cmd) {
 	dir, where := m.projects.root(row.Cwd), m.projects.name(row.Cwd)
 	if dir == "" {
-		return m.say(row.Name + " has no directory, so there is no project to open"), nil
+		return m.say(row.Name + " has no directory, so there is no project to start in"), nil
 	}
-	if m.tabs == nil {
-		return m.say("opening a tab needs Ghostty"), nil
+	if m.mux == nil {
+		return m.say("sessions start only inside overview's tmux"), nil
 	}
-	what, input := "a tab", ""
-	if session {
-		what, input = "a session", "claude\n"
-	}
-	return m.say("opening " + what + " in " + where + "…"), tabCmd(m.tabs, m.home, dir, input, what, where)
+	env := []string{"CLAUDE_CONFIG_DIR=" + string(m.home)}
+	return m.say("starting a session in " + where + "…"),
+		spawnCmd(m.mux, spawnSession, "", "a session in "+where, m.parked, dir, env, m.home.NewCmd().Args...)
 }
 
-// jumpKey is the terms cache key: a terminal id is only good for the same
-// session on the same tty.
-func jumpKey(session, tty string) string { return session + "\x00" + tty }
-
-func (m model) hasJumpKey(key string) bool {
-	for _, r := range m.rows {
-		if tty := m.ttys[r.PID]; tty != "" && !r.Background() && jumpKey(r.SessionID, tty) == key {
-			return true
-		}
+// awayNote says where a session that runs inside another app is.
+func awayNote(name string, h host) string {
+	if h.Name == "" {
+		return name + " runs without a terminal, so there is nowhere to go."
 	}
-	return false
+	return name + " runs inside " + h.Name + ". Switch to " + h.Name + " to use it."
 }

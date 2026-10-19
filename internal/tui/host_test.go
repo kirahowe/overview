@@ -147,7 +147,7 @@ func awayModel(t *testing.T) (model, *[]string) {
 	t.Helper()
 	obs := row("obs", "claude-bd", "", 63381)
 	obs.Cwd = "/"
-	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11), obs)
+	m := newTestModel(t, row("s1", "red", "auth", 11), obs)
 	var opened []string
 	m.reveal = func(path string) error { opened = append(opened, path); return nil }
 	m = update(m, rowsMsg{rows: m.rows, ttys: map[int]string{11: "ttys1"},
@@ -194,9 +194,6 @@ func TestEnterOnAwaySessionOpensItsApp(t *testing.T) {
 	msg := cmd().(doneMsg)
 	if len(*opened) != 1 || (*opened)[0] != "/Applications/Obsidian.app" || msg.err != nil {
 		t.Fatalf("opened %v err %v", *opened, msg.err)
-	}
-	if _, cmd = press(m, "a"); cmd != nil || len(*opened) != 1 {
-		t.Fatal("a should only say where the session is")
 	}
 }
 

@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,41 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/fleet"
-	"overview/internal/ghostty"
 )
-
-// fakeJumper records what the view asked Ghostty to do.
-type fakeJumper struct {
-	checks  []int // pids asked about
-	locates []string
-	focuses []string
-
-	outside  map[int]bool // pids not under Ghostty
-	checkErr error
-
-	next      int
-	locateErr error
-	focusErr  map[string]error // by terminal id
-}
-
-func (f *fakeJumper) InGhostty(_ context.Context, pid int) (bool, error) {
-	f.checks = append(f.checks, pid)
-	return !f.outside[pid], f.checkErr
-}
-
-func (f *fakeJumper) Locate(_ context.Context, tty string) (string, error) {
-	f.locates = append(f.locates, tty)
-	if f.locateErr != nil {
-		return "", f.locateErr
-	}
-	f.next++
-	return "T" + string(rune('0'+f.next)), nil
-}
-
-func (f *fakeJumper) Focus(_ context.Context, id string) error {
-	f.focuses = append(f.focuses, id)
-	return f.focusErr[id]
-}
 
 func row(id, name, title string, pid int) fleet.Row {
 	return fleet.Row{
@@ -55,12 +19,12 @@ func row(id, name, title string, pid int) fleet.Row {
 	}
 }
 
-// newTestModel returns a loaded model over rows, with ttys ttys<pid>.
-func newTestModel(t *testing.T, j jumper, rows ...fleet.Row) model {
+// newTestModel returns a loaded model over rows, with ttys ttys<pid>, and
+// no tmux.
+func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
 	m := newModel(fleet.Home(t.TempDir()), "")
 	m.projects.exists = func(string) bool { return false }
-	m.jump = j
 	ttys := map[int]string{}
 	for _, r := range rows {
 		if r.PID > 0 && !r.Background() {
@@ -115,161 +79,17 @@ func typed(s string) []string {
 	return keys
 }
 
-// settle runs a jump Cmd and feeds its result back, as the runtime would.
-func settle(t *testing.T, m model, cmd tea.Cmd) model {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("expected a command")
-	}
-	msg, ok := cmd().(jumpMsg)
-	if !ok {
-		t.Fatalf("command did not return a jumpMsg")
-	}
-	return update(m, msg)
-}
-
-func TestFilterEnterLocatesThenFocusesAndClearsFilter(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth work", 11), row("s2", "blue", "billing work", 12))
-	m, _ = press(m, "/")
-	m, _ = press(m, typed("bill")...)
-	if m.sel != "s2" || !m.filtering {
-		t.Fatalf("cursor should sit on the first match: sel=%q filtering=%v", m.sel, m.filtering)
-	}
-	m, cmd := press(m, "enter")
-	if m.filter != "" || m.filtering {
-		t.Fatalf("filter should be cleared: %q %v", m.filter, m.filtering)
-	}
-	if m.sel != "s2" {
-		t.Fatalf("cursor left the row: %q", m.sel)
-	}
-	if len(j.locates) != 0 {
-		t.Fatal("Update must not block on Ghostty")
-	}
-	m = settle(t, m, cmd)
-	if len(j.locates) != 1 || j.locates[0] != "ttys2" || len(j.focuses) != 1 || j.focuses[0] != "T1" {
-		t.Fatalf("locates %v focuses %v", j.locates, j.focuses)
-	}
-	if got := len(m.ordered()); got != 2 {
-		t.Fatalf("full list should be back, got %d rows", got)
-	}
-}
-
-func TestCachedJumpSkipsLocate(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
-	m, cmd := press(m, "enter")
-	m = settle(t, m, cmd)
-	m, cmd = press(m, "enter")
-	settle(t, m, cmd)
-	if len(j.locates) != 1 || len(j.focuses) != 2 {
-		t.Fatalf("locates %v focuses %v", j.locates, j.focuses)
-	}
-}
-
-func TestStaleIDLocatesOnce(t *testing.T) {
-	j := &fakeJumper{focusErr: map[string]error{}}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
-	m, cmd := press(m, "enter")
-	m = settle(t, m, cmd) // caches T1
-	j.focusErr["T1"] = ghostty.ErrStale
-	m, cmd = press(m, "enter")
-	m = settle(t, m, cmd)
-	if strings.Join(j.locates, ",") != "ttys1,ttys1" || strings.Join(j.focuses, ",") != "T1,T1,T2" {
-		t.Fatalf("locates %v focuses %v", j.locates, j.focuses)
-	}
-	if got := m.terms["s1\x00ttys1"]; got != "T2" {
-		t.Fatalf("cache holds %q, want T2", got)
-	}
-	// Still stale after a fresh locate: give up after one more locate.
-	j.focusErr["T2"], j.focusErr["T3"] = ghostty.ErrStale, ghostty.ErrStale
-	m, cmd = press(m, "enter")
-	m = settle(t, m, cmd)
-	if len(j.locates) != 3 {
-		t.Fatalf("locates %v", j.locates)
-	}
-	if !strings.Contains(m.note, "ttys1") || len(m.terms) != 0 {
-		t.Fatalf("note %q cache %v", m.note, m.terms)
-	}
-}
-
-func TestFailureFallsBackToTTYNote(t *testing.T) {
-	for _, tc := range []struct {
-		err  error
-		want string
-	}{
-		{ghostty.ErrNotRunning, "not running"},
-		{ghostty.ErrNotFound, "not found"},
-		{fmt.Errorf("ghostty: find: %w", context.DeadlineExceeded), "did not answer"},
-		{errors.New("boom"), "jump failed"},
-	} {
-		j := &fakeJumper{locateErr: tc.err}
-		m := newTestModel(t, j, row("s1", "red", "auth", 11))
-		m, cmd := press(m, "enter")
-		m = settle(t, m, cmd)
-		if !strings.Contains(m.note, "ttys1") || !strings.Contains(m.note, tc.want) {
-			t.Errorf("%v: note %q", tc.err, m.note)
-		}
-		if len(j.focuses) != 0 || len(m.terms) != 0 {
-			t.Errorf("%v: focuses %v cache %v", tc.err, j.focuses, m.terms)
-		}
-	}
-}
-
-func TestBackgroundRowAttaches(t *testing.T) {
-	j := &fakeJumper{}
-	bg := row("s1", "red", "auth", 0)
-	bg.Kind, bg.ID = "background", "abc123"
-	m := newTestModel(t, j, bg)
-	_, cmd := press(m, "enter")
-	if cmd == nil {
-		t.Fatal("enter on a background session should attach")
-	}
-	m2, cmd := press(m, "/", "a", "u", "enter")
-	if cmd == nil || m2.filter != "" {
-		t.Fatalf("filter-enter should attach and clear: cmd=%v filter=%q", cmd != nil, m2.filter)
-	}
-	if len(j.locates)+len(j.focuses) != 0 {
-		t.Fatal("background sessions must not touch Ghostty")
-	}
-}
-
-func TestAKeyKeepsReportingTheTTY(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
-	m, cmd := press(m, "a")
-	if cmd != nil || !strings.Contains(m.note, "ttys1") || len(j.locates) != 0 {
-		t.Fatalf("cmd=%v note=%q", cmd != nil, m.note)
-	}
-}
-
-func TestNoJumperOrNoTTYFallsBack(t *testing.T) {
-	m := newTestModel(t, nil, row("s1", "red", "auth", 11))
-	m, cmd := press(m, "enter")
-	if cmd != nil || !strings.Contains(m.note, "ttys1") {
-		t.Fatalf("no jumper: cmd=%v note=%q", cmd != nil, m.note)
-	}
-	j := &fakeJumper{}
-	m = newTestModel(t, j, row("s1", "red", "auth", 0))
-	m, cmd = press(m, "enter")
-	if cmd != nil || !strings.Contains(m.note, "its own terminal") {
-		t.Fatalf("no tty: cmd=%v note=%q", cmd != nil, m.note)
-	}
-}
-
 func TestFilterEnterWithoutMatchDoesNothing(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
+	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m, _ = press(m, "/", "z", "z")
 	m, cmd := press(m, "enter")
-	if cmd != nil || m.filtering || m.filter != "zz" || len(j.locates) != 0 {
+	if cmd != nil || m.filtering || m.filter != "zz" {
 		t.Fatalf("cmd=%v filtering=%v filter=%q", cmd != nil, m.filtering, m.filter)
 	}
 }
 
 func TestArrowsMoveWhileFiltering(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "work", 11), row("s2", "blue", "work", 12))
+	m := newTestModel(t, row("s1", "red", "work", 11), row("s2", "blue", "work", 12))
 	m, _ = press(m, "/", "w")
 	first := m.sel
 	m, _ = press(m, "down")
@@ -285,7 +105,7 @@ func TestArrowsMoveWhileFiltering(t *testing.T) {
 func TestNeedsYouIsPinnedAndNJumpsThere(t *testing.T) {
 	asking := row("s3", "gold", "q", 13)
 	asking.LastReply = "Shall I go on?"
-	m := newTestModel(t, nil, row("s1", "red", "a", 11), asking)
+	m := newTestModel(t, row("s1", "red", "a", 11), asking)
 	if m.sel != "s3" {
 		t.Fatalf("cursor should start on what needs you, got %q", m.sel)
 	}
@@ -296,7 +116,7 @@ func TestNeedsYouIsPinnedAndNJumpsThere(t *testing.T) {
 }
 
 func TestUnhandledKeyWhileFilteringKeepsTheCursor(t *testing.T) {
-	m := newTestModel(t, nil, row("s1", "red", "work", 11), row("s2", "blue", "work", 12))
+	m := newTestModel(t, row("s1", "red", "work", 11), row("s2", "blue", "work", 12))
 	m, _ = press(m, "/", "w", "down")
 	moved := m.sel
 	for _, k := range []tea.KeyMsg{{Type: tea.KeyLeft}, {Type: tea.KeyRight}, {Type: tea.KeyCtrlA}} {
@@ -314,7 +134,7 @@ func TestUnhandledKeyWhileFilteringKeepsTheCursor(t *testing.T) {
 // A filter left in place by an enter with no match, then a refresh that
 // brings rows the filter hides: esc must put the cursor on a shown row.
 func TestEscOutsideTheFilterSelectsAShownRow(t *testing.T) {
-	m := newTestModel(t, nil)
+	m := newTestModel(t)
 	m, _ = press(m, "/", "z", "z", "enter")
 	m = update(m, rowsMsg{rows: []fleet.Row{row("s1", "red", "work", 11)}, ttys: map[int]string{11: "ttys1"}})
 	m, _ = press(m, "esc")
@@ -323,105 +143,9 @@ func TestEscOutsideTheFilterSelectsAShownRow(t *testing.T) {
 	}
 }
 
-// A session outside Ghostty (tmux, another terminal app) has a tty too, but
-// Locate must never write to it.
-func TestNoLocateOutsideGhostty(t *testing.T) {
-	for _, j := range []*fakeJumper{
-		{outside: map[int]bool{11: true}},
-		{checkErr: errors.New("ps: boom")},
-	} {
-		m := newTestModel(t, j, row("s1", "red", "auth", 11))
-		m, cmd := press(m, "enter")
-		m = settle(t, m, cmd)
-		if len(j.checks) != 1 || j.checks[0] != 11 || len(j.locates) != 0 || len(j.focuses) != 0 {
-			t.Fatalf("checks %v locates %v focuses %v", j.checks, j.locates, j.focuses)
-		}
-		if !strings.Contains(m.note, "ttys1") {
-			t.Fatalf("note %q", m.note)
-		}
-		if j.checkErr == nil && !strings.Contains(m.note, "not in Ghostty") {
-			t.Fatalf("note %q", m.note)
-		}
-	}
-}
-
-func TestSecondEnterWaitsForTheJumpInFlight(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
-	m, first := press(m, "enter")
-	m, second := press(m, "enter")
-	if first == nil || second != nil {
-		t.Fatalf("first cmd %v, second cmd %v: want one jump", first != nil, second != nil)
-	}
-	if !strings.Contains(m.note, "finding red") {
-		t.Fatalf("no progress note while the jump runs: %q", m.note)
-	}
-	m = settle(t, m, first)
-	if len(j.locates) != 1 || m.jumping != 0 {
-		t.Fatalf("locates %v, in flight %d", j.locates, m.jumping)
-	}
-	if _, again := press(m, "enter"); again == nil {
-		t.Fatal("enter after the jump finished should jump again")
-	}
-}
-
-// The answer to a jump can arrive after a refresh: the session may be gone,
-// or now run on another tty. The view keeps going and caches nothing stale.
-func TestJumpAnswerAfterTheRowChanged(t *testing.T) {
-	for name, after := range map[string]rowsMsg{
-		"vanished":    {rows: []fleet.Row{row("s2", "blue", "b", 12)}, ttys: map[int]string{12: "ttys2"}},
-		"tty changed": {rows: []fleet.Row{row("s1", "red", "auth", 11)}, ttys: map[int]string{11: "ttys8"}},
-	} {
-		j := &fakeJumper{}
-		m := newTestModel(t, j, row("s1", "red", "auth", 11))
-		m, cmd := press(m, "enter")
-		m = update(m, after)
-		m = settle(t, m, cmd)
-		if m.jumping != 0 || len(m.terms) != 0 {
-			t.Errorf("%s: in flight %d, cache %v", name, m.jumping, m.terms)
-		}
-	}
-}
-
-func TestJumpShowsProgressNote(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
-	m, first := press(m, "enter")
-	if m.note != "finding red's terminal…" {
-		t.Fatalf("note %q", m.note)
-	}
-	m.note = ""
-	m, second := press(m, "enter")
-	if second != nil || !strings.Contains(m.note, "finding red") {
-		t.Fatalf("repeat enter: cmd %v, note %q", second != nil, m.note)
-	}
-	m = settle(t, m, first)
-	if m.jumping != 0 {
-		t.Fatal("jump still in flight")
-	}
-}
-
-// A timeout from the real runner wraps the context error and reaches the
-// user as "Ghostty did not answer".
-func TestJumpTimeoutFromRunnerShowsDidNotAnswer(t *testing.T) {
-	killed := fmt.Errorf("osascript: %w: %w: ", context.DeadlineExceeded, errors.New("signal: killed"))
-	c := ghostty.Client{
-		Run:   func(context.Context, string, ...string) ([]byte, error) { return nil, killed },
-		Write: func(string, []byte) error { return nil },
-		Sleep: func(context.Context, time.Duration) error { return nil },
-		Token: func() string { return "tok" },
-	}
-	m := newTestModel(t, c, row("s1", "red", "auth", 11))
-	m, cmd := press(m, "enter")
-	m = settle(t, m, cmd)
-	if !strings.Contains(m.note, "did not answer") {
-		t.Fatalf("note %q", m.note)
-	}
-}
-
 // A tab typed into the search box once overflowed the narrowest layout.
 func TestSearchWithTabStaysWithinWidth(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{}, row("s1", "a", "auth", 11))
+	m := newTestModel(t, row("s1", "a", "auth", 11))
 	m = update(m, tea.WindowSizeMsg{Width: 40, Height: 10})
 	m, _ = press(m, "/")
 	m, _ = press(m, typed("auth\tauth")...)
@@ -468,25 +192,8 @@ func manyRows(n int) []fleet.Row {
 	return rows
 }
 
-func TestClickSelectsAndDoubleClickJumps(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	m, _ = press(m, "tab")
-	y := screenY(m, "s2")
-	m, cmd := mouseClick(m, 5, y+1) // the row's second line
-	if m.sel != "s2" || m.focus != listPane || cmd != nil {
-		t.Fatalf("sel %q focus %v cmd %v", m.sel, m.focus, cmd != nil)
-	}
-	m, cmd = mouseClick(m, 5, y)
-	m = settle(t, m, cmd)
-	if len(j.locates) != 1 || j.locates[0] != "ttys2" {
-		t.Fatalf("double click should jump to s2: locates %v", j.locates)
-	}
-}
-
 func TestSlowSecondClickOnlySelects(t *testing.T) {
-	j := &fakeJumper{}
-	m := newTestModel(t, j, row("s1", "red", "auth", 11))
+	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m, _ = mouseClick(m, 5, screenY(m, "s1"))
 	m.clickAt = m.clickAt.Add(-time.Second)
 	if _, cmd := mouseClick(m, 5, screenY(m, "s1")); cmd != nil {
@@ -495,7 +202,7 @@ func TestSlowSecondClickOnlySelects(t *testing.T) {
 }
 
 func TestClickOffARowDoesNothing(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	before := m.sel
 	for _, y := range []int{0, 1, 28, 29} { // top edge, a heading, bottom edge, status bar
 		m, _ = mouseClick(m, 5, y)
@@ -508,7 +215,7 @@ func TestClickOffARowDoesNothing(t *testing.T) {
 // Clicking a row above the cursor once scrolled it to the bottom of the
 // pane, out from under the pointer.
 func TestClickDoesNotScrollTheList(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{}, manyRows(8)...)
+	m := newTestModel(t, manyRows(8)...)
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 12})
 	m, _ = press(m, "G")
 	rows := m.ordered()
@@ -526,7 +233,7 @@ func TestClickDoesNotScrollTheList(t *testing.T) {
 }
 
 func TestWheel(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	first := m.sel
 	m = wheel(m, 5, 5, true)
 	if m.sel == first {
@@ -535,18 +242,10 @@ func TestWheel(t *testing.T) {
 	if m = wheel(m, 5, 5, false); m.sel != first {
 		t.Fatal("wheel up did not move back")
 	}
-	m, _ = mouseClick(m, 80, 5)
-	if m.focus != detailPane {
-		t.Fatal("click on the detail pane did not focus it")
-	}
-	m = wheel(m, 80, 5, false)
-	if m.scroll != 0 || m.sel != first {
-		t.Fatalf("wheel up at the top: scroll %d sel %q", m.scroll, m.sel)
-	}
 }
 
 func TestClickClosesOverlays(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m, _ = press(m, "?")
 	if m = wheel(m, 5, 5, true); !m.help {
 		t.Fatal("wheel closed help")
@@ -555,7 +254,7 @@ func TestClickClosesOverlays(t *testing.T) {
 		t.Fatal("click left help open")
 	}
 	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
-	m = newTestModel(t, &fakeJumper{}, bg)
+	m = newTestModel(t, bg)
 	m, _ = press(m, "x")
 	if m.confirm == "" {
 		t.Fatal("x did not ask")
@@ -569,7 +268,7 @@ func TestCopyRunsAsACommand(t *testing.T) {
 	var got string
 	defer func(old func(string) error) { copyText = old }(copyText)
 	copyText = func(s string) error { got = s; return nil }
-	m := newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
+	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m, cmd := press(m, "y")
 	if got != "" || cmd == nil {
 		t.Fatal("y copied inside Update")
@@ -579,76 +278,66 @@ func TestCopyRunsAsACommand(t *testing.T) {
 	}
 }
 
-// fakeTabber records the tabs the view asked Ghostty to open.
-type fakeTabber struct {
-	opened [][3]string // dir, input, env
-	err    error
-}
-
-func (f *fakeTabber) NewTab(_ context.Context, dir, input, env string) error {
-	f.opened = append(f.opened, [3]string{dir, input, env})
-	return f.err
-}
-
-func TestNewSessionOpensATabAtTheProjectRoot(t *testing.T) {
-	tabs := &fakeTabber{}
-	r := row("s1", "red", "auth", 11)
-	r.Cwd = "/code/app/internal/x"
-	m := newTestModel(t, &fakeJumper{}, r)
-	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" }
-	m.projects.roots = map[string]string{} // drop the roots found without it
-	m.tabs = tabs
-	env := "CLAUDE_CONFIG_DIR=" + string(m.home)
-
-	m, cmd := press(m, "c")
-	if len(tabs.opened) != 0 || cmd == nil {
-		t.Fatal("c opened a tab inside Update")
+func TestFilterEnterFocusesTheMatchAndClearsTheFilter(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth work", 11), row("s2", "blue", "billing work", 12))
+	m = pressSettled(t, m, "/")
+	m = pressSettled(t, m, typed("bill")...)
+	if m.sel != "s2" || !m.filtering {
+		t.Fatalf("cursor should sit on the first match: sel=%q filtering=%v", m.sel, m.filtering)
 	}
-	m = update(m, cmd())
-	if want := [3]string{"/code/app", "claude\n", env}; len(tabs.opened) != 1 || tabs.opened[0] != want {
-		t.Fatalf("opened %q, want %q", tabs.opened, want)
+	if want := paneWithTTY(f, "ttys012"); f.stage() != want {
+		t.Fatalf("stage %s, want the match's %s", f.stage(), want)
 	}
-	if m.note != "opened a session in /code/app" {
-		t.Errorf("note %q", m.note)
+	m = pressSettled(t, m, "enter")
+	if m.filter != "" || m.filtering || m.sel != "s2" {
+		t.Fatalf("filter %q filtering %v sel %q", m.filter, m.filtering, m.sel)
 	}
-
-	_, cmd = press(m, "t")
-	m = update(m, cmd())
-	if want := [3]string{"/code/app", "", env}; len(tabs.opened) != 2 || tabs.opened[1] != want {
-		t.Fatalf("opened %q, want %q", tabs.opened, want)
+	if want := paneWithTTY(f, "ttys012"); len(f.selects) != 1 || f.selects[0] != want {
+		t.Fatalf("selects %v, want [%s]", f.selects, want)
 	}
-
-	tabs.err = ghostty.ErrNotRunning
-	_, cmd = press(m, "t")
-	if m = update(m, cmd()); m.note != "could not open a tab: Ghostty is not running" {
-		t.Errorf("note %q", m.note)
+	if got := len(m.ordered()); got != 2 {
+		t.Fatalf("full list should be back, got %d rows", got)
 	}
 }
 
-func TestNewSessionNeedsAProjectAndGhostty(t *testing.T) {
-	m := newTestModel(t, &fakeJumper{})
-	if m, cmd := press(m, "c"); cmd != nil || !strings.Contains(m.note, "no session selected") {
-		t.Errorf("empty list: note %q", m.note)
+func TestClickSelectsAndDoubleClickFocuses(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	y := screenY(m, "s2")
+	m, cmd := mouseClick(m, 5, y+1) // the row's second line
+	m = settle(t, m, cmd)
+	if m.sel != "s2" || len(f.selects) != 0 {
+		t.Fatalf("sel %q selects %v", m.sel, f.selects)
 	}
-
-	m = newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
-	if m, cmd := press(m, "c"); cmd != nil || m.note != "opening a tab needs Ghostty" {
-		t.Errorf("no tabber: note %q", m.note)
+	m, cmd = mouseClick(m, 5, y)
+	settle(t, m, cmd)
+	if want := paneWithTTY(f, "ttys012"); len(f.selects) != 1 || f.selects[0] != want {
+		t.Fatalf("double click should focus s2's pane: selects %v", f.selects)
 	}
+}
 
+func TestEnterOutsideTmuxOnlySaysSo(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m, cmd := press(m, "enter")
+	if cmd != nil || !strings.Contains(m.note, "inside overview's tmux") {
+		t.Fatalf("cmd=%v note=%q", cmd != nil, m.note)
+	}
+	if m, cmd = press(m, "c"); cmd != nil || !strings.Contains(m.note, "inside overview's tmux") {
+		t.Fatalf("c: cmd=%v note=%q", cmd != nil, m.note)
+	}
+}
+
+func TestNewSessionNeedsADirectory(t *testing.T) {
 	r := row("s1", "red", "auth", 11)
 	r.Cwd = ""
-	tabs := &fakeTabber{}
-	m = newTestModel(t, &fakeJumper{}, r)
-	m.tabs = tabs
-	if m, cmd := press(m, "t"); cmd != nil || !strings.Contains(m.note, "no directory") {
-		t.Errorf("no cwd: note %q", m.note)
+	f := newFakeMux()
+	m := stagedModel(t, f, r)
+	if m = pressSettled(t, m, "c"); len(f.spawned) != 0 || !strings.Contains(m.note, "no directory") {
+		t.Errorf("no cwd: spawned %v note %q", f.spawned, m.note)
 	}
-
 	// While searching, c is search text.
-	m = newTestModel(t, &fakeJumper{}, row("s1", "red", "auth", 11))
-	m.tabs = tabs
-	if m, cmd := press(m, "/", "c"); cmd != nil || m.filter != "c" || len(tabs.opened) != 0 {
+	if m = pressSettled(t, m, "/", "c"); len(f.spawned) != 0 || m.filter != "c" {
 		t.Errorf("c while searching: filter %q", m.filter)
 	}
 }

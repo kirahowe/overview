@@ -9,15 +9,15 @@ import (
 // Input works in two steps. Every key and mouse event arrives through
 // Update, one at a time, and is first translated into actions: what the
 // user asked for, whichever device asked. Translation reads the model's
-// mode (searching, an overlay, the screen, the focused pane) and changes
-// nothing. apply then carries out each action, and is the only place
+// mode (searching, an overlay, the screen) and changes nothing. apply then carries out each action, and is the only place
 // behaviour lives, so enter and a double click, or j and the wheel, do
 // exactly the same thing.
 
 type verb int
 
 const (
-	quit verb = iota
+	quit   verb = iota
+	detach      // leave the view running in tmux and close this terminal's view of it
 	openHelp
 	dismiss     // close the overlay; a pending stop is cancelled
 	confirmStop // say yes to the pending stop
@@ -28,9 +28,6 @@ const (
 	move      // n rows down the list, negative for up
 	moveTo    // the nth row, clamped to the list
 	nextNeedy // the next (n=1) or previous (n=-1) row that needs you
-	focus     // n is the pane
-	scroll    // the detail pane, n lines
-	scrollTo  // the detail pane, to line n
 	scrollDigest
 	scrollDigestTo
 	stepDigest // n digests newer, negative for older
@@ -39,13 +36,11 @@ const (
 	backspace
 	cancelSearch // stop searching and clear it
 	clearFilter
-	open   // enter: jump to the session's terminal, or attach
-	attach // a: attach, or report the tty without jumping
-	click  // a click on row id at time at; a second one soon after opens it
+	open  // enter: type into the session beside the list
+	click // a click on row id at time at; a second one soon after opens it
 	stop
 	copyID
-	newSession // a tab running claude in the selected session's project
-	newTab     // a shell tab there
+	newSession // a claude in the selected session's project
 )
 
 type action struct {
@@ -105,6 +100,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 
 	switch k {
 	case "q", "ctrl+c":
+		return do(detach)
+	case "Q":
 		return do(quit)
 	case "?":
 		return do(openHelp)
@@ -119,8 +116,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 	case "r":
 		return do(refresh)
 	}
-	page := max(m.h/2, 1)
 	if m.screen == digestScreen {
+		page := max(m.h/2, 1)
 		switch k {
 		case "j", "down", "J":
 			return doN(scrollDigest, 1)
@@ -144,71 +141,39 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return nil
 	}
 
-	if m.focus == detailPane {
-		switch k {
-		case "j", "down":
-			return doN(scroll, 1)
-		case "k", "up":
-			return doN(scroll, -1)
-		case "g", "home":
-			return doN(scrollTo, 0)
-		case "G", "end":
-			return doN(scrollTo, end)
-		case "esc", "h", "left", "tab", "shift+tab":
-			return doN(focus, int(listPane))
-		}
-	} else {
-		switch k {
-		case "j", "down":
-			return doN(move, 1)
-		case "k", "up":
-			return doN(move, -1)
-		case "g", "home":
-			return doN(moveTo, 0)
-		case "G", "end":
-			return doN(moveTo, end)
-		case "l", "right", "tab", "shift+tab":
-			return doN(focus, int(detailPane))
-		case "esc":
-			return do(clearFilter)
-		}
-	}
-
 	switch k {
+	case "j", "down":
+		return doN(move, 1)
+	case "k", "up":
+		return doN(move, -1)
+	case "g", "home":
+		return doN(moveTo, 0)
+	case "G", "end":
+		return doN(moveTo, end)
+	case "esc":
+		return do(clearFilter)
 	case "n":
 		return doN(nextNeedy, 1)
 	case "N":
 		return doN(nextNeedy, -1)
-	case "J", "ctrl+e":
-		return doN(scroll, 1)
-	case "K", "ctrl+y":
-		return doN(scroll, -1)
-	case "ctrl+d", "pgdown", " ":
-		return doN(scroll, page)
-	case "ctrl+u", "pgup":
-		return doN(scroll, -page)
 	case "/":
 		return do(search)
-	case "enter":
+	case "enter", "tab", "l", "right":
 		return do(open)
-	case "a":
-		return do(attach)
 	case "x":
 		return do(stop)
 	case "y":
 		return do(copyID)
 	case "c":
 		return do(newSession)
-	case "t":
-		return do(newTab)
 	}
 	return nil
 }
 
 // mouseActions translates a mouse event that happened at time at. A click
-// selects a row or focuses a pane, and two on one row open it. The wheel
-// moves the cursor over the list and scrolls the detail pane and digests.
-// A click closes an overlay, as any key does.
+// selects a row, and two on one row open it. The wheel moves the cursor over
+// the list and scrolls the digests. A click closes an overlay, as any key
+// does.
 func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 	step := 0
 	switch {
@@ -231,25 +196,17 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		return doN(scrollDigest, step*wheelLines)
 	}
 
-	lw, lh, _, _ := m.split()
-	inList := msg.X < lw && msg.Y < lh
+	lh := m.boxHeight()
 	switch {
-	case !inList && msg.Y >= m.boxHeight():
+	case msg.Y >= lh:
 		return nil // the status bar
-	case !inList && step != 0:
-		return doN(scroll, step*wheelLines)
-	case !inList && m.filtering:
-		return nil // the search keeps the list focused, as with keys
-	case !inList:
-		return doN(focus, int(detailPane))
 	case step != 0:
 		return doN(move, step)
 	}
-	out := doN(focus, int(listPane))
 	cur, _, _ := m.selected(m.ordered())
 	_, owners := m.listView(m.sections(), cur.SessionID)
 	if line := msg.Y - 1; line >= 0 && line < min(len(owners), lh-2) && owners[line] != "" {
-		out = append(out, action{do: click, id: owners[line], at: at})
+		return []action{{do: click, id: owners[line], at: at}}
 	}
-	return out
+	return nil
 }

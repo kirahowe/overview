@@ -39,59 +39,62 @@ in `<home>/overview/digests/`.
 
 ## The view
 
-`overview` opens a two-pane view. The left pane lists the sessions. A section
-at the top holds the ones that need you: a session needs you when it is
-blocked, or when it is idle and its last reply ends with a question, and the
-longest wait comes first. Every other session sits in a section for its
-project, which is the nearest parent directory with a `.jj` or `.git` in it,
-or the session's own directory when there is none. Projects are in
-alphabetical order. Inside one, working sessions come before idle ones, and
+`overview` runs in a tmux server of its own, on the socket `overview`, and
+attaches your terminal to it. The window has two panes. The left one lists the
+sessions, and the right one is the selected session itself, live, so you can
+read it and type into it without leaving the list. Run `overview` again from
+any terminal and you get the same view back, with every session still running.
+
+The list puts the sessions that need you in a section at the top: a session
+needs you when it is blocked, or when it is idle and its last reply ends with
+a question, and the longest wait comes first. Every other session sits in a
+section for its project, which is the nearest parent directory with a `.jj` or
+`.git` in it, or the session's own directory when there is none. Projects are
+in alphabetical order. Inside one, working sessions come before idle ones, and
 the latest activity comes first. A session that another app started, such as
 an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
 in a last section, "in other apps", dimmed and named after the app that runs
-it. A session appears once, and each row shows its state. The right pane shows
-the selected session: where it runs, what it is waiting on, and its last few
-turns from the transcript.
+it. A session appears once, and each row shows its state.
+
+The right pane follows the cursor. A session that runs in overview's tmux is
+shown as it is, and moving the cursor swaps another one in, while the rest
+wait out of sight in the tmux session `overview-<home>-parked`. A session
+with no pane there, such as a background session, one in another app, or one
+started in some other terminal, gets a pane that shows where it runs, what it
+is waiting on, and its last few turns from the transcript.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
 searches. Search looks at the project, title, last prompt, name and label, and
 the app's name for a session in another app, ignoring case. Each
 space-separated word has to match one of those fields, and a word never
 matches across two of them. The cursor moves to the first match, `up` and
-`down` step through the matches, and `esc` clears the search. `enter` acts on
-the selected session: it jumps to an interactive session's Ghostty terminal,
-attaches to a background one, and brings the app to the front for a session in
-another app. While you are searching, `enter` acts on the selected match and
-clears the search. `a` attaches to a background session, `x` stops one (it
-asks first), and `y` copies the attach command. To end a session in another app,
-close it in that app. `c` starts a new session in the selected session's
-project, and `t` opens a shell there. `tab` moves between the two panes. `d` shows the
-digests, where `[` and `]` step through older ones and `D` writes a new one.
+`down` step through the matches, and `esc` clears the search. `enter` (or
+`tab`) moves the keyboard into the selected session, and `ctrl+]` brings it
+back to the list. On a background session, `enter` first attaches to it in
+the right pane; the attach stays there for when you come back to it. On a
+session in another app, `enter` brings that app to the front. While you are
+searching, `enter` acts on the selected match and clears the search. `x` stops
+a background session (it asks first), and `y` copies the attach command. To
+end a session in another app, close it in that app. `c` starts a new session
+at the root of the selected session's project, or where overview was started
+when the list is empty, and shows it in the right pane. `d` shows the digests,
+where `[` and `]` step through older ones and `D` writes a new one. `q`
+detaches, leaving the view and its sessions running, and `Q` quits the view.
 `?` lists every key.
 
-The mouse works too, and does what the keys do. A click selects a session
-or focuses the detail pane, a double click acts on a session as `enter`
-does, and the wheel moves through the list and scrolls the detail pane and
-digests. A click also closes help and cancels a stop. While the view has the
-mouse, most terminals, Ghostty included, select text when you hold shift.
+The mouse works too. A click selects a session, a double click moves the
+keyboard into it as `enter` does, and the wheel moves through the list and
+scrolls the digests. A click also closes help and cancels a stop. tmux has
+the mouse on, so a click on the right pane focuses it, and you can drag the
+border between the panes. Most terminals, Ghostty included, select text when
+you hold shift.
 
-Jumping needs stock Ghostty 1.3 or later and its Automation permission.
-Interactive sessions run in someone's terminal, so overview finds the
-terminal by writing a short-lived title to the session's tty and asking
-Ghostty which terminal shows it, then selects that tab and focuses the
-terminal. It remembers the terminal for the next jump. It writes that title
-only when the session's process runs under Ghostty. A session in tmux or in
-another terminal app is left alone, so its title is never touched. When
-Ghostty is not running, the session is not in Ghostty, or the terminal cannot
-be found, the status line shows the tty instead, and you switch to that tab
-yourself.
-
-`c` and `t` open a new tab in Ghostty's front window, or a new window if it
-has none, at the root of the selected session's project. `c` types `claude`
-into the tab's shell, and `t` leaves the shell alone. Both tabs get
-`CLAUDE_CONFIG_DIR` set to the config directory overview is watching, so a
-session started in either one shows up in the list. Ghostty has to be
-running already; overview never launches it.
+The first run writes overview's tmux settings to
+`~/.config/overview/tmux.conf`, and from then on the file is yours to change.
+tmux reads it when the server starts. After an edit, run
+`tmux -L overview source-file ~/.config/overview/tmux.conf`. The `ctrl+]`
+binding lives there. Sessions started from overview get `CLAUDE_CONFIG_DIR`
+set to the config directory it is watching, so they show up in the list.
 
 ## Themes
 
@@ -128,14 +131,17 @@ accent = #c678dd
 ```
 
 The keys are `accent` (focused borders, headings, keys in the help),
-`border`, `text`, `muted`, `cursor-fg` and `cursor-bg` (the selected row in
-the focused pane), `cursor-dim-fg` and `cursor-dim-bg` (the selected row
-otherwise), `status-fg` and `status-bg` (the bottom bar), `pill-fg` (text on
-the state badge in the detail pane), `blocked`, `asking`, `working`, and
+`border`, `text`, `muted`, `cursor-fg` and `cursor-bg` (the selected row
+while the list has the keyboard), `cursor-dim-fg` and `cursor-dim-bg` (the
+selected row otherwise), `status-fg` and `status-bg` (the bottom bar),
+`pill-fg` (text on the state badge beside a session's details), `blocked`,
+`asking`, `working`, and
 `code`. An unknown key or a bad colour is an error, so a typo does not
 silently fall back to the default.
 
 ## Install
+
+overview needs tmux.
 
 ```
 go build -o bin/overview . && ln -sf "$PWD/bin/overview" ~/.local/bin/overview
@@ -172,5 +178,8 @@ install it, and logs to `~/Library/Logs/overview/`.
 - An interrupted turn fires no hook. The view falls back to Claude Code's own
   busy or idle in that case, but a session interrupted while blocked stays
   marked blocked until its next prompt.
-- The view never sends a session a message. Attaching hands you the session's
-  own terminal, and stopping keeps its conversation.
+- The view never sends a session a message. It shows you the session's own
+  terminal, and stopping keeps its conversation.
+- Only sessions started inside overview's tmux can be shown live. A session
+  started in another terminal stays there, and the right pane only describes
+  it.

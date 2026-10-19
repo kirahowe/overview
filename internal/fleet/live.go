@@ -167,5 +167,13 @@ func (h Home) AttachCmd(l Live) *exec.Cmd {
 	return cmd
 }
 
+// NewCmd starts a new interactive session. Like AttachCmd it carries no
+// OVERVIEW_SKIP, so the session joins the fleet.
+func (h Home) NewCmd() *exec.Cmd {
+	cmd := exec.Command(claudeBin())
+	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+string(h))
+	return cmd
+}
+
 // Stop stops a background session. Its conversation is kept.
 func (h Home) Stop(l Live) error { return h.stopSession(l) }

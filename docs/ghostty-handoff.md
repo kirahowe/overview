@@ -3,6 +3,13 @@
 Written 2026-10-17 at the end of a planning session in the `agents` repo.
 Pick it up in a fresh session started from this repo.
 
+**Superseded 2026-10-18.** Jumping between overview's tab and each session's
+tab was too much back and forth, so overview now runs in its own tmux, with
+the selected session live beside the list. The Ghostty jump code is gone.
+This file is kept for its reasoning, including why tmux was first turned
+down: native Ghostty splits and scrolling were the price, and Kira chose to
+pay it to stay in one window.
+
 ## Status, 2026-10-17: built
 
 The plan below has been built, with four changes. The rest of this file

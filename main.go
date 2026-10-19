@@ -16,7 +16,8 @@ import (
 
 const usage = `overview: watch the Claude Code sessions of one config directory
 
-  overview [flags]            open the live view
+  overview [flags]            open the live view in overview's tmux, starting
+                              it if need be
   overview sessions [flags]   print the sessions once and exit
   overview orchestrator start|stop|status|ensure [flags]
                               run the background session that writes digests;
@@ -25,6 +26,7 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview activity [flags]   print what sessions did since the last digest
   overview publish [file]     save a digest (from the file or stdin)
   overview hook               record a Claude Code hook event (reads stdin)
+  overview stage              the pane the view draws details into (internal)
   overview themes [name]      list the themes, or print one as a file to edit
 
 Flags:
@@ -44,8 +46,12 @@ func main() {
 	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
 		cmd, args = args[0], args[1:]
 	}
-	if cmd == "hook" {
+	switch cmd {
+	case "hook":
 		fleet.Hook(os.Stdin)
+		return
+	case "stage":
+		tui.Stage()
 		return
 	}
 
@@ -75,8 +81,12 @@ func main() {
 	switch cmd {
 	case "":
 		var theme tui.Theme
-		if theme, err = loadTheme(*themeFlag); err == nil {
+		switch theme, err = loadTheme(*themeFlag); {
+		case err != nil:
+		case tui.InTmux():
 			err = tui.Run(home, *model, theme)
+		default:
+			err = tui.Launch(home, os.Args[1:])
 		}
 	case "sessions":
 		err = printSessions(home)

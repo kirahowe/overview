@@ -48,30 +48,12 @@ func pill(text string, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Background(bg).Foreground(pal.PillFg).Bold(true).Padding(0, 1).Render(text)
 }
 
-// Layout. Every pane is a box with a one-cell border and a one-cell margin
+// Layout. The list is a box with a one-cell border and a one-cell margin
 // inside it, and the status bar takes the last line.
 
 func (m model) boxHeight() int { return max(m.h-1, 3) }
 
 func (m model) innerHeight() int { return m.boxHeight() - 2 }
-
-// split returns the outer widths and heights of the list and detail boxes.
-// A narrow terminal stacks them.
-func (m model) split() (lw, lh, dw, dh int) {
-	h := m.boxHeight()
-	if m.w < 90 {
-		top := h / 2
-		return m.w, top, m.w, h - top
-	}
-	lw = max(38, min(m.w*2/5, 62))
-	return lw, h, m.w - lw, h
-}
-
-// detailSize is the content area of the detail box.
-func (m model) detailSize() (w, h int) {
-	_, _, dw, dh := m.split()
-	return dw - 4, dh - 2
-}
 
 func (m model) View() string {
 	if m.w == 0 {
@@ -96,38 +78,13 @@ func (m model) View() string {
 func (m model) sessionsView() []string {
 	secs := m.sections()
 	rows := flatten(secs)
-	row, _, ok := m.selected(rows)
-	lw, lh, dw, dh := m.split()
-
-	listInfo := ""
+	row, _, _ := m.selected(rows)
+	info := ""
 	if m.filter != "" || m.filtering {
-		listInfo = fmt.Sprintf("/%s · %d", m.filter, len(rows))
+		info = fmt.Sprintf("/%s · %d", m.filter, len(rows))
 	}
 	lines, _ := m.listView(secs, row.SessionID)
-	list := box("sessions", listInfo, lines, lw, lh, m.focus == listPane)
-
-	var detail []string
-	title, info := "detail", ""
-	if ok {
-		title = row.Name
-		cw, ch := m.detailSize()
-		lines := m.detail(row, cw)
-		start := max(0, min(m.scroll, len(lines)-ch))
-		if len(lines) > ch {
-			info = fmt.Sprintf("%d–%d of %d", start+1, min(start+ch, len(lines)), len(lines))
-		}
-		detail = lines[start:min(start+ch, len(lines))]
-	}
-	detailBox := box(title, info, detail, dw, dh, m.focus == detailPane)
-
-	if lw == m.w {
-		return append(list, detailBox...)
-	}
-	out := make([]string, len(list))
-	for i := range out {
-		out[i] = list[i] + detailBox[i]
-	}
-	return out
+	return box("sessions", info, lines, m.w, m.boxHeight(), !m.blurred)
 }
 
 // box draws a bordered pane with the title set into its top edge and an
@@ -231,9 +188,8 @@ func window(top, selTop, selBottom, n, h int) int {
 
 // listView is the shown part of the list and its owners.
 func (m model) listView(secs []section, sel string) (lines, owners []string) {
-	lw, lh, _, _ := m.split()
-	lines, owners = m.listLines(secs, sel, lw-4)
-	start := m.listStart(owners, sel, lh-2)
+	lines, owners = m.listLines(secs, sel, m.w-4)
+	start := m.listStart(owners, sel, m.boxHeight()-2)
 	return lines[start:], owners[start:]
 }
 
@@ -281,7 +237,7 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 
 	if selected {
 		bar := lipgloss.NewStyle().Background(pal.CursorDimBg).Foreground(pal.CursorDimFg).Bold(true)
-		if m.focus == listPane {
+		if !m.blurred {
 			bar = bar.Background(pal.CursorBg).Foreground(pal.CursorFg)
 		}
 		return []string{
@@ -302,8 +258,8 @@ type detailCache struct {
 	lines []string
 }
 
-// detail returns the detail pane's lines for a row, rebuilt only when
-// something it shows has changed.
+// detail returns a row's details, rebuilt only when something they show has
+// changed.
 func (m model) detail(r fleet.Row, w int) []string {
 	var mod time.Time
 	if info, err := os.Stat(r.Transcript); err == nil {
@@ -369,7 +325,7 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		if h.Name != "" {
 			add(dim.Render(h.Name + " started this session and runs it without a terminal. enter brings " + h.Name + " forward. To end it, close it there."))
 		} else {
-			add(dim.Render("Something other than a terminal started this session, so there is nowhere to jump to."))
+			add(dim.Render("Something other than a terminal started this session, so there is nothing to show here."))
 		}
 	}
 
@@ -428,17 +384,6 @@ func rule(label string, w int) string {
 		fg(pal.Border).Render(strings.Repeat("─", max(w-ansi.StringWidth(label)-4, 0)))
 }
 
-// clampScroll keeps the detail scroll inside its content, so scrolling back
-// up after overshooting the end responds at once.
-func (m model) clampScroll() int {
-	row, _, ok := m.selected(m.ordered())
-	if !ok {
-		return 0
-	}
-	w, h := m.detailSize()
-	return max(0, min(m.scroll, len(m.detail(row, w))-h))
-}
-
 func (m model) digestLines() []string {
 	if m.digest == "" {
 		return []string{dim.Render("No digest yet. Press D to write one, or start the orchestrator.")}
@@ -473,23 +418,18 @@ func (m model) helpBox() []string {
 		entry{"n N", "next / previous waiting"},
 		entry{"g G", "first / last"},
 		entry{"/", "search, esc clears"},
-		entry{"tab l h", "switch pane"},
 	), section("act",
-		entry{"enter", "jump / attach / open app"},
-		entry{"a", "attach (background)"},
+		entry{"enter", "type into the session"},
+		entry{"ctrl+]", "back to the list"},
 		entry{"x", "stop (background)"},
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},
-		entry{"t", "new tab in project"},
 	)...)
-	right := append(section("detail",
-		entry{"J K", "scroll"},
-		entry{"ctrl+d u", "half page"},
-	), section("digest",
+	right := section("digest",
 		entry{"d", "show / hide digests"},
 		entry{"[ ]", "older / newer"},
 		entry{"D", "write one now"},
-	)...)
+	)
 	right = append(right, section("mouse",
 		entry{"click", "select, twice to act"},
 		entry{"wheel", "move / scroll"},
@@ -497,22 +437,28 @@ func (m model) helpBox() []string {
 	right = append(right, section("general",
 		entry{"r", "refresh"},
 		entry{"?", "this help"},
-		entry{"q", "quit"},
+		entry{"q", "detach, Q quits"},
 	)...)
 	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
 		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle")
 
 	const col = 40
+	// Side by side when the pane is wide enough, one column under the other
+	// in the narrow list pane.
 	var body []string
-	for i := 0; i < max(len(left), len(right)); i++ {
-		l, r := "", ""
-		if i < len(left) {
-			l = left[i]
+	if m.w-4 >= 2*col+6 {
+		for i := 0; i < max(len(left), len(right)); i++ {
+			l, r := "", ""
+			if i < len(left) {
+				l = left[i]
+			}
+			if i < len(right) {
+				r = right[i]
+			}
+			body = append(body, fit(l, col)+r)
 		}
-		if i < len(right) {
-			r = right[i]
-		}
-		body = append(body, fit(l, col)+r)
+	} else {
+		body = append(left, right...)
 	}
 	body = append(body, legend)
 	w := min(m.w-4, 2*col+6)
@@ -584,7 +530,7 @@ func (m model) statusBar() string {
 	sep := base.Render(" │ ")
 	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
 
-	keys := "↵ jump · / search · n next · d digest · ? help "
+	keys := "↵ type · ^] back · / search · n next · c new · ? help "
 	if m.screen == digestScreen {
 		keys = "[ ] older/newer · D write · d sessions · ? help "
 	}

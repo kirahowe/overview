@@ -20,7 +20,7 @@ type host struct {
 	Path string // "/Applications/Obsidian.app"
 }
 
-// label is how the list and detail pane name the host.
+// label is how the list and the details name the host.
 func (h host) label() string {
 	if h.Name == "" {
 		return "no terminal"
@@ -64,9 +64,9 @@ func parseProcs(out string) map[int]proc {
 }
 
 // places finds where each interactive session runs. A session with a tty is
-// in a terminal, and its tty is how a jump finds the tab. A session that is
-// running but has none was started by another app, which is named from the
-// nearest ancestor inside an app bundle. A session ps does not list is in
+// in a terminal, and its tty is how the stage finds its tmux pane. A session
+// that is running but has none was started by another app, which is named
+// from the nearest ancestor inside an app bundle. A session ps does not list is in
 // neither map.
 func places(procs map[int]proc, rows []fleet.Row) (ttys map[int]string, hosts map[int]host) {
 	ttys, hosts = map[int]string{}, map[int]host{}

@@ -23,7 +23,7 @@ See README.md for behaviour and docs/ for design notes.
   one only once the bug is fixed and it passes. Seeds go stale when a
   generator changes (the draws shift and the seed stops replaying its bug), so
   prefer a named regression test for anything worth keeping.
-- External commands (claude, ps, osascript, pbcopy) sit behind small seams:
+- External commands (claude, ps, tmux, pbcopy) sit behind small seams:
   a function variable or an interface, set by tests. Logic must be testable
   without those programs installed or running.
 - Tests use a `t.TempDir()` home and never touch the real `~/.claude-*`.
