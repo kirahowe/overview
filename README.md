@@ -93,8 +93,10 @@ While the keyboard is in a pane on the right, the list stays where it is,
 beside you. The cursor follows the window you are typing in: when Claude
 exits and leaves a split, the window becomes a terminal and the cursor
 stays on it, and when you start `claude` in a terminal, or a session's id
-changes, the cursor moves to the session there. Once the keyboard is back
-in the list, the cursor's own rules apply again.
+changes, the cursor moves to the session there. Otherwise the cursor stays
+put, even when a search stops matching its entry; the search is cleared
+when you come back. Once the keyboard is back in the list, or you use the
+mouse or a key there, the cursor's own rules apply again.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
 searches. Search looks at the project, title, last prompt and name, and

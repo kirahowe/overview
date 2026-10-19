@@ -448,14 +448,32 @@ func (m model) stick(before model) model {
 // the window it was in when its session ended there.
 func (m model) keepCursor(before model) model {
 	if m.blurred {
-		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.panes), m.sel); ok {
-			if key != m.sel {
-				m.sel, m.confirm = key, ""
-			}
-			return m
+		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.panes), m.sel); ok && key != m.sel {
+			m.sel, m.confirm = key, ""
 		}
+		// With no entry there, the cursor stays as it is, even on an entry
+		// that is not shown, so nothing moves when the keyboard comes back.
+		return m
 	}
 	return m.stick(before).keepNear(before).keepSel()
+}
+
+// unblur is the model with the keyboard back in the list. A search that
+// hid the cursor's entry while the user was elsewhere is cleared, so the
+// cursor and the list stay where they were.
+func (m model) unblur() model {
+	if !m.blurred {
+		return m
+	}
+	m.blurred = false
+	if !m.shown(m.sel) && m.filter != "" {
+		all := m
+		all.filter = ""
+		if all.shown(m.sel) {
+			m.filter, m.filtering = "", false
+		}
+	}
+	return m
 }
 
 // place is an entry's key and the window its pane is in, "" when it has
@@ -521,16 +539,19 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tea.FocusMsg:
-		m.blurred = false
+		m = m.unblur()
 	case tea.BlurMsg:
 		m.blurred = true
 	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
-		return m.handle(m.keyActions(msg))
+		// Input that reaches the list proves the user is there, whether or
+		// not tmux said so: a wheel over the list leaves the focus where it
+		// was, and a focus event can go missing.
+		return m.unblur().handle(m.keyActions(msg))
 	case tea.MouseMsg:
 		// The input's time is read here, at the door, so apply stays pure.
-		return m.handle(m.mouseActions(msg, m.deps.now()))
+		return m.unblur().handle(m.mouseActions(msg, m.deps.now()))
 	case noteMsg:
 		m = m.say(string(msg))
 	case frameMsg:

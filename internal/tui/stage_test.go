@@ -1180,28 +1180,6 @@ func TestANewSessionIDKeepsTheListWhileTyping(t *testing.T) {
 	}
 }
 
-// A search the selected session stops matching, while the user types in
-// it, moves the cursor but not the list.
-func TestASearchThatLosesTheSessionKeepsTheList(t *testing.T) {
-	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "auth", 12))
-	m = pressSettled(t, m, "/", "a", "u", "t", "h", "esc", "j")
-	m.filter = "auth"
-	m = blurred(t, m)
-	cur, moves := f.stage(), len(f.moves)
-	rows := slices.Clone(m.rows)
-	for i := range rows {
-		if rows[i].SessionID == m.sel {
-			rows[i].Title = "other"
-		}
-	}
-	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
-	m = settle(t, m, cmd)
-	if f.stage() != cur || len(f.moves) != moves {
-		t.Fatalf("list in %s (was %s)", f.stage(), cur)
-	}
-}
-
 // Both homes' views share one server. A session of this home started in
 // the other home's view gets the holder, which says so, and the list never
 // moves into the other view's session.
@@ -1288,5 +1266,74 @@ func TestARefreshFromBeforeAPinKeepsThePin(t *testing.T) {
 	m = settle(t, m, cmd)
 	if !slices.Contains(m.pinned, "/code/new") || m.sel != "project:/code/new" {
 		t.Fatalf("a stale refresh: pinned %v, sel %s", m.pinned, m.sel)
+	}
+}
+
+// Keys that reach the list mean the user is there, even if tmux never said
+// the focus came back, so they move the cursor as ever.
+func TestKeysWhileMarkedBlurredMoveTheCursor(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	sel := m.sel
+	m = pressSettled(t, blurred(t, m), "j")
+	if m.sel == sel || m.blurred || !f.staged(m.want()) {
+		t.Fatalf("j while marked blurred: sel %s (was %s), blurred %v, list in %s", m.sel, sel, m.blurred, f.stage())
+	}
+}
+
+// The wheel over the list leaves tmux's focus in the session, and still
+// moves the cursor.
+func TestTheWheelOverTheListWhileBlurredMovesTheCursor(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	sel := m.sel
+	m = blurred(t, m)
+	m, cmd := step(m, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 2, Y: 3})
+	m = settle(t, m, cmd)
+	if m.sel == sel {
+		t.Fatalf("the wheel left the cursor on %s", m.sel)
+	}
+}
+
+// A click on a row selects it, though no focus event came first.
+func TestAClickWhileBlurredSelects(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m = blurred(t, m)
+	other := "s1"
+	if m.sel == "s1" {
+		other = "s2"
+	}
+	m, cmd := step(m, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: screenY(m, other)})
+	m = settle(t, m, cmd)
+	if m.sel != other || !f.staged(m.want()) {
+		t.Fatalf("sel %s, want %s; list in %s", m.sel, other, f.stage())
+	}
+}
+
+// A search that hides the session the user types in moves nothing, then
+// or when the keyboard comes back to the list, which shows it again.
+func TestASearchLostWhileTypingKeepsTheListOnReturn(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "auth", 12))
+	m = pressSettled(t, m, "/", "a", "u", "t", "h", "esc", "j")
+	m.filter = "auth"
+	m = blurred(t, m)
+	cur, sel := f.stage(), m.sel
+	rows := slices.Clone(m.rows)
+	for i := range rows {
+		if rows[i].SessionID == m.sel {
+			rows[i].Title = "other"
+		}
+	}
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m = settle(t, m, cmd)
+	if m.sel != sel || f.stage() != cur {
+		t.Fatalf("while typing: sel %s (was %s), list in %s (was %s)", m.sel, sel, f.stage(), cur)
+	}
+	m, cmd = step(m, tea.FocusMsg{})
+	m = settle(t, m, cmd)
+	if m.sel != sel || f.stage() != cur || m.filter != "" {
+		t.Fatalf("back in the list: sel %s, list in %s, filter %q", m.sel, f.stage(), m.filter)
 	}
 }
