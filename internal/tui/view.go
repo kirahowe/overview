@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -338,13 +337,12 @@ type detailCache struct {
 }
 
 // detail returns a row's details, rebuilt only when something they show has
-// changed.
+// changed. detailLines is a pure function of the key's parts, and the
+// cache only spares the restyling that the holder would otherwise redo on
+// every spinner frame.
 func (m model) detail(r fleet.Row, w int) []string {
-	var mod time.Time
-	if info, err := os.Stat(r.Transcript); err == nil {
-		mod = info.ModTime()
-	}
-	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], m.hosts[r.PID], mod)
+	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], m.hosts[r.PID],
+		m.written[r.Transcript], r.Transcript == m.turns.key.path, m.turns.key)
 	if m.cache != nil && m.cache.key == key {
 		return m.cache.lines
 	}
@@ -424,7 +422,7 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		callout(amber, "asking you", question(r.LastReply))
 	}
 
-	turns := fleet.RecentTurns(r.Transcript, recentTurns)
+	turns := m.turnsOf(r.Transcript)
 	if len(turns) == 0 {
 		if r.LastPrompt != "" {
 			out = append(out, "", rule("last prompt", w))

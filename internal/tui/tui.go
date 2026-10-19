@@ -49,7 +49,9 @@ type (
 		pinned []string
 		pinGen int // the model's pinsLanded when it was asked for
 		roots  roots
-		err    error
+		// written is when each row's transcript was last written, by path.
+		written map[string]time.Time
+		err     error
 	}
 	digestMsg struct {
 		d   fleet.Digest
@@ -103,6 +105,12 @@ type model struct {
 	cwd string
 	// user is the user's home directory, symlinks resolved.
 	user string
+	// written is when each row's transcript was last written, as the
+	// latest refresh found it. turns holds the selected session's last
+	// turns, read in a Cmd, and turnsAsked the transcript last asked for.
+	written    map[string]time.Time
+	turns      recent
+	turnsAsked turnsKey
 	// rowRoots holds the project roots of the latest refresh's
 	// directories, and paneRoots those of the latest pane listing's.
 	rowRoots, paneRoots roots
@@ -192,7 +200,7 @@ func Run(v View) error {
 	if err != nil {
 		return err
 	}
-	m = m.setPanes(panes, rs).loadDigests()
+	m = m.setPanes(panes, rs)
 	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus()).Run()
 	return err
 }
@@ -210,8 +218,11 @@ type deps struct {
 	psTable  func() ([]byte, error)
 	readDirs func(dir string) ([]string, error)
 	writeTTY func(tty string, b []byte) error
-	exists   func(path string) bool   // whether anything is at path
-	resolve  func(path string) string // path with its symlinks resolved
+	exists   func(path string) bool      // whether anything is at path
+	resolve  func(path string) string    // path with its symlinks resolved
+	modTime  func(path string) time.Time // when a file was last written, zero if unknown
+	// recentTurns reads the last n turns of a transcript.
+	recentTurns func(path string, n int) []fleet.Turn
 }
 
 // roots finds the project roots of dirs.
@@ -219,32 +230,59 @@ func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve
 
 func systemDeps() deps {
 	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
-		exists: exists, resolve: resolvePath}
+		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns}
+}
+
+func modTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
 
-// loadDigests picks up the digest list and shows the newest one.
-func (m model) loadDigests() model {
-	m.digests = m.home.DigestFiles()
-	return m.showDigest(len(m.digests) - 1)
+type (
+	// digestsMsg is the list of digest files. newest asks to show the
+	// newest whatever the reader was on.
+	digestsMsg struct {
+		files  []string
+		newest bool
+	}
+	// digestReadMsg is digest idx, read from path.
+	digestReadMsg struct {
+		idx        int
+		path, text string
+		at         time.Time
+		err        error
+	}
+)
+
+// listDigests reads the list of digest files.
+func (m model) listDigests(newest bool) tea.Cmd {
+	home := m.home
+	return func() tea.Msg { return digestsMsg{home.DigestFiles(), newest} }
 }
 
-func (m model) showDigest(i int) model {
+// showDigest reads digest i to show it, when there is one.
+func (m model) showDigest(i int) tea.Cmd {
 	if i < 0 || i >= len(m.digests) {
-		return m
+		return nil
 	}
-	b, err := os.ReadFile(m.digests[i])
-	if err != nil {
-		return m
+	path := m.digests[i]
+	return func() tea.Msg {
+		b, err := os.ReadFile(path)
+		msg := digestReadMsg{idx: i, path: path, text: string(b), err: err}
+		if info, serr := os.Stat(path); err == nil && serr == nil {
+			msg.at = info.ModTime()
+		}
+		return msg
 	}
-	info, _ := os.Stat(m.digests[i])
-	m.digestIdx, m.digest, m.digestAt, m.digestScroll = i, string(b), info.ModTime(), 0
-	return m
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.refresh, tick(), nextFrame()}
+	cmds := []tea.Cmd{m.refresh, tick(), nextFrame(), m.listDigests(true)}
 	if m.mux != nil {
 		// The first listing also starts a holder when there is none.
 		cmds = append(cmds, listPanes(m.mux, m.deps.roots, m.landed), panesEveryTick())
@@ -278,7 +316,54 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host
 	for _, r := range rows {
 		dirs = append(dirs, r.Cwd)
 	}
-	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), nil}
+	written := map[string]time.Time{}
+	for _, r := range rows {
+		if r.Transcript != "" {
+			written[r.Transcript] = m.deps.modTime(r.Transcript)
+		}
+	}
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), written, nil}
+}
+
+// turnsKey names a transcript as it was when written at a moment.
+type turnsKey struct {
+	path string
+	at   time.Time
+}
+
+// recent is a transcript's last turns, as read when it was written at
+// key.at.
+type recent struct {
+	key   turnsKey
+	turns []fleet.Turn
+}
+
+// turnsMsg answers askTurns.
+type turnsMsg struct{ recent }
+
+// askTurns asks for the selected session's last turns, which the holder
+// shows, when the model has none for its transcript as the latest refresh
+// found it and has not asked already.
+func (m model) askTurns() (model, tea.Cmd) {
+	e, _, ok := m.selected(m.ordered())
+	if !ok || e.kind != sessionEntry || e.row.Transcript == "" {
+		return m, nil
+	}
+	k := turnsKey{e.row.Transcript, m.written[e.row.Transcript]}
+	if k == m.turns.key || k == m.turnsAsked {
+		return m, nil
+	}
+	m.turnsAsked = k
+	read := m.deps.recentTurns
+	return m, func() tea.Msg { return turnsMsg{recent{k, read(k.path, recentTurns)}} }
+}
+
+// turnsOf is the last turns of a transcript, if the model has read them.
+func (m model) turnsOf(path string) []fleet.Turn {
+	if path == "" || m.turns.key.path != path {
+		return nil
+	}
+	return m.turns.turns
 }
 
 func (m model) runDigest() tea.Msg {
@@ -536,7 +621,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.listTop = m.listStart(owners, e.key(), m.boxHeight()-2)
 	}
 	m, stage := m.restage()
-	return m, tea.Batch(cmd, stage)
+	m, turns := m.askTurns()
+	return m, tea.Batch(cmd, stage, turns)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -566,22 +652,30 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.noteAt.IsZero() && time.Time(msg).Sub(m.noteAt) > noteFor {
 			m.note = ""
 		}
+		return m, tea.Batch(m.refresh, tick(), m.listDigests(false))
+	case digestsMsg:
 		// The orchestrator publishes digests on its own schedule. Follow the
 		// newest one unless the reader has gone back to an older one.
-		if files := m.home.DigestFiles(); len(files) != len(m.digests) {
-			atNewest := m.digestIdx == len(m.digests)-1
-			m.digests = files
-			if atNewest {
-				m = m.showDigest(len(files) - 1)
-			}
+		if len(msg.files) == len(m.digests) && !msg.newest {
+			return m, nil
 		}
-		return m, tea.Batch(m.refresh, tick())
+		atNewest := msg.newest || len(m.digests) == 0 || m.digestIdx == len(m.digests)-1
+		m.digests = msg.files
+		if atNewest {
+			return m, m.showDigest(len(msg.files) - 1)
+		}
+	case digestReadMsg:
+		if msg.err == nil && msg.idx < len(m.digests) && m.digests[msg.idx] == msg.path {
+			m.digestIdx, m.digest, m.digestAt, m.digestScroll = msg.idx, msg.text, msg.at, 0
+		}
+	case turnsMsg:
+		m.turns = msg.recent
 	case rowsMsg:
 		// A refresh that failed keeps what the last one found.
 		if m.rowsErr = msg.err; msg.err != nil {
 			return m, nil
 		}
-		m.rows, m.ttys, m.hosts, m.rowRoots, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, true
+		m.rows, m.ttys, m.hosts, m.rowRoots, m.written, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, msg.written, true
 		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
 			m.pinned = msg.pinned
 		}
@@ -595,7 +689,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.d.Quiet:
 			m = m.say("no activity since " + msg.d.Since.Local().Format("15:04"))
 		default:
-			m = m.loadDigests().say("new digest written")
+			return m.say("new digest written"), m.listDigests(true)
 		}
 	case pickedMsg:
 		if m.pick.open && msg.source == m.pick.from {
@@ -721,7 +815,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		}
 		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.innerHeight()))
 	case stepDigest:
-		m = m.showDigest(m.digestIdx + a.n)
+		return m, m.showDigest(m.digestIdx + a.n)
 	case search:
 		m.filtering = true
 	case typeText, backspace:

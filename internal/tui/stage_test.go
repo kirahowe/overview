@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -290,6 +293,8 @@ func fakeDeps(f *fakeMux) deps {
 	d.readDirs = func(dir string) ([]string, error) { return nil, errors.New(dir + ": no directories in tests") }
 	d.exists = func(string) bool { return false }
 	d.resolve = path.Clean
+	d.modTime = func(string) time.Time { return time.Time{} }
+	d.recentTurns = func(string, int) []fleet.Turn { return nil }
 	if f != nil {
 		d.writeTTY = f.draw
 	} else {
@@ -1424,5 +1429,71 @@ func TestTheHolderShowsAFirstRefreshThatFailed(t *testing.T) {
 	text := ansi.Strip(m.holderText(60, 10))
 	if !strings.Contains(text, "claude agents --json: not found") || strings.Contains(text, "reading sessions") {
 		t.Fatalf("holder shows %q", text)
+	}
+}
+
+// Digests are listed and read in Cmds: the newest shows first, [ reads an
+// older one, and a new digest arriving leaves a reader of an older one
+// where they are.
+func TestDigestsAreReadInCmds(t *testing.T) {
+	m := newTestModel(t)
+	dir := filepath.Join(m.home.Dir, "overview", "digests")
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("1.md", "first")
+	write("2.md", "second")
+	m = settle(t, m, m.listDigests(true))
+	if m.digest != "second" || m.digestIdx != 1 {
+		t.Fatalf("digest %q at %d", m.digest, m.digestIdx)
+	}
+	m, cmd := press(m, "d", "[")
+	if m.digest != "second" {
+		t.Fatal("[ read the file inside Update")
+	}
+	m = settle(t, m, cmd)
+	if m.digest != "first" || m.digestIdx != 0 {
+		t.Fatalf("after [: digest %q at %d", m.digest, m.digestIdx)
+	}
+	write("3.md", "third")
+	m = settle(t, m, m.listDigests(false))
+	if m.digest != "first" || len(m.digests) != 3 {
+		t.Fatalf("a new digest moved the reader: %q of %d", m.digest, len(m.digests))
+	}
+}
+
+// The selected session's last turns are read in a Cmd when its transcript
+// changes, as the refresh found it, and never while drawing.
+func TestTurnsAreReadWhenTheTranscriptChanges(t *testing.T) {
+	f := newFakeMux()
+	r := row("s1", "red", "auth", 11)
+	r.Transcript = "/t/s1.jsonl"
+	m := stagedModel(t, f, r)
+	at, reads := time.Unix(100, 0), 0
+	m.deps.modTime = func(string) time.Time { return at }
+	m.deps.recentTurns = func(path string, n int) []fleet.Turn {
+		reads++
+		return []fleet.Turn{{Prompt: "fix the login page", Reply: "done"}}
+	}
+	m = refreshed(t, m)
+	if reads != 1 || !strings.Contains(ansi.Strip(m.holderText(80, 40)), "fix the login page") {
+		t.Fatalf("reads %d, holder %q", reads, ansi.Strip(m.holderText(80, 40)))
+	}
+	m = refreshed(t, m)
+	_ = m.View()
+	m.holderText(80, 40)
+	if reads != 1 {
+		t.Fatalf("an unchanged transcript was read again: %d reads", reads)
+	}
+	at = time.Unix(200, 0)
+	m = refreshed(t, m)
+	if reads != 2 {
+		t.Fatalf("a changed transcript was not read: %d reads", reads)
 	}
 }
