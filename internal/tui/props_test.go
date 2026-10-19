@@ -35,6 +35,9 @@ func fakeProject(cwd string) string {
 	return path.Base(cwd)
 }
 
+// fakeShort shows a directory as it is.
+func fakeShort(dir string) string { return dir }
+
 // fakeHost puts an interactive session with pid 3 inside an app, Notes.
 func fakeHost(r fleet.Row) (string, bool) {
 	if r.Background() || r.PID != 3 {
@@ -96,7 +99,7 @@ func genQuery(t *rapid.T) string {
 
 // sessionList is buildList with sessions only.
 func sessionList(rows []fleet.Row, query string, project func(string) string, host func(fleet.Row) (string, bool)) []section {
-	return buildList(rows, nil, nil, query, project, host)
+	return buildList(rows, nil, nil, query, project, fakeShort, host)
 }
 
 func ids(secs []section) []string {
@@ -378,33 +381,34 @@ func TestRepoRootEdges(t *testing.T) {
 }
 
 // A cwd reached through a symlink (/tmp is /private/tmp on macOS) belongs
-// to the same project as the resolved path.
-func TestProjectsResolveSymlinks(t *testing.T) {
-	p := newProjects()
-	p.exists = fakeFS{"/private/tmp/r/.git": true}.exists
-	p.resolve = func(s string) string {
+// to the same project as the resolved path, and a refresh carries the
+// root of every directory it names.
+func TestRootsResolveSymlinks(t *testing.T) {
+	resolve := func(s string) string {
 		if strings.HasPrefix(s, "/tmp/") {
 			return "/private" + s
 		}
-		return s
+		return path.Clean(s)
 	}
-	if a, b := p.name("/tmp/r/x"), p.name("/private/tmp/r"); a != b {
-		t.Fatalf("%q and %q", a, b)
-	}
-	if a, b := p.name("/tmp/q/"), p.name("/private/tmp/q"); a != b {
-		t.Fatalf("no repo: %q and %q", a, b)
+	rs := findRoots(fakeFS{"/private/tmp/r/.git": true}.exists, resolve, "/tmp/r/x", "/private/tmp/r", "/tmp/q/", "/private/tmp/q", "")
+	want := roots{"/tmp/r/x": "/private/tmp/r", "/private/tmp/r": "/private/tmp/r", "/tmp/q/": "/private/tmp/q", "/private/tmp/q": "/private/tmp/q"}
+	if !reflect.DeepEqual(rs, want) {
+		t.Fatalf("roots %v, want %v", rs, want)
 	}
 }
 
-func TestProjectsCachePerCwd(t *testing.T) {
-	calls := 0
-	p := newProjects()
-	p.exists = func(string) bool { calls++; return false }
-	p.name("/x/y")
-	n := calls
-	p.name("/x/y")
-	if calls != n {
-		t.Fatalf("second lookup hit the filesystem %d more times", calls-n)
+// The model only looks roots up: in the refresh's, then the listing's, and
+// a directory neither knows is its own root.
+func TestModelRootLooksUp(t *testing.T) {
+	m := newTestModel(t)
+	m.rowRoots, m.paneRoots, m.user = roots{"/a/x": "/a"}, roots{"/a/x": "/b", "/c/y": "/c"}, "/u"
+	for dir, want := range map[string]string{"/a/x": "/a", "/c/y": "/c", "/d/z/": "/d/z", "": ""} {
+		if got := m.root(dir); got != want {
+			t.Errorf("root(%q) = %q, want %q", dir, got, want)
+		}
+	}
+	if got := m.name("/u"); got != "~" {
+		t.Errorf("the home directory is named %q", got)
 	}
 }
 
@@ -560,7 +564,7 @@ func genPinned(t *rapid.T) []string {
 func TestPropEveryEntryShowsOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
-		secs := buildList(rows, terms, pinned, "", fakeProject, fakeHost)
+		secs := buildList(rows, terms, pinned, "", fakeProject, fakeShort, fakeHost)
 		count := map[string]int{}
 		for _, s := range secs {
 			sawTerm := false
@@ -623,9 +627,9 @@ func TestPropEveryEntryShowsOnce(t *testing.T) {
 func TestPropEntriesIndependentOfInputOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
-		a := buildList(rows, terms, pinned, q, fakeProject, fakeHost)
+		a := buildList(rows, terms, pinned, q, fakeProject, fakeShort, fakeHost)
 		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
-			rapid.Permutation(pinned).Draw(t, "pinned"), q, fakeProject, fakeHost)
+			rapid.Permutation(pinned).Draw(t, "pinned"), q, fakeProject, fakeShort, fakeHost)
 		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
 			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
 		}
@@ -638,10 +642,10 @@ func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
 		all := map[string]bool{}
-		for _, id := range ids(buildList(rows, terms, pinned, "", fakeProject, fakeHost)) {
+		for _, id := range ids(buildList(rows, terms, pinned, "", fakeProject, fakeShort, fakeHost)) {
 			all[id] = true
 		}
-		for _, e := range flatten(buildList(rows, terms, pinned, q, fakeProject, fakeHost)) {
+		for _, e := range flatten(buildList(rows, terms, pinned, q, fakeProject, fakeShort, fakeHost)) {
 			if e.kind != projectEntry {
 				continue
 			}
@@ -664,7 +668,7 @@ func TestTerminalSearch(t *testing.T) {
 		"": true, "shop": true, "NODE": true, "web": true, "node web": true, "shop/web": true,
 		"nodeweb": false, "zsh": false, "terminal": false,
 	} {
-		got := len(buildList(nil, []terminal{term}, nil, q, fakeProject, fakeHost)) == 1
+		got := len(buildList(nil, []terminal{term}, nil, q, fakeProject, fakeShort, fakeHost)) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}
@@ -673,7 +677,7 @@ func TestTerminalSearch(t *testing.T) {
 
 func TestCountsSkipTerminalsAndPlaceholders(t *testing.T) {
 	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/a"}, State: fleet.Working}
-	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, "", fakeProject, fakeHost)
+	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, "", fakeProject, fakeShort, fakeHost)
 	if need, working, idle := counts(secs); need != 0 || working != 1 || idle != 0 {
 		t.Fatalf("counts %d %d %d", need, working, idle)
 	}
@@ -795,7 +799,7 @@ func TestTermTitle(t *testing.T) {
 // session has left it and the window is listed as a terminal.
 func TestPropStuck(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), "", fakeProject, fakeHost))
+		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), "", fakeProject, fakeShort, fakeHost))
 		win := rapid.SampledFrom([]string{"", "@1", "@2", "@7"}).Draw(t, "win")
 		still := rapid.Bool().Draw(t, "still")
 		key, ok := stuck(win, still, es)

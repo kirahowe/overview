@@ -16,6 +16,9 @@ import (
 
 const testHome = "/u/kira"
 
+// testShort is fleet.ShortDir for a user whose home is testHome.
+func testShort(dir string) string { return fleet.ShortDir(dir, testHome) }
+
 func TestSplitPathQuery(t *testing.T) {
 	for _, c := range []struct{ q, dir, prefix string }{
 		{"/", "/", ""},
@@ -89,12 +92,12 @@ func TestPropPickMatchesWords(t *testing.T) {
 			}
 		}
 		q := strings.Join(rapid.SliceOfN(rapid.SampledFrom([]string{"a", "BE", "two", "w", "y/al", "zz"}), 0, 2).Draw(t, "q"), " ")
-		got := pickMatches(q, testHome, paths, shown, fleet.ShortDir)
+		got := pickMatches(q, testHome, paths, shown, testShort)
 		var want []string
 		for _, p := range paths {
 			ok := !shown[p] && !strings.HasPrefix(filepath.Base(p), ".") && !slices.Contains(want, p)
 			for _, w := range strings.Fields(strings.ToLower(q)) {
-				ok = ok && strings.Contains(strings.ToLower(fleet.ShortDir(p)), w)
+				ok = ok && strings.Contains(strings.ToLower(testShort(p)), w)
 			}
 			if ok {
 				want = append(want, p)
@@ -107,7 +110,7 @@ func TestPropPickMatchesWords(t *testing.T) {
 			if !slices.Contains(want, p) {
 				t.Fatalf("%q matched %s", q, p)
 			}
-			if i > 0 && !nameLess(fleet.ShortDir(got[i-1]), fleet.ShortDir(p)) && !(fleet.ShortDir(got[i-1]) == fleet.ShortDir(p) && got[i-1] < p) {
+			if i > 0 && !nameLess(testShort(got[i-1]), testShort(p)) && !(testShort(got[i-1]) == testShort(p) && got[i-1] < p) {
 				t.Fatalf("out of order: %v", got)
 			}
 		}
@@ -133,7 +136,7 @@ func TestPropPickMatchesPath(t *testing.T) {
 		for _, p := range paths {
 			shown[p] = true
 		}
-		got := pickMatches(q, testHome, paths, shown, fleet.ShortDir)
+		got := pickMatches(q, testHome, paths, shown, testShort)
 		var want []string
 		for _, p := range paths {
 			name := filepath.Base(p)
@@ -182,11 +185,9 @@ func (e *fsError) Error() string { return e.dir + ": no such directory" }
 func pickerModel(t *testing.T, f *fakeMux) model {
 	t.Helper()
 	m := repoModel(t, f)
-	m.projects.resolve = func(p string) string { return p }
-	m.projects.home = testHome
-	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" || p == "/code/shop/.jj" || p == "/code/blog/.jj" }
-	m.projects.roots = map[string]string{}
-	return m
+	m.user = testHome
+	m.deps.exists = func(p string) bool { return p == "/code/app/.jj" || p == "/code/shop/.jj" || p == "/code/blog/.jj" }
+	return refreshed(t, m)
 }
 
 func TestAPinsAPickedProjectAndShowsIt(t *testing.T) {

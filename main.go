@@ -93,7 +93,12 @@ func main() {
 	if cmd != "view" {
 		flags.Socket = *socket
 	}
-	cfg, err := config.Load(*configDir, flags)
+	// The one place the user's home directory is looked up.
+	user, err := os.UserHomeDir()
+	if err != nil {
+		fail(err)
+	}
+	cfg, err := config.Load(*configDir, flags, user)
 	if err != nil {
 		fail(err)
 	}
@@ -120,10 +125,10 @@ func main() {
 	case "view":
 		var theme tui.Theme
 		if theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
-			err = tui.Run(home, *model, theme, *socket, *session)
+			err = tui.Run(home, *model, theme, *socket, *session, cfg.User)
 		}
 	case "sessions":
-		err = printSessions(home)
+		err = printSessions(home, cfg.User)
 	case "digest":
 		var d fleet.Digest
 		if d, err = home.RunDigest(*model); err == nil {
@@ -215,18 +220,14 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 // resolveHome finds the config directory cfg names and gives it the claude
 // and orchestrator directory to run with.
 func resolveHome(cfg config.Config, orchDir string) (fleet.Home, error) {
-	user, err := os.UserHomeDir()
-	if err != nil {
-		return fleet.Home{}, err
-	}
-	dir, err := fleet.ResolveHome(cfg.Home, user)
+	dir, err := fleet.ResolveHome(cfg.Home, cfg.User)
 	if err != nil {
 		return fleet.Home{}, err
 	}
 	if orchDir == "" {
 		orchDir = fleet.DefaultOrchestratorDir()
 	}
-	return fleet.Home{Dir: dir, Claude: cfg.Claude, OrchestratorDir: orchDir}, nil
+	return fleet.Home{Dir: dir, Claude: cfg.Claude, OrchestratorDir: orchDir, User: cfg.User}, nil
 }
 
 // themes lists the themes, marking the one in use, or prints the named one
@@ -256,13 +257,13 @@ func themes(cfg config.Config, rest []string) error {
 	return nil
 }
 
-func printSessions(home fleet.Home) error {
+func printSessions(home fleet.Home, user string) error {
 	rows, err := home.Rows()
 	if err != nil {
 		return err
 	}
 	for _, r := range rows {
-		fmt.Printf("%-8s %-22s %-28s %6s  %s\n", r.State, r.Name, fleet.ShortDir(r.Cwd), tui.Ago(r.Since), tui.Subject(r))
+		fmt.Printf("%-8s %-22s %-28s %6s  %s\n", r.State, r.Name, fleet.ShortDir(r.Cwd, user), tui.Ago(r.Since), tui.Subject(r))
 	}
 	return nil
 }

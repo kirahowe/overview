@@ -90,7 +90,7 @@ func (h Home) LatestDigest() (text string, at time.Time, ok bool) {
 // extract renders the threads as the plain-text material the model
 // summarizes. Everything in it comes straight from the transcripts and the
 // live listing.
-func extract(threads []Thread, rows []Row, since, now time.Time) string {
+func extract(threads []Thread, rows []Row, since, now time.Time, user string) string {
 	byID := map[string]Row{}
 	for _, r := range rows {
 		byID[r.SessionID] = r
@@ -109,7 +109,7 @@ func extract(threads []Thread, rows []Row, since, now time.Time) string {
 				state += " (" + r.Reason + ")"
 			}
 		}
-		fmt.Fprintf(&b, "\n=== Session: %s\nProject: %s\nState: %s\n", name, ShortDir(th.Cwd), state)
+		fmt.Fprintf(&b, "\n=== Session: %s\nProject: %s\nState: %s\n", name, ShortDir(th.Cwd, user), state)
 		if th.Title != "" {
 			fmt.Fprintf(&b, "Title: %s\n", th.Title)
 		}
@@ -131,9 +131,12 @@ func extract(threads []Thread, rows []Row, since, now time.Time) string {
 }
 
 // ShortDir shortens a directory for display: relative to ~/code/projects when
-// under it, otherwise relative to the home directory.
-func ShortDir(dir string) string {
-	user, _ := os.UserHomeDir()
+// under it, otherwise relative to user, the home directory. With no user
+// it is dir as it is.
+func ShortDir(dir, user string) string {
+	if user == "" {
+		return dir
+	}
 	for _, base := range []string{filepath.Join(user, "code", "projects"), user} {
 		if rel, err := filepath.Rel(base, dir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 			if base == user {
@@ -169,7 +172,7 @@ func (h Home) Activity() (text string, since time.Time, quiet bool, err error) {
 	if err := writeTime(h.pendingFile(), now); err != nil {
 		return "", since, false, err
 	}
-	return extract(threads, rows, since, now), since, false, nil
+	return extract(threads, rows, since, now, h.User), since, false, nil
 }
 
 // Publish saves a digest written from the last Activity extract and moves the

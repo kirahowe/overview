@@ -51,23 +51,23 @@ func TestResolvePrecedence(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
-	c, err := Load(dir, Values{})
+	c, err := Load(dir, Values{}, "/u")
 	if err != nil || c.Theme != DefaultTheme || c.Dir != dir {
 		t.Fatalf("no file: %+v, %v", c, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("theme = revdiff\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if c, err = Load(dir, Values{}); err != nil || c.Theme != "revdiff" {
+	if c, err = Load(dir, Values{}, "/u"); err != nil || c.Theme != "revdiff" {
 		t.Fatalf("file: %+v, %v", c, err)
 	}
-	if c, err = Load(dir, Values{Theme: "one-light"}); err != nil || c.Theme != "one-light" {
+	if c, err = Load(dir, Values{Theme: "one-light"}, "/u"); err != nil || c.Theme != "one-light" {
 		t.Fatalf("flag: %+v, %v", c, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("them = revdiff\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(dir, Values{}); err == nil {
+	if _, err := Load(dir, Values{}, "/u"); err == nil {
 		t.Fatal("a misspelt key should fail")
 	}
 }

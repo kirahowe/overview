@@ -39,11 +39,15 @@ const (
 type (
 	tickMsg  time.Time
 	frameMsg time.Time
-	rowsMsg  struct {
+	// rowsMsg is a refresh: the sessions, where they run, the pinned
+	// projects, and the roots of their directories. On an error only err
+	// is set.
+	rowsMsg struct {
 		rows   []fleet.Row
 		ttys   map[int]string
 		hosts  map[int]host
 		pinned []string
+		roots  roots
 		err    error
 	}
 	digestMsg struct {
@@ -93,11 +97,14 @@ type model struct {
 	// every spinner frame. A pointer, because the model is passed by value.
 	cache *detailCache
 
-	projects *projects
-
 	deps deps
 	// cwd is where c starts a session when the list is empty.
 	cwd string
+	// user is the user's home directory, symlinks resolved.
+	user string
+	// rowRoots holds the project roots of the latest refresh's
+	// directories, and paneRoots those of the latest pane listing's.
+	rowRoots, paneRoots roots
 
 	// tmux, as stage.go describes. mux is nil outside tmux, and then
 	// nothing is staged. The view runs in pane self of session. exe starts
@@ -132,9 +139,10 @@ type model struct {
 // Run opens the view in the given theme and blocks until the user quits.
 // It runs in the pane Launch made for it in session, on the tmux server at
 // the socket path, and acts on no other server.
-func Run(home fleet.Home, llm string, theme Theme, socket, session string) error {
+func Run(home fleet.Home, llm string, theme Theme, socket, session, user string) error {
 	useTheme(theme)
 	m := newModel(home, llm)
+	m.user = resolvePath(user)
 	m.cwd, _ = os.Getwd()
 	exe, err := os.Executable()
 	if err != nil {
@@ -152,18 +160,17 @@ func Run(home fleet.Home, llm string, theme Theme, socket, session string) error
 		return err
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
-	panes, err := srv.Panes()
+	panes, rs, err := readPanes(srv, m.deps.roots)
 	if err != nil {
 		return err
 	}
-	m = m.setPanes(panes).loadDigests()
+	m = m.setPanes(panes, rs).loadDigests()
 	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus()).Run()
 	return err
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, projects: newProjects(),
-		deps: systemDeps()}
+	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -175,10 +182,16 @@ type deps struct {
 	psTable  func() ([]byte, error)
 	readDirs func(dir string) ([]string, error)
 	writeTTY func(tty string, b []byte) error
+	exists   func(path string) bool   // whether anything is at path
+	resolve  func(path string) string // path with its symlinks resolved
 }
 
+// roots finds the project roots of dirs.
+func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve, dirs...) }
+
 func systemDeps() deps {
-	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY}
+	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
+		exists: exists, resolve: resolvePath}
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
@@ -206,7 +219,7 @@ func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.refresh, tick(), nextFrame()}
 	if m.mux != nil {
 		// The first listing also starts a holder when there is none.
-		cmds = append(cmds, listPanes(m.mux, m.spawns), panesEveryTick())
+		cmds = append(cmds, listPanes(m.mux, m.deps.roots, m.spawns), panesEveryTick())
 	}
 	return tea.Batch(cmds...)
 }
@@ -221,9 +234,23 @@ func nextFrame() tea.Cmd {
 
 func (m model) refresh() tea.Msg {
 	rows, err := m.home.Rows()
+	if err != nil {
+		return rowsMsg{err: err}
+	}
 	out, _ := m.deps.psTable()
 	ttys, hosts := places(parseProcs(string(out)), rows)
-	return rowsMsg{rows, ttys, hosts, m.home.Projects(), err}
+	return m.rowsMsg(rows, ttys, hosts, m.home.Projects())
+}
+
+// rowsMsg is a refresh of rows, with the roots of the directories it
+// names: the sessions', the pinned projects' and the one overview was
+// started in. It reads the disk, so it runs in a Cmd.
+func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host, pinned []string) rowsMsg {
+	dirs := append(slices.Clone(pinned), m.cwd)
+	for _, r := range rows {
+		dirs = append(dirs, r.Cwd)
+	}
+	return rowsMsg{rows, ttys, hosts, pinned, m.deps.roots(dirs...), nil}
 }
 
 func (m model) runDigest() tea.Msg {
@@ -238,7 +265,7 @@ func (m model) say(note string) model {
 
 // sections is the list as shown, with the filter applied.
 func (m model) sections() []section {
-	return buildList(m.rows, m.terminals(), m.pinned, m.filter, m.projects.name, m.hostOf)
+	return buildList(m.rows, m.terminals(), m.pinned, m.filter, m.name, m.short, m.hostOf)
 }
 
 // terminals are the windows of the view's session that run no session.
@@ -249,7 +276,7 @@ func (m model) terminals() []terminal {
 			claude[tty] = true
 		}
 	}
-	return terminals(m.panes, m.session, m.self, m.opened.ID, claude, m.projects.root)
+	return terminals(m.panes, m.session, m.self, m.opened.ID, claude, m.root)
 }
 
 // hostOf names the app a session runs inside, for one that has no terminal.
@@ -442,10 +469,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.refresh, tick())
 	case rowsMsg:
-		m.rows, m.ttys, m.hosts, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.err, true
-		if msg.err == nil {
-			m.pinned = msg.pinned
+		// A refresh that failed keeps what the last one found.
+		if m.rowsErr = msg.err; msg.err != nil {
+			return m, nil
 		}
+		m.rows, m.ttys, m.hosts, m.pinned, m.rowRoots, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.pinned, msg.roots, true
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.adopt()
 	case digestMsg:
@@ -470,7 +498,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !slices.Contains(m.pinned, msg.root) {
 			m.pinned = append(slices.Clone(m.pinned), msg.root)
 		}
-		return m.toProject(msg.root).say("pinned " + m.projects.name(msg.root)), nil
+		return m.toProject(msg.root).say("pinned " + m.name(msg.root)), nil
 	case doneMsg:
 		if msg.err != nil {
 			m = m.say(msg.err.Error())
@@ -530,7 +558,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.self, m.holder(), c.term, m.panes, m.spawns)
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.spawns)
 			}
 		}
 		for _, r := range m.rows {
@@ -621,7 +649,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		case ok && e.kind == terminalEntry:
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
-			home, root, name := m.home, e.project, m.projects.name(e.project)
+			home, root, name := m.home, e.project, m.name(e.project)
 			return m, func() tea.Msg { return doneMsg{"unpinned " + name, home.UnpinProject(root)} }
 		case !isSession:
 			return m.say("nothing to stop"), nil
@@ -654,15 +682,15 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.pick.sel = max(0, min(m.pick.sel+a.n, n-1))
 	case pickTab:
 		if ms := m.pickMatches(); m.pick.sel < len(ms) {
-			return m.setPickQuery(pickComplete(m.pick.query, m.projects.home, ms[m.pick.sel]))
+			return m.setPickQuery(pickComplete(m.pick.query, m.user, ms[m.pick.sel]))
 		}
 	case pickEnter:
-		path, typed := pickTarget(m.pick.query, m.projects.home, m.pickMatches(), m.pick.sel)
+		path, typed := pickTarget(m.pick.query, m.user, m.pickMatches(), m.pick.sel)
 		if path == "" {
 			return m.say("nothing to add"), nil
 		}
 		m.pick = picker{}
-		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.projects.resolve, m.projects.exists)
+		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
 	case pickCancel:
 		m.pick = picker{}
 	case copyID:
@@ -685,7 +713,7 @@ func (m model) knownRoots() []string {
 	var roots []string
 	for _, r := range m.rows {
 		if r.Name != fleet.OrchestratorName {
-			roots = append(roots, m.projects.root(r.Cwd))
+			roots = append(roots, m.root(r.Cwd))
 		}
 	}
 	for _, t := range m.terminals() {
@@ -700,14 +728,14 @@ func (m model) pickMatches() []string {
 	for _, r := range m.knownRoots() {
 		shown[r] = true
 	}
-	return pickMatches(m.pick.query, m.projects.home, m.pick.paths, shown, fleet.ShortDir)
+	return pickMatches(m.pick.query, m.user, m.pick.paths, shown, m.short)
 }
 
 // setPickQuery changes the picker's query, and reads the directories it
 // needs when they are not the ones read already.
 func (m model) setPickQuery(q string) (model, tea.Cmd) {
 	m.pick.query, m.pick.sel = q, 0
-	if src := pickSource(q, m.projects.home); src != m.pick.from {
+	if src := pickSource(q, m.user); src != m.pick.from {
 		m.pick.from, m.pick.paths, m.pick.read = src, nil, false
 		return m.readPicks()
 	}
@@ -720,7 +748,7 @@ func (m model) setPickQuery(q string) (model, tea.Cmd) {
 func (m model) readPicks() (model, tea.Cmd) {
 	dirs := []string{m.pick.from}
 	if m.pick.from == "" {
-		dirs = pickParents(append(m.knownRoots(), m.projects.root(m.cwd)))
+		dirs = pickParents(append(m.knownRoots(), m.root(m.cwd)))
 	}
 	return m, readPathsCmd(m.deps.readDirs, m.pick.from, dirs)
 }
@@ -728,7 +756,7 @@ func (m model) readPicks() (model, tea.Cmd) {
 // toProject puts the cursor on a project's first entry, clearing a search
 // that hides it.
 func (m model) toProject(root string) model {
-	name := m.projects.name(root)
+	name := m.name(root)
 	find := func() (string, bool) {
 		for _, s := range m.sections() {
 			if !s.NeedsYou && !s.Away && s.Title == name && len(s.Entries) > 0 {
@@ -754,13 +782,13 @@ func (m model) toProject(root string) model {
 func (m model) rootOf(e entry, ok bool) string {
 	switch {
 	case !ok:
-		return m.projects.root(m.cwd)
+		return m.root(m.cwd)
 	case e.kind == terminalEntry:
 		return e.term.Project
 	case e.kind == projectEntry:
 		return e.project
 	}
-	return m.projects.root(e.row.Cwd)
+	return m.root(e.row.Cwd)
 }
 
 // copyText puts text on the clipboard.
@@ -784,7 +812,7 @@ func copied(text string, err error) tea.Msg {
 func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
 	case projectEntry:
-		return m.say("Nothing runs in " + m.projects.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
+		return m.say("Nothing runs in " + m.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
 	case terminalEntry:
 		if m.mux == nil {
 			return m.say("terminals open only inside overview's tmux"), nil
@@ -830,7 +858,7 @@ func (m model) start(dir string) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
-	where := m.projects.name(dir)
+	where := m.name(dir)
 	return m.say("starting a session in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnSession, name: "a session in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewCmd().Args})
 }
@@ -844,7 +872,7 @@ func (m model) openTerminal(dir string) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("terminals open only inside overview's tmux"), nil
 	}
-	where := m.projects.name(dir)
+	where := m.name(dir)
 	return m.say("opening a terminal in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnTerminal, name: "a terminal in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv()})
 }

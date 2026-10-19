@@ -81,9 +81,11 @@ func sessionEntries(rows []fleet.Row) []entry {
 // then the session id. A project's terminals follow its sessions, by window
 // number. A pinned project with no session or terminal at all, whatever the
 // query, gets a placeholder of its own, which the query matches on the
-// project's name. The result depends only on the sets it is given, never on
-// their order.
-func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string, project func(cwd string) string, host func(fleet.Row) (string, bool)) []section {
+// project's name. project names the project a directory belongs to, and
+// short is how a terminal's directory is shown, which the query also
+// matches. The result depends only on the sets it is given, never on their
+// order.
+func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string, project, short func(dir string) string, host func(fleet.Row) (string, bool)) []section {
 	words := strings.Fields(strings.ToLower(query))
 	var needs, away []fleet.Row
 	byProject := map[string][]fleet.Row{}
@@ -112,7 +114,7 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string
 	for _, t := range terms {
 		p := project(t.Project)
 		used[p] = true
-		if matchFields(words, p, t.Title, fleet.ShortDir(t.Path)) {
+		if matchFields(words, p, t.Title, short(t.Path)) {
 			termsOf[p] = append(termsOf[p], t)
 		}
 	}
@@ -330,27 +332,26 @@ func termTitle(panes []tmux.Pane) string {
 	return "shell"
 }
 
-// projects maps a working directory to its project's display name. The repo
-// root lookup sits behind exists and resolve so tests need no filesystem, and
-// its answer is cached per directory.
-type projects struct {
-	exists  func(path string) bool
-	resolve func(path string) string // symlinks resolved, so /tmp and /private/tmp agree
-	roots   map[string]string
-	home    string // the resolved home directory, "" if unknown
+// roots maps directories to the roots of their projects, symlinks
+// resolved so /tmp and /private/tmp agree. The Cmds that read the disk
+// fill one for every directory their message carries, and the model only
+// looks directories up in it.
+type roots map[string]string
+
+// findRoots finds the root of each of dirs: repoRoot of the directory with
+// its symlinks resolved. exists and resolve are the only disk access.
+func findRoots(exists func(string) bool, resolve func(string) string, dirs ...string) roots {
+	out := roots{}
+	for _, d := range dirs {
+		if _, ok := out[d]; d != "" && !ok {
+			out[d] = repoRoot(resolve(d), exists)
+		}
+	}
+	return out
 }
 
-func newProjects() *projects {
-	p := &projects{
-		exists:  func(p string) bool { _, err := os.Lstat(p); return err == nil },
-		resolve: resolvePath,
-		roots:   map[string]string{},
-	}
-	if user, err := os.UserHomeDir(); err == nil {
-		p.home = p.resolve(user)
-	}
-	return p
-}
+// exists says whether there is anything at p.
+func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 // resolvePath resolves symlinks in p, or only cleans it if that fails (the
 // directory may be gone by now).
@@ -361,26 +362,33 @@ func resolvePath(p string) string {
 	return filepath.Clean(p)
 }
 
-// root is the directory of the project cwd belongs to, "" for no cwd.
-func (p *projects) root(cwd string) string {
-	root, ok := p.roots[cwd]
-	if !ok {
-		if cwd != "" {
-			root = repoRoot(p.resolve(cwd), p.exists)
-		}
-		p.roots[cwd] = root
+// root is the root of the project dir belongs to, "" for no dir: as the
+// latest refresh or pane listing found it, or dir itself, cleaned, when
+// neither carried it.
+func (m model) root(dir string) string {
+	if dir == "" {
+		return ""
 	}
-	return root
+	if r, ok := m.rowRoots[dir]; ok {
+		return r
+	}
+	if r, ok := m.paneRoots[dir]; ok {
+		return r
+	}
+	return filepath.Clean(dir)
 }
 
-// name is the display name of the project cwd belongs to.
-func (p *projects) name(cwd string) string {
-	root := p.root(cwd)
-	if p.home != "" && root == p.home {
+// name is the display name of the project dir belongs to.
+func (m model) name(dir string) string {
+	root := m.root(dir)
+	if m.user != "" && root == m.user {
 		return "~"
 	}
-	return fleet.ShortDir(root)
+	return m.short(root)
 }
+
+// short is a directory as the view shows it.
+func (m model) short(dir string) string { return fleet.ShortDir(dir, m.user) }
 
 // repoRoot returns the nearest ancestor of cwd (cwd included) that holds a
 // .jj or .git entry, file or directory. Without one it returns cwd. Either
@@ -422,5 +430,5 @@ func counts(secs []section) (need, working, idle int) {
 }
 
 func (m model) counts() (need, working, idle int) {
-	return counts(buildList(m.rows, nil, nil, "", m.projects.name, m.hostOf))
+	return counts(buildList(m.rows, nil, nil, "", m.name, m.short, m.hostOf))
 }

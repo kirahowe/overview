@@ -25,7 +25,6 @@ func row(id, name, title string, pid int) fleet.Row {
 func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
-	m.projects.exists = func(string) bool { return false }
 	m.deps = fakeDeps(nil)
 	ttys := map[int]string{}
 	for _, r := range rows {

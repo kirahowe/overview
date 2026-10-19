@@ -20,6 +20,9 @@ type Home struct {
 	// OrchestratorDir is the directory the orchestrator session runs in,
 	// DefaultOrchestratorDir unless a flag says otherwise.
 	OrchestratorDir string
+	// User is the user's home directory, which short directory names in
+	// a digest are relative to.
+	User string
 }
 
 // ResolveHome finds the config directory that spec names, as --home or the

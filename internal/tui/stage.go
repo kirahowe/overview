@@ -95,6 +95,7 @@ type (
 	// when it was asked for: see model.spawns.
 	panesMsg struct {
 		panes []tmux.Pane
+		roots roots // of the panes' directories
 		gen   int
 		err   error
 	}
@@ -102,6 +103,7 @@ type (
 	stagedMsg struct {
 		to    string
 		panes []tmux.Pane
+		roots roots
 		gen   int
 		err   error
 	}
@@ -122,11 +124,21 @@ func panesEveryTick() tea.Cmd {
 	return tea.Tick(panesEvery, func(t time.Time) tea.Msg { return panesTick(t) })
 }
 
-func listPanes(mux multiplexer, gen int) tea.Cmd {
+func listPanes(mux multiplexer, find func(...string) roots, gen int) tea.Cmd {
 	return func() tea.Msg {
-		panes, err := mux.Panes()
-		return panesMsg{panes, gen, err}
+		panes, rs, err := readPanes(mux, find)
+		return panesMsg{panes, rs, gen, err}
 	}
+}
+
+// readPanes lists tmux's panes and finds the roots of their directories.
+func readPanes(mux multiplexer, find func(...string) roots) ([]tmux.Pane, roots, error) {
+	panes, err := mux.Panes()
+	dirs := make([]string, len(panes))
+	for i, p := range panes {
+		dirs[i] = p.Path
+	}
+	return panes, find(dirs...), err
 }
 
 // shift is a step that puts the list beside the pane it wants: the list
@@ -172,7 +184,7 @@ func plan(self, want string, panes []tmux.Pane) (shift, bool) {
 // beside it, so a window left with two or more panes gets its old layout
 // back with the list taken out and its space shared out. That fix-up is
 // cosmetic, so it fails quietly.
-func stageCmd(mux multiplexer, list string, mv shift, gen int) tea.Cmd {
+func stageCmd(mux multiplexer, find func(...string) roots, list string, mv shift, gen int) tea.Cmd {
 	return func() tea.Msg {
 		layout, lerr := "", errors.New("no fix-up")
 		if mv.fix {
@@ -184,11 +196,11 @@ func stageCmd(mux multiplexer, list string, mv shift, gen int) tea.Cmd {
 				mux.SetLayout(mv.from, fixed) //nolint:errcheck
 			}
 		}
-		panes, perr := mux.Panes()
+		panes, rs, perr := readPanes(mux, find)
 		if err == nil {
 			err = perr
 		}
-		return stagedMsg{mv.to, panes, gen, err}
+		return stagedMsg{mv.to, panes, rs, gen, err}
 	}
 }
 
@@ -317,9 +329,9 @@ func (m model) besideTerminal(want string) bool {
 	return ok && e.kind == terminalEntry && want != m.opened.ID
 }
 
-// setPanes takes a fresh listing of tmux's panes.
-func (m model) setPanes(panes []tmux.Pane) model {
-	m.panes = panes
+// setPanes takes a fresh listing of tmux's panes and their roots.
+func (m model) setPanes(panes []tmux.Pane, rs roots) model {
+	m.panes, m.paneRoots = panes, rs
 	return m
 }
 
@@ -334,7 +346,7 @@ func (m model) restage() (model, tea.Cmd) {
 	}
 	if mv, ok := plan(m.self, want, m.panes); ok {
 		m.staging = true
-		return m, stageCmd(m.mux, m.self, mv, m.spawns)
+		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.spawns)
 	}
 	var cmds []tea.Cmd
 	if m.entering {
@@ -366,7 +378,7 @@ func (m model) restage() (model, tea.Cmd) {
 func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case panesTick:
-		return m, tea.Batch(listPanes(m.mux, m.spawns), panesEveryTick())
+		return m, tea.Batch(listPanes(m.mux, m.deps.roots, m.spawns), panesEveryTick())
 	case panesMsg:
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
@@ -375,7 +387,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil // it may show a spawned pane without its options
 		}
 		// A move that failed is tried again once tmux has been reread.
-		m = m.setPanes(msg.panes)
+		m = m.setPanes(msg.panes, msg.roots)
 		m.failed = ""
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
@@ -388,7 +400,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m = m.say("could not show the session: " + msg.err.Error())
 		}
 		if msg.panes != nil && msg.gen >= m.spawns {
-			m = m.setPanes(msg.panes)
+			m = m.setPanes(msg.panes, msg.roots)
 		}
 		// The holder may have been resized, so draw it afresh.
 		m.holderShown = ""
@@ -429,7 +441,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		m = m.say(msg.note)
 		if msg.gen >= m.spawns {
-			m = m.setPanes(msg.panes)
+			m = m.setPanes(msg.panes, msg.roots)
 		}
 	}
 	return m, nil
@@ -466,6 +478,7 @@ func (m model) shown(key string) bool {
 type closedMsg struct {
 	note  string
 	panes []tmux.Pane
+	roots roots
 	gen   int
 	err   error
 }
@@ -473,7 +486,7 @@ type closedMsg struct {
 // closeCmd closes a terminal's window, and everything that runs in it.
 // When the list is in that window it first goes beside the holder, since
 // closing the window with the list in it would end the view.
-func closeCmd(mux multiplexer, self, holder string, t terminal, panes []tmux.Pane, gen int) tea.Cmd {
+func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t terminal, panes []tmux.Pane, gen int) tea.Cmd {
 	inside := false
 	for _, p := range panes {
 		inside = inside || (p.ID == self && p.Window == t.Window)
@@ -494,8 +507,8 @@ func closeCmd(mux multiplexer, self, holder string, t terminal, panes []tmux.Pan
 		if err := mux.KillWindow(t.Window); err != nil {
 			return fail(err)
 		}
-		panes, err := mux.Panes()
-		return closedMsg{"closed " + t.Title, panes, gen, err}
+		panes, rs, err := readPanes(mux, find)
+		return closedMsg{"closed " + t.Title, panes, rs, gen, err}
 	}
 }
 
@@ -513,7 +526,7 @@ func (m model) holderText(w, h int) string {
 	case !ok:
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
 	case e.kind == projectEntry:
-		lines = wrap(dim.Render("No sessions in "+m.projects.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
+		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
 	default:

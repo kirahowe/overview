@@ -101,14 +101,14 @@ func (m model) pickerView() []string {
 	case !m.pick.read:
 		lines = append(lines, dim.Render("reading…"))
 	case len(matches) == 0 && isPathQuery(m.pick.query):
-		lines = append(lines, wrap(dim.Render("Nothing here matches. enter adds "+fleet.ShortDir(expandPath(m.pick.query, m.projects.home))+" if it is a directory."), w)...)
+		lines = append(lines, wrap(dim.Render("Nothing here matches. enter adds "+m.short(expandPath(m.pick.query, m.user))+" if it is a directory."), w)...)
 	case len(matches) == 0:
 		lines = append(lines, wrap(dim.Render("Nothing matches. A path starting with / or ~ looks anywhere."), w)...)
 	default:
 		room := max(h-len(lines), 1)
 		start := window(0, m.pick.sel, m.pick.sel+1, len(matches), room)
 		for i := start; i < min(start+room, len(matches)); i++ {
-			text := "  " + fleet.ShortDir(matches[i])
+			text := "  " + m.short(matches[i])
 			if i == m.pick.sel {
 				lines = append(lines, m.cursorBar().Render(fit(text, w)))
 			} else {
@@ -163,7 +163,7 @@ func (m model) listLines(secs []section, sel string, w int) (lines, owners []str
 			owners = append(owners, owner)
 		}
 	}
-	if !m.loaded {
+	if !m.loaded && m.rowsErr == nil {
 		add("", dim.Render("reading sessions…"))
 		return lines, owners
 	}
@@ -241,7 +241,7 @@ func (m model) listView(secs []section, sel string) (lines, owners []string) {
 func (m model) entryLines(e entry, w int, selected, pinned bool) []string {
 	switch e.kind {
 	case terminalEntry:
-		return m.plainLines("$", e.term.Title, "terminal", fleet.ShortDir(e.term.Path), w, selected)
+		return m.plainLines("$", e.term.Title, "terminal", m.short(e.term.Path), w, selected)
 	case projectEntry:
 		return m.plainLines("+", "no sessions", "", "c claude · t terminal · x unpin", w, selected)
 	}
@@ -292,7 +292,7 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 	// instead. In the pinned section the project is what is missing. A
 	// session inside another app is placed by that app, wherever it is, and
 	// is dimmed, since it is not one of the user's own.
-	place, placed := m.projects.name(r.Cwd), ""
+	place, placed := m.name(r.Cwd), ""
 	app, away := m.hostOf(r)
 	switch {
 	case away:
@@ -382,7 +382,7 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 	add(state + "  " + dim.Render(kind))
 	out = append(out, "")
 
-	meta := []string{fleet.ShortDir(r.Cwd)}
+	meta := []string{m.short(r.Cwd)}
 	meta = append(meta, "started "+Ago(time.UnixMilli(r.StartedAt))+" ago")
 	if !r.Hooked {
 		meta = append(meta, "no hook")

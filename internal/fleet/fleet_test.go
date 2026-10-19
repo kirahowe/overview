@@ -128,7 +128,7 @@ func TestReadThreadKeepsOnlyTurnsInTheWindow(t *testing.T) {
 		t.Fatalf("unexpected recent turns: %+v", turns)
 	}
 
-	out := extract([]Thread{th}, []Row{{Live: Live{SessionID: "sess1234", Name: "app-1a"}, State: Blocked, Reason: "needs permission"}}, since, since.Add(2*time.Hour))
+	out := extract([]Thread{th}, []Row{{Live: Live{SessionID: "sess1234", Name: "app-1a"}, State: Blocked, Reason: "needs permission"}}, since, since.Add(2*time.Hour), "/u")
 	for _, want := range []string{"Session: app-1a", "State: blocked (needs permission)", "Prompt: add a test", "Last reply: Test added and passing."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("extract lacks %q:\n%s", want, out)

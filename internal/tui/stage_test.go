@@ -261,6 +261,8 @@ func fakeDeps(f *fakeMux) deps {
 	d.copyText = func(string) error { return errors.New("no clipboard in tests") }
 	d.reveal = func(string) error { return errors.New("no apps in tests") }
 	d.readDirs = func(dir string) ([]string, error) { return nil, errors.New(dir + ": no directories in tests") }
+	d.exists = func(string) bool { return false }
+	d.resolve = path.Clean
 	if f != nil {
 		d.writeTTY = f.draw
 	} else {
@@ -273,7 +275,6 @@ func fakeDeps(f *fakeMux) deps {
 // claude runs in a window of its own, on the row's tty.
 func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
-	m.projects.exists = func(string) bool { return false }
 	m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 	m.deps = fakeDeps(f)
 	ttys := map[int]string{}
@@ -283,7 +284,7 @@ func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 			f.add("ov", ttys[r.PID])
 		}
 	}
-	m = m.setPanes(f.panes)
+	m = m.setPanes(f.panes, nil)
 	m, cmd := step(m, tea.WindowSizeMsg{Width: 50, Height: 30})
 	m = settle(t, m, cmd)
 	m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
@@ -451,8 +452,8 @@ func TestNewSessionStartsAtTheProjectRootAndIsAdopted(t *testing.T) {
 	r := row("s1", "red", "auth", 11)
 	r.Cwd = "/code/app/internal/x"
 	m := stagedModel(t, f, r)
-	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" }
-	m.projects.roots = map[string]string{}
+	m.deps.exists = func(p string) bool { return p == "/code/app/.jj" }
+	m = refreshed(t, m)
 	m = pressSettled(t, m, "c")
 	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/app" || f.spawned[0].session != "ov" {
 		t.Fatalf("spawned %+v", f.spawned)
@@ -466,7 +467,7 @@ func TestNewSessionStartsAtTheProjectRootAndIsAdopted(t *testing.T) {
 	}
 	// Once claude lists it, the cursor moves onto it.
 	n := row("s9", "new", "", 19)
-	m, cmd := step(m, rowsMsg{rows: []fleet.Row{r, n}, ttys: map[int]string{11: "ttys011", 19: opened.TTY}})
+	m, cmd := step(m, m.rowsMsg([]fleet.Row{r, n}, map[int]string{11: "ttys011", 19: opened.TTY}, nil, nil))
 	m = settle(t, m, cmd)
 	if m.sel != "s9" || m.opened.ID != "" || !f.staged(opened.ID) {
 		t.Fatalf("sel %s, opened %v, list in %s", m.sel, m.opened, f.stage())
@@ -677,10 +678,9 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 			rows = append(rows, r)
 		}
 		m := newModel(caseHome(t, root), "")
-		m.projects.exists = func(string) bool { return false }
 		m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 		m.deps = fakeDeps(f)
-		m = m.setPanes(f.panes)
+		m = m.setPanes(f.panes, nil)
 		m, cmd := step(m, tea.WindowSizeMsg{Width: 50, Height: 30})
 		m = settle(t, m, cmd)
 		m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
@@ -784,7 +784,6 @@ func TestPropHolderTextFillsThePane(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, ttys := genStateRows(t)
 		m := newModel(caseHome(t, root), "")
-		m.projects.exists = func(string) bool { return false }
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		w := rapid.IntRange(3, 200).Draw(t, "w")
 		h := rapid.IntRange(1, 60).Draw(t, "h")
@@ -819,9 +818,16 @@ func repoModel(t *testing.T, f *fakeMux) model {
 	r := row("s1", "red", "auth", 11)
 	r.Cwd = "/code/app/internal/x"
 	m := stagedModel(t, f, r)
-	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" }
-	m.projects.roots = map[string]string{}
-	return m
+	m.deps.exists = func(p string) bool { return p == "/code/app/.jj" }
+	return refreshed(t, m)
+}
+
+// refreshed is m after a refresh that finds what it has, so its roots are
+// found again with the model's deps.
+func refreshed(t tester, m model) model {
+	t.Helper()
+	m, cmd := step(m, m.rowsMsg(m.rows, m.ttys, m.hosts, m.pinned))
+	return settle(t, m, cmd)
 }
 
 func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
@@ -1024,5 +1030,24 @@ func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
 	}
 	if m.shown("project:/code/empty") {
 		t.Fatal("the placeholder stayed beside the terminal")
+	}
+}
+
+// One failed refresh keeps what the last one found: the cursor stays and
+// the list does not move, then or when the next refresh brings it all back.
+func TestAFailedRefreshKeepsTheList(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m = pressSettled(t, m, "t", "k")
+	sel, cur, rows, ttys := m.sel, f.stage(), m.rows, m.ttys
+	m, cmd := step(m, rowsMsg{err: errors.New("claude agents: timeout")})
+	m = settle(t, m, cmd)
+	if m.sel != sel || f.stage() != cur || len(m.rows) != 2 || m.rowsErr == nil {
+		t.Fatalf("after a failed refresh: sel %s, list in %s, rows %d, err %v", m.sel, f.stage(), len(m.rows), m.rowsErr)
+	}
+	m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
+	m = settle(t, m, cmd)
+	if m.sel != sel || f.stage() != cur || m.rowsErr != nil {
+		t.Fatalf("after the next refresh: sel %s, list in %s", m.sel, f.stage())
 	}
 }

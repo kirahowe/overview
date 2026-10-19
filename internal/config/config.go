@@ -36,7 +36,8 @@ type Values struct {
 // Config is the settings a process runs with. Home stays "" when nothing
 // names one, since overview never guesses it.
 type Config struct {
-	Dir string // overview's own directory: the config file, themes, tmux.conf
+	Dir  string // overview's own directory: the config file, themes, tmux.conf
+	User string // the user's home directory
 	Values
 }
 
@@ -114,14 +115,11 @@ func Resolve(dir string, flags, file Values) (Config, error) {
 // DefaultDir is overview's directory for the user whose home is userHome.
 func DefaultDir(userHome string) string { return filepath.Join(userHome, ".config", "overview") }
 
-// Load reads the config file in dir, or in the default directory when dir
-// is "", and resolves it against the flags. A missing file says nothing.
-func Load(dir string, flags Values) (Config, error) {
+// Load reads the config file in dir, or in the default directory of user,
+// the user's home directory, when dir is "", and resolves it against the
+// flags. A missing file says nothing.
+func Load(dir string, flags Values, user string) (Config, error) {
 	if dir == "" {
-		user, err := os.UserHomeDir()
-		if err != nil {
-			return Config{}, err
-		}
 		dir = DefaultDir(user)
 	}
 	// Absolute, so it means the same to the processes this one starts.
@@ -140,5 +138,7 @@ func Load(dir string, flags Values) (Config, error) {
 			return Config{}, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	return Resolve(dir, flags, file)
+	c, err := Resolve(dir, flags, file)
+	c.User = user
+	return c, err
 }
