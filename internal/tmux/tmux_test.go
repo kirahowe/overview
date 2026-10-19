@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 )
@@ -232,5 +234,53 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 	at(deep)
 	if n := len(where()); n != 5 {
 		t.Fatalf("%d panes, want 5", n)
+	}
+}
+
+func TestSocketPath(t *testing.T) {
+	for _, c := range []struct {
+		env, path string
+		ok        bool
+	}{
+		{"/private/tmp/tmux-501/overview,123,0", "/private/tmp/tmux-501/overview", true},
+		{"/tmp/odd,name/sock,9,12", "/tmp/odd,name/sock", true},
+		{"", "", false},
+		{"/tmp/sock", "", false},
+		{",1,2", "", false},
+	} {
+		path, ok := SocketPath(c.env)
+		if path != c.path || ok != c.ok {
+			t.Errorf("SocketPath(%q) = %q, %v; want %q, %v", c.env, path, ok, c.path, c.ok)
+		}
+	}
+}
+
+// A pane's $TMUX leads back to the server the pane runs in. The view relies
+// on this to never act on another server, such as the real one during a
+// trial run on a private socket.
+func TestHereIsTheServerThePaneRunsIn(t *testing.T) {
+	s := testServer(t)
+	out := filepath.Join(t.TempDir(), "tmux")
+	p, err := s.Spawn("ov", "", nil, "sh", "-c", `printf %s "$TMUX" > "$1"; sleep 300`, "sh", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env []byte
+	for i := 0; i < 100 && len(env) == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+		env, _ = os.ReadFile(out)
+	}
+	t.Setenv("TMUX", string(env))
+	here, ok := Here()
+	if !ok {
+		t.Fatalf("no server in $TMUX %q", env)
+	}
+	panes, err := here.Panes()
+	if err != nil || len(panes) != 1 || panes[0].ID != p.ID {
+		t.Fatalf("Here sees %v, %v; want only %s", panes, err, p.ID)
+	}
+	t.Setenv("TMUX", "")
+	if _, ok := Here(); ok {
+		t.Fatal("Here found a server outside tmux")
 	}
 }

@@ -137,7 +137,10 @@ func Run(home fleet.Home, llm string, theme Theme) error {
 	if err != nil {
 		return err
 	}
-	srv := tmux.New("")
+	srv, ok := tmux.Here()
+	if !ok {
+		return errors.New("the view runs inside overview's tmux: start it with plain `overview`")
+	}
 	if err := srv.MarkList(self); err != nil {
 		return err
 	}

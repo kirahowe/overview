@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -60,7 +61,36 @@ func On(socket, conf string) Server {
 	if conf != "" {
 		base = append(base, "-f", conf)
 	}
-	return Server{socket: socket, Run: func(args ...string) (string, error) {
+	return Server{socket: socket, Run: runner(base)}
+}
+
+// Here returns the server the calling process runs inside, as $TMUX names
+// it, so a process started in one server never acts on another, whatever
+// OVERVIEW_TMUX_SOCKET says. ok is false outside tmux.
+func Here() (s Server, ok bool) {
+	path, ok := SocketPath(os.Getenv("TMUX"))
+	if !ok {
+		return Server{}, false
+	}
+	return Server{socket: filepath.Base(path), Run: runner([]string{"-S", path})}, true
+}
+
+// SocketPath is the socket path in a $TMUX value, which tmux writes as
+// "path,pid,session". ok is false when there is none.
+func SocketPath(env string) (string, bool) {
+	i := strings.LastIndexByte(env, ',')
+	if i < 0 {
+		return "", false
+	}
+	j := strings.LastIndexByte(env[:i], ',')
+	if j <= 0 {
+		return "", false
+	}
+	return env[:j], true
+}
+
+func runner(base []string) func(args ...string) (string, error) {
+	return func(args ...string) (string, error) {
 		cmd := exec.Command("tmux", append(base, args...)...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -69,7 +99,7 @@ func On(socket, conf string) Server {
 			return "", fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 		}
 		return string(out), nil
-	}}
+	}
 }
 
 // ParsePanes reads list-panes output in paneFormat. Malformed lines are
