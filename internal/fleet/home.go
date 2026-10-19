@@ -52,8 +52,9 @@ func (h Home) Name() string {
 	return strings.TrimPrefix(filepath.Base(string(h)), ".claude-")
 }
 
-func (h Home) dataDir() string     { return filepath.Join(string(h), "overview") }
-func (h Home) sessionsDir() string { return filepath.Join(h.dataDir(), "sessions") }
-func (h Home) digestsDir() string  { return filepath.Join(h.dataDir(), "digests") }
-func (h Home) pendingFile() string { return filepath.Join(h.dataDir(), "digest-pending") }
-func (h Home) cursorFile() string  { return filepath.Join(h.dataDir(), "digest-cursor") }
+func (h Home) dataDir() string      { return filepath.Join(string(h), "overview") }
+func (h Home) sessionsDir() string  { return filepath.Join(h.dataDir(), "sessions") }
+func (h Home) digestsDir() string   { return filepath.Join(h.dataDir(), "digests") }
+func (h Home) pendingFile() string  { return filepath.Join(h.dataDir(), "digest-pending") }
+func (h Home) cursorFile() string   { return filepath.Join(h.dataDir(), "digest-cursor") }
+func (h Home) projectsFile() string { return filepath.Join(h.dataDir(), "projects") }
