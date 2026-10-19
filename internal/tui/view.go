@@ -76,6 +76,9 @@ func (m model) View() string {
 }
 
 func (m model) sessionsView() []string {
+	if m.pick.open {
+		return m.pickerView()
+	}
 	secs := m.sections()
 	es := flatten(secs)
 	e, _, _ := m.selected(es)
@@ -85,6 +88,38 @@ func (m model) sessionsView() []string {
 	}
 	lines, _ := m.listView(secs, e.key())
 	return box("sessions", info, lines, m.w, m.boxHeight(), !m.blurred)
+}
+
+// pickerView is the add-project picker in the list's place: the query,
+// then the matching directories, scrolled to keep the selected one shown.
+func (m model) pickerView() []string {
+	w, h := m.w-4, m.innerHeight()
+	matches := m.pickMatches()
+	lines := []string{heading.Render("› ") + fg(pal.Text).Render(m.pick.query) + dim.Render("▏"), ""}
+	switch {
+	case !m.pick.read:
+		lines = append(lines, dim.Render("reading…"))
+	case len(matches) == 0 && isPathQuery(m.pick.query):
+		lines = append(lines, wrap(dim.Render("Nothing here matches. enter adds "+fleet.ShortDir(expandPath(m.pick.query, m.projects.home))+" if it is a directory."), w)...)
+	case len(matches) == 0:
+		lines = append(lines, wrap(dim.Render("Nothing matches. A path starting with / or ~ looks anywhere."), w)...)
+	default:
+		room := max(h-len(lines), 1)
+		start := window(0, m.pick.sel, m.pick.sel+1, len(matches), room)
+		for i := start; i < min(start+room, len(matches)); i++ {
+			text := "  " + fleet.ShortDir(matches[i])
+			if i == m.pick.sel {
+				lines = append(lines, m.cursorBar().Render(fit(text, w)))
+			} else {
+				lines = append(lines, fg(pal.Text).Render(text))
+			}
+		}
+	}
+	info := ""
+	if m.pick.read {
+		info = fmt.Sprintf("%d", len(matches))
+	}
+	return box("add project", info, lines, m.w, m.boxHeight(), !m.blurred)
 }
 
 // box draws a bordered pane with the title set into its top edge and an
@@ -460,6 +495,7 @@ func (m model) helpBox() []string {
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},
 		entry{"t", "new terminal in project"},
+		entry{"a", "add a project"},
 	)...)
 	right := section("digest",
 		entry{"d", "show / hide digests"},
@@ -547,6 +583,8 @@ func (m model) statusBar() string {
 
 	var left []string
 	switch {
+	case m.pick.open:
+		left = []string{strong.Render("add project"), base.Render("enter pins · tab completes · esc cancels")}
 	case m.filtering:
 		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter opens · esc clears")}
 	case m.note != "":
@@ -574,7 +612,7 @@ func (m model) statusBar() string {
 	sep := base.Render(" │ ")
 	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
 
-	keys := "↵ type · ^[ back · / search · n next · c new · t term · ? help "
+	keys := "↵ type · ^[ back · / search · n next · c new · t term · a add · ? help "
 	if m.screen == digestScreen {
 		keys = "[ ] older/newer · D write · d sessions · ? help "
 	}

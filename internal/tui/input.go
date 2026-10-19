@@ -42,6 +42,13 @@ const (
 	copyID
 	newSession  // a claude in the selected entry's project
 	newTerminal // a shell in the selected entry's project
+	addProject  // open the add-project picker
+	pickType    // add text to the picker's query
+	pickBack    // backspace in the picker
+	pickMove    // n matches down the picker, negative for up
+	pickTab     // complete the query to the selected match
+	pickEnter   // pin the selected match
+	pickCancel  // close the picker
 )
 
 type action struct {
@@ -62,6 +69,27 @@ func doN(v verb, n int) []action { return []action{{do: v, n: n}} }
 // keyActions translates a key press.
 func (m model) keyActions(msg tea.KeyMsg) []action {
 	k := msg.String()
+	if m.pick.open {
+		switch msg.Type {
+		case tea.KeyEsc:
+			return do(pickCancel)
+		case tea.KeyEnter:
+			return do(pickEnter)
+		case tea.KeyTab:
+			return do(pickTab)
+		case tea.KeyUp, tea.KeyCtrlP:
+			return doN(pickMove, -1)
+		case tea.KeyDown, tea.KeyCtrlN:
+			return doN(pickMove, 1)
+		case tea.KeyBackspace:
+			return do(pickBack)
+		case tea.KeyRunes, tea.KeySpace:
+			return []action{{do: pickType, text: printable(string(msg.Runes))}}
+		case tea.KeyCtrlC:
+			return do(quit)
+		}
+		return nil
+	}
 	if m.filtering {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -169,6 +197,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(newSession)
 	case "t":
 		return do(newTerminal)
+	case "a":
+		return do(addProject)
 	}
 	return nil
 }
@@ -194,6 +224,9 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 			return nil
 		}
 		return do(dismiss)
+	}
+	if m.pick.open {
+		return nil // the picker is keys only
 	}
 	if m.screen == digestScreen {
 		return doN(scrollDigest, step*wheelLines)

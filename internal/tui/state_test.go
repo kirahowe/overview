@@ -18,7 +18,7 @@ import (
 var keyPool = []string{
 	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "x", "y", "d", "1", "2", "?",
 	"tab", "l", "h", "r", "D", "ctrl+d", "ctrl+u", " ", "backspace", "down", "up",
-	"[", "]", "c", "t", "z",
+	"[", "]", "c", "t", "a", "z",
 }
 
 var typeable = []string{"a", "e", "o", "r", "b", "f", "w", "x", "A", " ", "u"}
@@ -160,7 +160,7 @@ func TestStateMachine(t *testing.T) {
 				case before.confirm != "" || before.help:
 					// A click closes an overlay as esc does.
 					ref, _ = press(before, "esc")
-				case before.screen == digestScreen, y >= lh:
+				case before.screen == digestScreen, y >= lh, before.pick.open:
 					ref = before
 				default:
 					// A click on a row is the cursor moved there, and a second
@@ -206,7 +206,8 @@ func TestStateMachine(t *testing.T) {
 				// digests it is three lines of scrolling.
 				ref := before
 				switch {
-				case before.confirm != "" || before.help, before.screen == sessionsScreen && y >= before.boxHeight():
+				case before.confirm != "" || before.help, before.pick.open && before.screen == sessionsScreen,
+					before.screen == sessionsScreen && y >= before.boxHeight():
 				case before.screen == digestScreen:
 					ref, _ = press(ref, "j", "j", "j")
 					if !down {

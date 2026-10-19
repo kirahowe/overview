@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -118,6 +119,9 @@ type model struct {
 	opened tmux.Pane
 	// blurred is set while the focus is in another pane.
 	blurred bool
+
+	// pick is the add-project picker, open while it takes the list pane.
+	pick picker
 
 	// The last click on a list row, to tell a double click.
 	clickID string
@@ -402,6 +406,19 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m = m.loadDigests().say("new digest written")
 		}
+	case pickedMsg:
+		if m.pick.open && msg.source == m.pick.from {
+			m.pick.paths, m.pick.read = msg.paths, true
+			m.pick.sel = max(0, min(m.pick.sel, len(m.pickMatches())-1))
+		}
+	case pinnedMsg:
+		if msg.err != nil {
+			return m.say("could not add the project: " + msg.err.Error()), nil
+		}
+		if !slices.Contains(m.pinned, msg.root) {
+			m.pinned = append(slices.Clone(m.pinned), msg.root)
+		}
+		return m.toProject(msg.root).say("pinned " + m.projects.name(msg.root)), nil
 	case doneMsg:
 		if msg.err != nil {
 			m = m.say(msg.err.Error())
@@ -569,6 +586,33 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
 		return m.openTerminal(m.rootOf(e, ok))
+	case addProject:
+		m.pick = picker{open: true}
+		return m.readPicks()
+	case pickType, pickBack:
+		q := m.pick.query
+		if a.do == pickType {
+			q += a.text
+		} else if r := []rune(q); len(r) > 0 {
+			q = string(r[:len(r)-1])
+		}
+		return m.setPickQuery(q)
+	case pickMove:
+		n := len(m.pickMatches())
+		m.pick.sel = max(0, min(m.pick.sel+a.n, n-1))
+	case pickTab:
+		if ms := m.pickMatches(); m.pick.sel < len(ms) {
+			return m.setPickQuery(pickComplete(m.pick.query, m.projects.home, ms[m.pick.sel]))
+		}
+	case pickEnter:
+		path, typed := pickTarget(m.pick.query, m.projects.home, m.pickMatches(), m.pick.sel)
+		if path == "" {
+			return m.say("nothing to add"), nil
+		}
+		m.pick = picker{}
+		return m.say("adding " + path + "…"), pinCmd(m.home.PinProject, path, typed, m.projects.resolve, m.projects.exists)
+	case pickCancel:
+		m.pick = picker{}
 	case copyID:
 		if !isSession {
 			return m, nil
@@ -580,6 +624,75 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m, func() tea.Msg { return copied(text, copyText(text)) }
 	}
 	return m, nil
+}
+
+// knownRoots are the roots of the projects in the list: those of the
+// sessions and terminals, and the pinned ones.
+func (m model) knownRoots() []string {
+	var roots []string
+	for _, r := range m.rows {
+		if r.Name != fleet.OrchestratorName {
+			roots = append(roots, m.projects.root(r.Cwd))
+		}
+	}
+	for _, t := range m.terminals() {
+		roots = append(roots, t.Project)
+	}
+	return append(roots, m.pinned...)
+}
+
+// pickMatches is what the picker offers now.
+func (m model) pickMatches() []string {
+	shown := map[string]bool{}
+	for _, r := range m.knownRoots() {
+		shown[r] = true
+	}
+	return pickMatches(m.pick.query, m.projects.home, m.pick.paths, shown, fleet.ShortDir)
+}
+
+// setPickQuery changes the picker's query, and reads the directories it
+// needs when they are not the ones read already.
+func (m model) setPickQuery(q string) (model, tea.Cmd) {
+	m.pick.query, m.pick.sel = q, 0
+	if src := pickSource(q, m.projects.home); src != m.pick.from {
+		m.pick.from, m.pick.paths, m.pick.read = src, nil, false
+		return m.readPicks()
+	}
+	return m, nil
+}
+
+// readPicks reads what the picker's source needs: the folders beside the
+// known projects and the one overview was started in, or a path query's
+// directory.
+func (m model) readPicks() (model, tea.Cmd) {
+	dirs := []string{m.pick.from}
+	if m.pick.from == "" {
+		dirs = pickParents(append(m.knownRoots(), m.projects.root(m.cwd)))
+	}
+	return m, readPathsCmd(m.pick.from, dirs)
+}
+
+// toProject puts the cursor on a project's first entry, clearing a search
+// that hides it.
+func (m model) toProject(root string) model {
+	name := m.projects.name(root)
+	find := func() (string, bool) {
+		for _, s := range m.sections() {
+			if !s.NeedsYou && !s.Away && s.Title == name && len(s.Entries) > 0 {
+				return s.Entries[0].key(), true
+			}
+		}
+		return "", false
+	}
+	key, ok := find()
+	if !ok && m.filter != "" {
+		m.filter, m.filtering = "", false
+		key, ok = find()
+	}
+	if ok {
+		m.sel, m.confirm, m.opened = key, "", tmux.Pane{}
+	}
+	return m
 }
 
 // rootOf is the root of the project an entry belongs to, where c and t

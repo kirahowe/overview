@@ -533,7 +533,7 @@ func (m model) holderText(w, h int) string {
 	case !m.loaded:
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
-		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, and t a terminal."), cw)
+		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
 	case e.kind == projectEntry:
 		lines = wrap(dim.Render("No sessions in "+m.projects.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
 	case e.kind == terminalEntry:

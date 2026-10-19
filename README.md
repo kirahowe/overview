@@ -57,7 +57,8 @@ section for its project, which is the nearest parent directory with a `.jj` or
 `.git` in it, or the session's own directory when there is none. Projects are
 in alphabetical order. Inside one, working sessions come before idle ones, and
 the latest activity comes first. The project's terminals come after its
-sessions, marked `$`. A session that another app started, such as
+sessions, marked `$`, and a project you pinned is listed even with nothing
+in it. A session that another app started, such as
 an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
 in a last section, "in other apps", dimmed and named after the app that runs
 it. A session appears once, and each row shows its state.
@@ -108,6 +109,16 @@ keyboard into it. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `q`
 detaches, leaving the view and its sessions running, and `Q` quits the view.
 `?` lists every key.
+
+`a` adds a project to the list. A picker takes the list's place and offers
+the folders beside the projects already listed, and typing words narrows
+them down as search does. A query that starts with `/` or `~` is a path
+instead: the picker offers the directories in it, and `tab` completes the
+selected one. `enter` pins the project the selected directory belongs to,
+or the path you typed when nothing matches, and `esc` closes the picker. A
+pinned project stays in the list when nothing runs in it, on a row of its
+own, and `c` or `t` there starts something in it. `x` on that row unpins
+the project. The pinned projects are kept in `<home>/overview/projects`.
 
 The mouse works too. A click selects a session, a double click moves the
 keyboard into it as `enter` does, and the wheel moves through the list and

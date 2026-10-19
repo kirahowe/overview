@@ -805,6 +805,7 @@ func repoModel(t *testing.T, f *fakeMux) model {
 }
 
 func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "t")
@@ -840,6 +841,7 @@ func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
 }
 
 func TestTWithASearchHidingItClearsTheSearch(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "/", "a", "u", "t", "h", "enter")
@@ -851,6 +853,7 @@ func TestTWithASearchHidingItClearsTheSearch(t *testing.T) {
 }
 
 func TestXClosesATerminalAfterAYes(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	m := repoModel(t, f)
 	m = pressSettled(t, m, "t")
@@ -878,6 +881,7 @@ func TestXClosesATerminalAfterAYes(t *testing.T) {
 // stays in that window, now a terminal, so the list does not hop away from
 // where the user is typing.
 func TestTheCursorStaysInAWindowWhoseSessionEnded(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
 	m := stagedModel(t, f, red, blue)
@@ -906,6 +910,7 @@ func TestTheCursorStaysInAWindowWhoseSessionEnded(t *testing.T) {
 // A claude started by hand in a terminal exits back to its shell: the row
 // goes, the pane stays, and so does the cursor.
 func TestTheCursorStaysWhenClaudeExitsToItsShell(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
 	m := stagedModel(t, f, red, blue)
@@ -956,6 +961,7 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 }
 
 func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
+	recordDraws(t)
 	f := newFakeMux()
 	m := stagedModel(t, f)
 	m, cmd := step(m, rowsMsg{pinned: []string{"/code/empty"}})
