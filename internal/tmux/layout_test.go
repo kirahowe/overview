@@ -140,3 +140,23 @@ func TestWithoutAcceptedByTmux(t *testing.T) {
 		}
 	}
 }
+
+// A split nested in one of the same direction is spliced upwards with its
+// children laid out for its new size, so panes outside the removed pane's
+// split keep their places. Found by TestPropWithout.
+func TestWithoutKeepsPanesOutsideTheSplit(t *testing.T) {
+	in := "a4a4,2x36,0,0[2x13,0,0[2x4,0,0[2x1,0,0,0,2x2,0,2,1],2x3,0,5[2x1,0,5,2,2x1,0,7,3],2x2,0,9,4,2x1,0,12,5]," +
+		"2x10,0,14[2x3,0,14[2x1,0,14,6,2x1,0,16,7],2x2,0,18,8,2x1,0,21,9,2x1,0,23,10]," +
+		"2x11,0,25[2x2,0,25,11,2x4,0,28[2x2,0,28,12,2x1,0,31,13],2x1,0,33,14,2x1,0,35,15]]"
+	out, err := Without(in, "%15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := parseLayout(in)
+	after, _ := parseLayout(out)
+	for _, id := range []string{"0", "5", "9", "10"} {
+		if b, a := rects(before)[id], rects(after)[id]; a != b {
+			t.Errorf("%%%s moved from %+v to %+v in %s", id, b, a, out)
+		}
+	}
+}

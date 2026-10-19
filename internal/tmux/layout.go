@@ -51,12 +51,15 @@ func Without(layout, pane string) (string, error) {
 }
 
 // removeLeaf deletes the leaf with the given id from the subtree under c and
-// reports whether it found one. It leaves geometry for place to fix.
+// reports whether it found one. The split it leaves is laid out afresh.
 func removeLeaf(c *cell, id string) bool {
 	for i, k := range c.kids {
 		if k.kind == 'p' && k.id == id {
 			c.kids = append(c.kids[:i:i], c.kids[i+1:]...)
 			c.grow()
+			// Lay the split's subtree out now, so a nested split that
+			// collapse splices upwards brings children that fit it.
+			place(c, c.w, c.h, c.x, c.y)
 			return true
 		}
 		if k.kind != 'p' && removeLeaf(k, id) {

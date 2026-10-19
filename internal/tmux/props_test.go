@@ -158,7 +158,58 @@ func TestPropWithout(t *testing.T) {
 		if have := leaves(got); !slices.Equal(have, want) {
 			t.Fatalf("panes %v, want %v", have, want)
 		}
+		// Only the split the pane was in changes: a pane outside it keeps
+		// its exact place and size, and one inside it, a sibling of the
+		// removed pane or within one, never shrinks.
+		parent := parentOf(root, victim)
+		after := rects(got)
+		for id, r := range rects(root) {
+			a, kept := after[id]
+			switch {
+			case id == victim:
+			case !kept:
+				t.Fatalf("%%%s is gone", id)
+			case !parent.holds(r) && a != r:
+				t.Fatalf("%%%s outside the split moved from %+v to %+v", id, r, a)
+			case parent.holds(r) && (a.w < r.w || a.h < r.h):
+				t.Fatalf("%%%s in the split shrank from %+v to %+v", id, r, a)
+			}
+		}
 	})
+}
+
+// rect is a cell's place and size.
+type rect struct{ w, h, x, y int }
+
+func (r rect) holds(o rect) bool {
+	return o.x >= r.x && o.y >= r.y && o.x+o.w <= r.x+r.w && o.y+o.h <= r.y+r.h
+}
+
+// rects is every pane's rectangle, by pane number.
+func rects(c *cell) map[string]rect {
+	out := map[string]rect{}
+	if c.kind == 'p' {
+		out[c.id] = rect{c.w, c.h, c.x, c.y}
+	}
+	for _, k := range c.kids {
+		for id, r := range rects(k) {
+			out[id] = r
+		}
+	}
+	return out
+}
+
+// parentOf is the rectangle of the split that holds pane id directly.
+func parentOf(c *cell, id string) rect {
+	for _, k := range c.kids {
+		if k.kind == 'p' && k.id == id {
+			return rect{c.w, c.h, c.x, c.y}
+		}
+		if r := parentOf(k, id); r != (rect{}) {
+			return r
+		}
+	}
+	return rect{}
 }
 
 // Asking to remove a pane that is not in the layout is an error.
