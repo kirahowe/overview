@@ -1,0 +1,171 @@
+package tmux
+
+import (
+	"fmt"
+	"slices"
+	"testing"
+
+	"pgregory.net/rapid"
+)
+
+// genCell draws a cell of the given size with consistent geometry: children
+// of a split are one border apart and fill it exactly. next hands out pane
+// numbers.
+func genCell(t *rapid.T, next *int, w, h, x, y, depth int) *cell {
+	canH := w >= 3 // two panes and a border
+	canV := h >= 3
+	if depth == 0 || !(canV || canH) || rapid.IntRange(0, 3).Draw(t, "leaf") == 0 {
+		*next++
+		return &cell{kind: 'p', w: w, h: h, x: x, y: y, id: fmt.Sprint(*next - 1)}
+	}
+	var kinds []byte
+	if canH {
+		kinds = append(kinds, '{')
+	}
+	if canV {
+		kinds = append(kinds, '[')
+	}
+	c := &cell{kind: rapid.SampledFrom(kinds).Draw(t, "kind"), w: w, h: h, x: x, y: y}
+	axis := c.along(c.kind)
+	n := rapid.IntRange(2, min(5, (axis+1)/2)).Draw(t, "children")
+	left := axis - (n - 1)
+	off := 0
+	for i := 0; i < n; i++ {
+		size := left
+		if i < n-1 {
+			size = rapid.IntRange(1, left-(n-1-i)).Draw(t, "size")
+		}
+		left -= size
+		if c.kind == '{' {
+			c.kids = append(c.kids, genCell(t, next, size, h, x+off, y, depth-1))
+		} else {
+			c.kids = append(c.kids, genCell(t, next, w, size, x, y+off, depth-1))
+		}
+		off += size + 1
+	}
+	return c
+}
+
+func genLayout(t *rapid.T) *cell {
+	next := 0
+	return genCell(t, &next, rapid.IntRange(1, 150).Draw(t, "w"), rapid.IntRange(1, 60).Draw(t, "h"), 0, 0, 4)
+}
+
+// leaves lists the pane numbers in layout order.
+func leaves(c *cell) []string {
+	if c.kind == 'p' {
+		return []string{c.id}
+	}
+	var out []string
+	for _, k := range c.kids {
+		out = append(out, leaves(k)...)
+	}
+	return out
+}
+
+// consistent reports the first way c breaks the rules of a tmux layout.
+func consistent(c *cell) error {
+	if c.w < 1 || c.h < 1 {
+		return fmt.Errorf("cell %dx%d at %d,%d is empty", c.w, c.h, c.x, c.y)
+	}
+	if c.kind == 'p' {
+		if len(c.kids) != 0 {
+			return fmt.Errorf("pane %s has children", c.id)
+		}
+		return nil
+	}
+	if len(c.kids) < 1 {
+		return fmt.Errorf("split at %d,%d has no children", c.x, c.y)
+	}
+	off, sum := 0, 0
+	for i, k := range c.kids {
+		wantX, wantY := c.x, c.y
+		if c.kind == '{' {
+			wantX += off
+			if k.h != c.h {
+				return fmt.Errorf("child %d height %d, parent %d", i, k.h, c.h)
+			}
+		} else {
+			wantY += off
+			if k.w != c.w {
+				return fmt.Errorf("child %d width %d, parent %d", i, k.w, c.w)
+			}
+		}
+		if k.x != wantX || k.y != wantY {
+			return fmt.Errorf("child %d at %d,%d, want %d,%d", i, k.x, k.y, wantX, wantY)
+		}
+		off += k.along(c.kind) + 1
+		sum += k.along(c.kind)
+		if err := consistent(k); err != nil {
+			return err
+		}
+	}
+	if sum+len(c.kids)-1 != c.along(c.kind) {
+		return fmt.Errorf("children of %c split at %d,%d span %d+%d borders, parent %d",
+			c.kind, c.x, c.y, sum, len(c.kids)-1, c.along(c.kind))
+	}
+	return nil
+}
+
+func TestPropFormatParseRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		root := genLayout(t)
+		if err := consistent(root); err != nil {
+			t.Fatalf("generator: %v", err)
+		}
+		s := formatLayout(root)
+		back, err := parseLayout(s)
+		if err != nil {
+			t.Fatalf("parse %q: %v", s, err)
+		}
+		if again := formatLayout(back); again != s {
+			t.Fatalf("round trip changed %q to %q", s, again)
+		}
+	})
+}
+
+func TestPropWithout(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		root := genLayout(t)
+		in := formatLayout(root)
+		ids := leaves(root)
+		victim := rapid.SampledFrom(ids).Draw(t, "victim")
+
+		out, err := Without(in, "%"+victim)
+		if len(ids) == 1 {
+			if err == nil {
+				t.Fatalf("removing the only pane of %q gave %q", in, out)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("Without(%q, %%%s): %v", in, victim, err)
+		}
+		// parseLayout checks the checksum.
+		got, err := parseLayout(out)
+		if err != nil {
+			t.Fatalf("result %q does not parse: %v", out, err)
+		}
+		if got.w != root.w || got.h != root.h || got.x != root.x || got.y != root.y {
+			t.Fatalf("root %dx%d at %d,%d became %dx%d at %d,%d",
+				root.w, root.h, root.x, root.y, got.w, got.h, got.x, got.y)
+		}
+		if err := consistent(got); err != nil {
+			t.Fatalf("%q from %q minus %%%s: %v", out, in, victim, err)
+		}
+		want := slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return id == victim })
+		if have := leaves(got); !slices.Equal(have, want) {
+			t.Fatalf("panes %v, want %v", have, want)
+		}
+	})
+}
+
+// Asking to remove a pane that is not in the layout is an error.
+func TestPropWithoutAbsentPane(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := formatLayout(genLayout(t))
+		if out, err := Without(in, "%9999"); err == nil {
+			t.Fatalf("Without(%q, %%9999) = %q, want an error", in, out)
+		}
+	})
+}
