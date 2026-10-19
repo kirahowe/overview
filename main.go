@@ -27,9 +27,9 @@ const usage = `overview: watch the Claude Code sessions of one config directory
   overview activity [flags]   print what sessions did since the last digest
   overview publish [file]     save a digest (from the file or stdin)
   overview hook               record a Claude Code hook event (reads stdin)
-  overview view --socket <path> --session <name> [flags]
+  overview view --socket-path <path> --session <name> --cwd <dir> [flags]
                               the list itself, which overview starts in its
-                              tmux (internal)
+                              tmux with every setting as a flag (internal)
   overview stage              the pane the view draws details into (internal)
   overview themes [name]      list the themes, or print one as a file to edit
 
@@ -76,10 +76,12 @@ func main() {
 	fs.StringVar(&flags.Home, "home", "", "")
 	fs.StringVar(&flags.Theme, "theme", "", "")
 	fs.StringVar(&flags.Claude, "claude", "", "")
-	// --socket names the server, except to the view, which Launch gives
-	// the socket's path along with the session it runs in.
-	socket := fs.String("socket", "", "")
+	fs.StringVar(&flags.Socket, "socket", "", "")
+	// The view is given the socket's path, the session it runs in and
+	// where overview was started.
+	socketPath := fs.String("socket-path", "", "")
 	session := fs.String("session", "", "")
+	viewCwd := fs.String("cwd", "", "")
 	configDir := fs.String("config", "", "")
 	orchDir := fs.String("orchestrator-dir", "", "")
 	every := fs.Duration("every", time.Hour, "")
@@ -90,16 +92,22 @@ func main() {
 		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
 	}
 
-	if cmd != "view" {
-		flags.Socket = *socket
-	}
-	// The one place the user's home directory is looked up.
+	// The one place the user's home directory and the working directory
+	// are looked up.
 	user, err := os.UserHomeDir()
 	if err != nil {
 		fail(err)
 	}
-	cfg, err := config.Load(*configDir, flags, user)
+	cwd, err := os.Getwd()
 	if err != nil {
+		fail(err)
+	}
+	var cfg config.Config
+	if cmd == "view" {
+		// The view reads no file: its command line has every setting,
+		// resolved by the launch that started it.
+		cfg = config.Config{Dir: *configDir, User: user, Values: flags}
+	} else if cfg, err = config.Load(*configDir, flags, user, cwd); err != nil {
 		fail(err)
 	}
 	if cmd == "themes" {
@@ -109,7 +117,7 @@ func main() {
 		return
 	}
 
-	home, err := resolveHome(cfg, *orchDir)
+	home, err := resolveHome(cfg, *orchDir, cwd)
 	if err != nil {
 		fail(err)
 	}
@@ -120,12 +128,13 @@ func main() {
 		view := []string{"--config", cfg.Dir, "--home", home.Dir, "--theme", cfg.Theme,
 			"--claude", cfg.Claude, "--orchestrator-dir", home.OrchestratorDir, "--model", *model}
 		if _, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
-			err = tui.Launch(home, cfg.Socket, cfg.Dir, os.Args[1:], view)
+			err = tui.Launch(home, cfg.Socket, cfg.Dir, view, cwd)
 		}
 	case "view":
 		var theme tui.Theme
 		if theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
-			err = tui.Run(home, *model, theme, *socket, *session, cfg.User)
+			err = tui.Run(tui.View{Home: home, Model: *model, Theme: theme,
+				Socket: *socketPath, Session: *session, User: user, Cwd: *viewCwd})
 		}
 	case "sessions":
 		err = printSessions(home, cfg.User)
@@ -219,13 +228,16 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 
 // resolveHome finds the config directory cfg names and gives it the claude,
 // orchestrator directory and overview command to run with.
-func resolveHome(cfg config.Config, orchDir string) (fleet.Home, error) {
+func resolveHome(cfg config.Config, orchDir, cwd string) (fleet.Home, error) {
 	dir, err := fleet.ResolveHome(cfg.Home, cfg.User)
 	if err != nil {
 		return fleet.Home{}, err
 	}
-	if orchDir == "" {
+	switch {
+	case orchDir == "":
 		orchDir = fleet.DefaultOrchestratorDir()
+	case !filepath.IsAbs(orchDir):
+		orchDir = filepath.Join(cwd, orchDir)
 	}
 	exe, err := os.Executable()
 	if err != nil {

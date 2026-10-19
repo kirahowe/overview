@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 
@@ -16,15 +17,16 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t\"--theme\" \"x\"\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
-		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview", Path: "/w"},
+		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview",
+			View: `"--theme" "x"`, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24,
 			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Path: "/w/app/odd\tdir"},
 	}
@@ -49,6 +51,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Project: rapid.SampledFrom([]string{"", "/w/app", "/w/a b"}).Draw(t, "project"),
 				Attach:  rapid.SampledFrom([]string{"", "bg1"}).Draw(t, "attach"),
 				Holder:  rapid.Bool().Draw(t, "holder"),
+				View:    rapid.SampledFrom([]string{"", `"--theme" "a b"`}).Draw(t, "view"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -60,8 +63,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				}
 				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.Path)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -141,7 +144,7 @@ func TestAgainstRealTmux(t *testing.T) {
 	if panes, _ = s.Panes(); len(panes) != 4 {
 		t.Fatalf("panes after the second move: %+v", panes)
 	}
-	view, err := s.Open("ov", nil, "sleep 300")
+	view, err := s.Open("ov", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,13 +172,13 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 	}
 	list := run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")
 	first := run("display-message", "-p", "-t", list, "#{window_id}")
-	a, err := s.Spawn("ov", "", nil, "sleep 300")
+	a, err := s.Spawn("ov", "", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
 	split := run("split-window", "-d", "-v", "-t", a.ID, "-P", "-F", "#{pane_id}", "sleep 300")
 	deep := run("split-window", "-d", "-h", "-t", split, "-P", "-F", "#{pane_id}", "sleep 300")
-	b, err := s.Spawn("ov", "", nil, "sleep 300")
+	b, err := s.Spawn("ov", "", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +311,47 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
 		t.Fatalf("after respawn: %q", out)
 	}
+}
+
+// A command of one word, such as a claude with no arguments, is run as it
+// is too, though tmux would give a lone argument to the shell: a path with
+// a space and an = in it, which a shell would split and env would take for
+// an assignment, runs.
+func TestALoneCommandHasNoShellBetween(t *testing.T) {
+	s := testServer(t)
+	dir := filepath.Join(t.TempDir(), "a=b dir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := filepath.Join(dir, "x=my claude")
+	if err := os.WriteFile(cmd, []byte("#!/bin/sh\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Spawn("ov", "", nil, cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(id string) {
+		t.Helper()
+		var out string
+		for range 40 { // the script takes a moment to exec sleep
+			out, _ = s.run("display-message", "-p", "-t", id, "#{pane_dead} #{pane_current_command}")
+			if strings.TrimSpace(out) == "0 sleep" {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("pane %s: %q, want it running sleep", id, out)
+	}
+	check(p.ID)
+	if err := s.Respawn(q.ID, nil, cmd); err != nil {
+		t.Fatal(err)
+	}
+	check(q.ID)
 }
 
 // byID lists the server's panes by ID.

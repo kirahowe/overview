@@ -147,14 +147,26 @@ type model struct {
 	w, h int
 }
 
-// Run opens the view in the given theme and blocks until the user quits.
-// It runs in the pane Launch made for it in session, on the tmux server at
-// the socket path, and acts on no other server.
-func Run(home fleet.Home, llm string, theme Theme, socket, session, user string) error {
-	useTheme(theme)
-	m := newModel(home, llm)
-	m.user = resolvePath(user)
-	m.cwd, _ = os.Getwd()
+// View is what the view runs with, every part of it from its command line.
+type View struct {
+	Home  fleet.Home
+	Model string // the model a digest is written with
+	Theme Theme
+	// Socket is the path of the tmux server's socket, and Session the tmux
+	// session the view runs in.
+	Socket, Session string
+	User            string // the user's home directory
+	Cwd             string // where overview was started
+}
+
+// Run opens the view and blocks until the user quits. It runs in the pane
+// Launch made for it in v.Session, on the tmux server at v.Socket, and acts
+// on no other server.
+func Run(v View) error {
+	useTheme(v.Theme)
+	m := newModel(v.Home, v.Model)
+	m.user, m.cwd = resolvePath(v.User), v.Cwd
+	socket, session := v.Socket, v.Session
 	exe, err := os.Executable()
 	if err != nil {
 		return err

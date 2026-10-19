@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -45,42 +44,55 @@ func TestPropParseReadsWhatIsWritten(t *testing.T) {
 	})
 }
 
-// Each setting comes from its flag when there is one, the file when that
-// says, and the default otherwise, independently of the others.
-func TestPropResolveTakesFlagThenFileThenDefault(t *testing.T) {
+// fields reads each setting of a config.
+var fields = map[string]func(Config) string{
+	"home":   func(c Config) string { return c.Home },
+	"theme":  func(c Config) string { return c.Theme },
+	"socket": func(c Config) string { return c.Socket },
+	"claude": func(c Config) string { return c.Claude },
+}
+
+// resolve is Resolve with a socket never given as a path, which it refuses.
+func resolve(t *rapid.T, flags, file Values) Config {
+	c, err := Resolve("/d", flags, file, "/u", "/w")
+	if err != nil {
+		t.Fatalf("refused %+v over %+v: %v", flags, file, err)
+	}
+	return c
+}
+
+func drawConfigValues(t *rapid.T, label string) Values {
+	v := drawValues(t, label)
+	v.Socket = strings.ReplaceAll(v.Socket, "/", "")
+	return v
+}
+
+// A flag that is set fixes its setting, whatever the file says.
+func TestPropAFlagFixesItsSetting(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		flags, file := drawValues(t, "flag"), drawValues(t, "file")
-		c, err := Resolve("/d", flags, file)
-		if err != nil {
-			// Only a socket given as a path is refused.
-			sock := flags.Socket
-			if sock == "" {
-				sock = file.Socket
+		flags := drawConfigValues(t, "flag")
+		a, b := resolve(t, flags, drawConfigValues(t, "file a")), resolve(t, flags, drawConfigValues(t, "file b"))
+		for name, field := range keys {
+			if *field(&flags) != "" && fields[name](a) != fields[name](b) {
+				t.Fatalf("%s flag %q: %q with one file, %q with another", name, *field(&flags), fields[name](a), fields[name](b))
 			}
-			if !strings.ContainsRune(sock, '/') {
-				t.Fatalf("refused %+v over %+v: %v", flags, file, err)
-			}
-			return
 		}
-		for _, f := range []struct {
-			name            string
-			got, flag, file string
-			def             string
-		}{
-			{"home", c.Home, flags.Home, file.Home, ""},
-			{"theme", c.Theme, flags.Theme, file.Theme, DefaultTheme},
-			{"socket", c.Socket, flags.Socket, file.Socket, DefaultSocket},
-			{"claude", c.Claude, flags.Claude, file.Claude, DefaultClaude},
-		} {
-			want := f.def
-			if f.file != "" {
-				want = f.file
-			}
-			if f.flag != "" {
-				want = f.flag
-			}
-			if f.got != want {
-				t.Fatalf("%s: got %q, want %q (%s)", f.name, f.got, want, fmt.Sprint(flags, file))
+	})
+}
+
+// Each setting depends only on its own flag and line: changing one
+// setting's inputs leaves every other setting as it was.
+func TestPropEachSettingStandsAlone(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		flags, file := drawConfigValues(t, "flag"), drawConfigValues(t, "file")
+		name := rapid.SampledFrom([]string{"home", "theme", "socket", "claude"}).Draw(t, "changed")
+		flags2, file2 := flags, file
+		otherFlags, otherFile := drawConfigValues(t, "other flag"), drawConfigValues(t, "other file")
+		*keys[name](&flags2), *keys[name](&file2) = *keys[name](&otherFlags), *keys[name](&otherFile)
+		a, b := resolve(t, flags, file), resolve(t, flags2, file2)
+		for n, get := range fields {
+			if n != name && get(a) != get(b) {
+				t.Fatalf("changing %s changed %s: %q to %q", name, n, get(a), get(b))
 			}
 		}
 	})

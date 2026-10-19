@@ -2,11 +2,13 @@ package tui
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"pgregory.net/rapid"
 
 	"overview/internal/tmux"
 	"overview/internal/tmuxtest"
@@ -22,11 +24,53 @@ func privateServer(t *testing.T, conf string) (tmux.Server, tmuxtest.Socket) {
 }
 
 func TestViewCommandAddressesTheServerByPath(t *testing.T) {
-	got := viewCommand("/bin/overview", "/tmp/tmux-501/ov", "overview-work", []string{"--theme", "revdiff"})
-	want := []string{"/bin/overview", "view", "--socket", "/tmp/tmux-501/ov", "--session", "overview-work", "--theme", "revdiff"}
+	got := viewCommand("/bin/overview", "/tmp/tmux-501/ov", "overview-work", "/w", []string{"--theme", "revdiff"})
+	want := []string{"/bin/overview", "view", "--socket-path", "/tmp/tmux-501/ov", "--session", "overview-work", "--cwd", "/w", "--theme", "revdiff"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+}
+
+func TestViewPlan(t *testing.T) {
+	list := func(id, session, view string) tmux.Pane {
+		return tmux.Pane{ID: id, Session: session, List: true, View: view}
+	}
+	other := tmux.Pane{ID: "%5", Session: "ov"}
+	for _, c := range []struct {
+		name  string
+		panes []tmux.Pane
+		step  viewStep
+		pane  string
+	}{
+		{"no server", nil, spawnView, ""},
+		{"only another home's view", []tmux.Pane{list("%1", "ov-x", "k")}, spawnView, ""},
+		{"the same view", []tmux.Pane{other, list("%2", "ov", "k")}, keepView, "%2"},
+		{"other settings or build", []tmux.Pane{list("%2", "ov", "old"), other}, respawnView, "%2"},
+		{"a view never marked", []tmux.Pane{list("%2", "ov", "")}, respawnView, "%2"},
+		{"the view has quit", []tmux.Pane{other, list("%1", "ov-x", "k")}, openView, ""},
+	} {
+		if step, pane := viewPlan(c.panes, "ov", "k"); step != c.step || pane != c.pane {
+			t.Errorf("%s: %v %q, want %v %q", c.name, step, pane, c.step, c.pane)
+		}
+	}
+}
+
+// Each setting and the build are part of the key, so changing any of them
+// restarts the view, and the same ones keep it.
+func TestPropViewKeyTellsViewsApart(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		word := rapid.SampledFrom([]string{"--theme", "one-dark", "a b", `"`, "", "x y"})
+		a, b := rapid.SliceOf(word).Draw(t, "a"), rapid.SliceOf(word).Draw(t, "b")
+		ba, bb := word.Draw(t, "build a"), word.Draw(t, "build b")
+		same := slices.Equal(a, b) && ba == bb
+		if (viewKey(a, ba) == viewKey(b, bb)) != same {
+			t.Fatalf("%q %q and %q %q: keys equal %v", a, ba, b, bb, !same)
+		}
+		panes := []tmux.Pane{{ID: "%1", Session: "ov", List: true, View: viewKey(a, ba)}}
+		if step, _ := viewPlan(panes, "ov", viewKey(b, bb)); (step == keepView) != same {
+			t.Fatalf("plan %v for the same view %v", step, same)
+		}
+	})
 }
 
 func TestEnsureView(t *testing.T) {
@@ -54,64 +98,50 @@ func TestEnsureView(t *testing.T) {
 			if l, _ := count(); l > 0 {
 				return
 			}
-			exec.Command("sleep", "0.05").Run() //nolint:errcheck
+			time.Sleep(50 * time.Millisecond)
 		}
 		t.Fatal("the view never marked its pane")
 	}
+	pid := func() string {
+		panes, _ := srv.Panes()
+		out, _ := sock.Run("display", "-p", "-t", panes[0].ID, "#{pane_pid}")
+		return out
+	}
 
-	if err := ensureView(srv, "ov", view, nil); err != nil {
+	if err := ensureView(srv, "ov", view, "k1"); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
 	if l, all := count(); l != 1 || all != 1 {
 		t.Fatalf("new session: %d list panes of %d", l, all)
 	}
-	// A view already there is left alone.
-	if err := ensureView(srv, "ov", view, nil); err != nil {
-		t.Fatal(err)
-	}
-	if l, all := count(); l != 1 || all != 1 {
-		t.Fatalf("second launch: %d list panes of %d", l, all)
-	}
-	// Other flags restart the view in its own pane; no flags reattach.
-	pid := func() string {
-		panes, _ := srv.Panes()
-		out, _ := sock.Run("display", "-p", "-t", panes[0].ID, "#{pane_pid}")
-		return out
-	}
+	// The same key keeps the view; another restarts it in its own pane,
+	// which keeps the mark and gets the new key.
 	before := pid()
-	if err := ensureView(srv, "ov", []string{"sleep", "300"}, nil); err != nil {
+	if err := ensureView(srv, "ov", view, "k1"); err != nil {
 		t.Fatal(err)
 	}
-	if pid() != before {
-		t.Fatal("a launch without flags restarted the view")
+	if l, all := count(); l != 1 || all != 1 || pid() != before {
+		t.Fatalf("second launch: %d list panes of %d, restarted %v", l, all, pid() != before)
 	}
-	themed := []string{"--theme", "one-dark"}
-	if err := ensureView(srv, "ov", view, themed); err != nil {
+	if err := ensureView(srv, "ov", view, "k2"); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
-	if l, all := count(); l != 1 || all != 1 || pid() == before {
-		t.Fatalf("new flags: %d list panes of %d, restarted %v", l, all, pid() != before)
-	}
-	before = pid()
-	if err := ensureView(srv, "ov", view, themed); err != nil {
-		t.Fatal(err)
-	}
-	if pid() != before {
-		t.Fatal("the same flags restarted the view")
+	panes, _ := srv.Panes()
+	if l, all := count(); l != 1 || all != 1 || pid() == before || panes[0].View != "k2" {
+		t.Fatalf("new key: %d list panes of %d, restarted %v, panes %+v", l, all, pid() != before, panes)
 	}
 	// The view quits while a session lives on: a new view opens in a
 	// window of its own, which is the one shown.
-	panes, _ := srv.Panes()
-	other, err := srv.Spawn("ov", "", nil, "sleep 300")
+	other, err := srv.Spawn("ov", "", nil, "sleep", "300")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sock.Run("kill-pane", "-t", panes[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureView(srv, "ov", view, nil); err != nil {
+	if err := ensureView(srv, "ov", view, "k2"); err != nil {
 		t.Fatal(err)
 	}
 	waitForList()
@@ -124,7 +154,7 @@ func TestEnsureView(t *testing.T) {
 		where[p.ID] = p
 	}
 	shown, _ := sock.Run("display-message", "-p", "-t", "=ov:", "#{pane_id}")
-	if p := where[strings.TrimSpace(shown)]; !p.List || p.Window == where[other.ID].Window {
+	if p := where[strings.TrimSpace(shown)]; !p.List || p.View != "k2" || p.Window == where[other.ID].Window {
 		t.Fatalf("shown %q, panes %+v", shown, panes)
 	}
 }

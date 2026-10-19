@@ -210,7 +210,7 @@ func TestOverviewInTmux(t *testing.T) {
 	// The view runs as its pane's own process, with the socket's path.
 	args, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(list.pid)).Output()
 	path := ov.must("display-message", "-p", "#{socket_path}")
-	if err != nil || !strings.Contains(string(args), " view --socket "+path+" --session overview-e2e ") ||
+	if err != nil || !strings.Contains(string(args), " view --socket-path "+path+" --session overview-e2e --cwd "+work+" ") ||
 		!strings.Contains(string(args), "--theme revdiff") || !strings.Contains(string(args), "--claude "+fake) {
 		t.Fatalf("the list pane runs %q, %v", args, err)
 	}
@@ -330,6 +330,30 @@ func TestOverviewInTmux(t *testing.T) {
 			t.Fatalf("session pane %s went with the restart", s.id)
 		}
 	}
+
+	// A theme given as a relative path reaches the view absolute, and a
+	// change to the config file restarts the view on a plain relaunch.
+	restarted := func(what, want string) {
+		t.Helper()
+		was := list.pid
+		waitFor(t, what, func() (bool, string) {
+			l := listPane(ov.panes())
+			args, _ := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(l.pid)).Output()
+			return l.id == list.id && l.pid != was && strings.Contains(string(args), want), string(args)
+		})
+		list = listPane(ov.panes())
+	}
+	theme := filepath.Join(work, "mine.theme")
+	if err := os.WriteFile(theme, []byte("accent = #c678dd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relaunch("--theme", "./mine.theme")
+	restarted("the view with the theme's path", "--theme "+theme+" ")
+	if err := os.WriteFile(filepath.Join(config, "config"), []byte("theme = one-dark\nclaude = "+fake+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relaunch()
+	restarted("the view with the file's new theme", "--theme one-dark ")
 }
 
 // screen is what the list pane shows.

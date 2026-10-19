@@ -28,13 +28,18 @@ const AttachOption = "@overview-attach"
 // pane option, so the listing says which pane it is.
 const HolderOption = "@overview-holder"
 
+// ViewOption is the pane option on the view's pane that says what it runs:
+// its settings and the binary, so a relaunch can tell a view that is out
+// of date.
+const ViewOption = "@overview-view"
+
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}" +
-	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{pane_current_path}"
+	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 12
+const paneFields = 13
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -49,6 +54,7 @@ type Pane struct {
 	Project string // the window's ProjectOption, "" when unset
 	Attach  string // the pane's AttachOption, "" when unset
 	Holder  bool   // the pane's HolderOption is set
+	View    string // the pane's ViewOption, "" when unset
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -127,7 +133,7 @@ func ParsePanes(out string) []Pane {
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, List: f[6] == "1",
-			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", Path: f[11],
+			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", View: f[11], Path: f[12],
 		})
 	}
 	return panes
@@ -206,7 +212,7 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 		args = append(args, "-e", e)
 	}
 	args = append(args, "-P", "-F", "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}")
-	out, err := s.run(append(args, command...)...)
+	out, err := s.run(append(args, argv(command)...)...)
 	if err != nil {
 		return Pane{}, err
 	}
@@ -269,15 +275,6 @@ func (s Server) SetWindowOption(target, name, value string) error {
 	return err
 }
 
-// PaneOption reads a pane option, "" when unset.
-func (s Server) PaneOption(pane, name string) string {
-	out, err := s.run("show-options", "-pqv", "-t", pane, name)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSuffix(out, "\n")
-}
-
 // SetPaneOption sets a pane option.
 func (s Server) SetPaneOption(pane, name, value string) error {
 	_, err := s.run("set-option", "-p", "-t", pane, name, value)
@@ -291,8 +288,19 @@ func (s Server) Respawn(pane string, env []string, command ...string) error {
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
-	_, err := s.run(append(args, command...)...)
+	_, err := s.run(append(args, argv(command)...)...)
 	return err
+}
+
+// argv is command as tmux runs it with nothing parsing it: tmux hands a
+// lone argument to the shell as a command line, so one goes to sh as $0
+// of a script that only execs it, in place and unsplit. With no command,
+// tmux runs its default shell.
+func argv(command []string) []string {
+	if len(command) == 1 {
+		return []string{"/bin/sh", "-c", `exec "$0"`, command[0]}
+	}
+	return command
 }
 
 // MarkList marks pane as the one the view runs in.

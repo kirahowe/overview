@@ -46,9 +46,10 @@ use. The list of sessions runs down the left side,
 and the selected session itself takes the rest, live, so you can read it and
 type into it without leaving the list. Run `overview` again from
 any terminal and you get the same view back, with every session still running.
-If you run it with flags other than the ones the view started with, such as
-another `--theme`, the view restarts with them in the same pane, and the
-session beside it keeps running.
+If the settings have changed since the view started, from a flag such as
+another `--theme` or from the config file, or overview has been rebuilt, the
+view restarts with them in the same pane, and the session beside it keeps
+running.
 
 The list puts the sessions that need you in a section at the top: a session
 needs you when it is blocked, or when it is idle and its last reply ends with
@@ -169,15 +170,18 @@ claude = /opt/bin/claude
 ```
 
 A flag wins over the file, and the file over the default. An unknown key is
-an error. `--claude` and `claude =` pick the claude that overview runs, by
+an error. A theme or claude given as a path, with a `/` in it, may start
+with `~/`. A relative one is from the current directory in a flag and from
+the config directory in the file. `--claude` and `claude =` pick the claude that overview runs, by
 default `claude` on your PATH. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
 
 The list itself runs as `overview view`, which overview starts in its tmux
-with every setting given as a flag, including the path of the tmux socket.
-It finds its own pane by its process id and talks to no other tmux server.
-You never need to run it yourself.
+with every setting given as a flag, resolved, including the path of the
+tmux socket, and which reads no config file. It finds its own pane by its
+process id and talks to no other tmux server. You never need to run it
+yourself.
 
 ## Themes
 

@@ -89,7 +89,11 @@ func Parse(src string) (Values, error) {
 }
 
 // Resolve settles each setting: the flag, then the file, then the default.
-func Resolve(dir string, flags, file Values) (Config, error) {
+// A theme or claude that is a path, rather than a name, is made absolute,
+// so it means the same to every process overview starts: ~/ is user, the
+// user's home directory, and a relative path is from cwd for a flag and
+// from dir for the file.
+func Resolve(dir string, flags, file Values, user, cwd string) (Config, error) {
 	pick := func(flag, file, def string) string {
 		switch {
 		case flag != "":
@@ -99,11 +103,18 @@ func Resolve(dir string, flags, file Values) (Config, error) {
 		}
 		return def
 	}
-	c := Config{Dir: dir, Values: Values{
+	path := func(flag, file, def string) string {
+		v, base := pick(flag, file, def), dir
+		if flag != "" {
+			base = cwd
+		}
+		return absolute(v, user, base)
+	}
+	c := Config{Dir: dir, User: user, Values: Values{
 		Home:   pick(flags.Home, file.Home, ""),
-		Theme:  pick(flags.Theme, file.Theme, DefaultTheme),
+		Theme:  path(flags.Theme, file.Theme, DefaultTheme),
 		Socket: pick(flags.Socket, file.Socket, DefaultSocket),
-		Claude: pick(flags.Claude, file.Claude, DefaultClaude),
+		Claude: path(flags.Claude, file.Claude, DefaultClaude),
 	}}
 	// tmux -L takes a name; a path would put the socket somewhere else.
 	if strings.ContainsRune(c.Socket, '/') {
@@ -112,20 +123,33 @@ func Resolve(dir string, flags, file Values) (Config, error) {
 	return c, nil
 }
 
+// absolute makes v absolute when it is a path, one with a slash in it: a
+// leading ~/ is user, and a relative path is from base. A name, or a path
+// already absolute, is left as it is.
+func absolute(v, user, base string) string {
+	switch {
+	case strings.HasPrefix(v, "~/"):
+		return filepath.Join(user, v[2:])
+	case strings.ContainsRune(v, '/') && !filepath.IsAbs(v):
+		return filepath.Join(base, v)
+	}
+	return v
+}
+
 // DefaultDir is overview's directory for the user whose home is userHome.
 func DefaultDir(userHome string) string { return filepath.Join(userHome, ".config", "overview") }
 
 // Load reads the config file in dir, or in the default directory of user,
 // the user's home directory, when dir is "", and resolves it against the
-// flags. A missing file says nothing.
-func Load(dir string, flags Values, user string) (Config, error) {
+// flags, which were given in cwd. A missing file says nothing.
+func Load(dir string, flags Values, user, cwd string) (Config, error) {
 	if dir == "" {
 		dir = DefaultDir(user)
 	}
 	// Absolute, so it means the same to the processes this one starts.
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return Config{}, err
+	dir = absolute(dir, user, cwd)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(cwd, dir)
 	}
 	path := filepath.Join(dir, "config")
 	var file Values
@@ -138,7 +162,5 @@ func Load(dir string, flags Values, user string) (Config, error) {
 			return Config{}, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	c, err := Resolve(dir, flags, file)
-	c.User = user
-	return c, err
+	return Resolve(dir, flags, file, user, cwd)
 }
