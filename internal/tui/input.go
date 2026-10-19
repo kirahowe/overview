@@ -37,10 +37,11 @@ const (
 	cancelSearch // stop searching and clear it
 	clearFilter
 	open  // enter: type into the session beside the list
-	click // a click on row id at time at; a second one soon after opens it
-	stop
+	click // a click on the entry keyed id at time at; a second one soon after opens it
+	stop  // stop a background session or close a terminal, after a yes; unpin an empty project
 	copyID
-	newSession // a claude in the selected session's project
+	newSession  // a claude in the selected entry's project
+	newTerminal // a shell in the selected entry's project
 )
 
 type action struct {
@@ -166,6 +167,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(copyID)
 	case "c":
 		return do(newSession)
+	case "t":
+		return do(newTerminal)
 	}
 	return nil
 }
@@ -204,7 +207,7 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		return doN(move, step)
 	}
 	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.SessionID)
+	_, owners := m.listView(m.sections(), cur.key())
 	if line := msg.Y - 1; line >= 0 && line < min(len(owners), lh-2) && owners[line] != "" {
 		return []action{{do: click, id: owners[line], at: at}}
 	}

@@ -126,7 +126,7 @@ func TestUnhandledKeyWhileFilteringKeepsTheCursor(t *testing.T) {
 		}
 	}
 	m, _ = press(m, "backspace") // the text changed: back to the first match
-	if first := m.ordered()[0].SessionID; m.sel != first {
+	if first := m.ordered()[0].key(); m.sel != first {
 		t.Fatalf("new filter text should select the first match %q, got %q", first, m.sel)
 	}
 }
@@ -175,7 +175,7 @@ func wheel(m model, x, y int, down bool) model {
 // screenY is the screen line of a session's first list line, or -1.
 func screenY(m model, id string) int {
 	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.SessionID)
+	_, owners := m.listView(m.sections(), cur.key())
 	for i, o := range owners {
 		if o == id {
 			return i + 1
@@ -218,8 +218,8 @@ func TestClickDoesNotScrollTheList(t *testing.T) {
 	m := newTestModel(t, manyRows(8)...)
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 12})
 	m, _ = press(m, "G")
-	rows := m.ordered()
-	for _, r := range rows {
+	for _, e := range m.ordered() {
+		r := e.row
 		y := screenY(m, r.SessionID)
 		if y < 1 || y+1 > 9 {
 			continue // not wholly shown

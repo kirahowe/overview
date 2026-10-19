@@ -298,21 +298,36 @@ func (m model) paneOf(r fleet.Row) string {
 }
 
 // want is the pane whose window the list belongs in: a session just started with
-// c until it shows up in the list, else the selected session's own pane,
-// else the holder.
+// c until it shows up in the list, else the selected session's own pane or
+// the selected terminal's first pane, else the holder.
 func (m model) want() string {
 	if m.alive(m.opened.ID) {
 		return m.opened.ID
 	}
-	if row, _, ok := m.selected(m.ordered()); ok {
-		if id := m.paneOf(row); id != "" {
-			return id
+	if e, _, ok := m.selected(m.ordered()); ok {
+		switch e.kind {
+		case sessionEntry:
+			if id := m.paneOf(e.row); id != "" {
+				return id
+			}
+		case terminalEntry:
+			if m.alive(e.term.Pane) {
+				return e.term.Pane
+			}
 		}
 	}
 	if m.alive(m.holder) {
 		return m.holder
 	}
 	return ""
+}
+
+// besideTerminal says whether entering means the pane right of the list
+// rather than the wanted pane: on a terminal, where tmux picks the split
+// used last, so enter lands where the user was.
+func (m model) besideTerminal(want string) bool {
+	e, _, ok := m.selected(m.ordered())
+	return ok && e.kind == terminalEntry && want != m.opened.ID
 }
 
 // setPanes takes a fresh listing of tmux's panes.
@@ -337,9 +352,15 @@ func (m model) restage() (model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.entering {
 		m.entering = false
-		mux := m.mux
+		mux, self, beside := m.mux, m.self, m.besideTerminal(want)
 		cmds = append(cmds, func() tea.Msg {
-			if err := mux.Select(want); err != nil {
+			err := error(nil)
+			if beside {
+				err = mux.SelectBeside(self)
+			} else {
+				err = mux.Select(want)
+			}
+			if err != nil {
 				return noteMsg(err.Error())
 			}
 			return nil
@@ -415,6 +436,22 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		case spawnSession:
 			m.opened, m.entering = msg.pane, true
 			m = m.say("started " + msg.name)
+		case spawnTerminal:
+			// A terminal is listed as soon as its pane is, so the cursor
+			// takes it at once.
+			m.sel, m.confirm, m.opened, m.entering = msg.pane.Window, "", tmux.Pane{}, true
+			if m.filter != "" && !m.shown(m.sel) {
+				m.filter, m.filtering = "", false
+			}
+			m = m.say("opened " + msg.name)
+		}
+	case closedMsg:
+		if msg.err != nil {
+			return m.say(msg.err.Error()), nil
+		}
+		m = m.say(msg.note)
+		if msg.gen >= m.spawns {
+			m = m.setPanes(msg.panes)
 		}
 	}
 	return m, nil
@@ -438,13 +475,50 @@ func (m model) adopt() model {
 	return m
 }
 
-func (m model) shown(id string) bool {
-	for _, r := range m.ordered() {
-		if r.SessionID == id {
+func (m model) shown(key string) bool {
+	for _, e := range m.ordered() {
+		if e.key() == key {
 			return true
 		}
 	}
 	return false
+}
+
+// closedMsg answers closeCmd with the panes after the window closed.
+type closedMsg struct {
+	note  string
+	panes []tmux.Pane
+	gen   int
+	err   error
+}
+
+// closeCmd closes a terminal's window, and everything that runs in it.
+// When the list is in that window it first goes beside the holder, since
+// closing the window with the list in it would end the view.
+func closeCmd(mux multiplexer, self, holder string, t terminal, panes []tmux.Pane, gen int) tea.Cmd {
+	inside := false
+	for _, p := range panes {
+		inside = inside || (p.ID == self && p.Window == t.Window)
+	}
+	mv, canMove := plan(self, holder, panes)
+	return func() tea.Msg {
+		fail := func(err error) tea.Msg {
+			return closedMsg{err: errors.New("could not close " + t.Title + ": " + err.Error())}
+		}
+		if inside {
+			if !canMove {
+				return fail(errors.New("the list has nowhere else to go"))
+			}
+			if err := mux.Move(self, mv.to, mv.size); err != nil {
+				return fail(err)
+			}
+		}
+		if err := mux.KillWindow(t.Window); err != nil {
+			return fail(err)
+		}
+		panes, err := mux.Panes()
+		return closedMsg{"closed " + t.Title, panes, gen, err}
+	}
 }
 
 // holderText is the holder's whole screen at w by h: a line saying where
@@ -454,17 +528,21 @@ func (m model) shown(id string) bool {
 func (m model) holderText(w, h int) string {
 	cw := max(w-2, 1)
 	var lines []string
-	row, _, ok := m.selected(m.ordered())
+	e, _, ok := m.selected(m.ordered())
 	switch {
 	case !m.loaded:
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
-		lines = []string{dim.Render("No session selected. c starts one in the selected session's project.")}
+		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, and t a terminal."), cw)
+	case e.kind == projectEntry:
+		lines = wrap(dim.Render("No sessions in "+m.projects.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
+	case e.kind == terminalEntry:
+		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
 	default:
-		if hint := m.stageHint(row); hint != "" {
+		if hint := m.stageHint(e.row); hint != "" {
 			lines = append(wrap(dim.Render(hint), cw), "")
 		}
-		lines = append(lines, m.detail(row, cw)...)
+		lines = append(lines, m.detail(e.row, cw)...)
 	}
 	if len(lines) > h {
 		head := 0

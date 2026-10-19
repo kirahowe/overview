@@ -56,14 +56,24 @@ a question, and the longest wait comes first. Every other session sits in a
 section for its project, which is the nearest parent directory with a `.jj` or
 `.git` in it, or the session's own directory when there is none. Projects are
 in alphabetical order. Inside one, working sessions come before idle ones, and
-the latest activity comes first. A session that another app started, such as
+the latest activity comes first. The project's terminals come after its
+sessions, marked `$`. A session that another app started, such as
 an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
 in a last section, "in other apps", dimmed and named after the app that runs
 it. A session appears once, and each row shows its state.
 
+A terminal is a window in overview's tmux that runs no Claude session: a
+shell for a one-off command, or a dev server. `t` opens one at the root of
+the selected entry's project. Its row is named after what runs in it, such
+as `node`, or after the shell when nothing else does, and shows the
+directory it is in. A terminal belongs to the project it was opened for. One
+that overview did not open, such as a window you made with `ctrl+b c`,
+belongs to the project of the directory its first pane is in.
+
 The right side follows the cursor. Each session that runs in overview's tmux
-has a tmux window of its own in the session `overview-<home>`, and moving the
-cursor moves the list into the selected session's window. A session with no
+has a tmux window of its own in the session `overview-<home>`, and so does
+each terminal. Moving the cursor moves the list into the selected entry's
+window. A session with no
 pane there, such as a background session, one in another app, or one started
 in some other terminal, gets a pane that shows where it runs, what it is
 waiting on, and its last few turns from the transcript.
@@ -72,7 +82,9 @@ You can split the right side as you would any tmux window. The prefix is
 tmux's default `ctrl+b`, and `ctrl+b %` and `ctrl+b "` split the current pane
 in its own directory. The splits belong to the session's window, so they go
 when you move to another session and come back with it. `ctrl+[` returns to
-the list from any of them.
+the list from any of them. When Claude exits and a split is left in its
+window, the window becomes a terminal, and the cursor stays on it so the
+list does not move away from where you are typing.
 
 Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
 searches. Search looks at the project, title, last prompt and name, and
@@ -84,11 +96,15 @@ matches across two of them. The cursor moves to the first match, `up` and
 back to the list from any pane on the right. On a background session,
 `enter` first attaches to it in a window of its own; the attach stays there
 for when you come back to it. On a session in another app, `enter` brings that app to the front. While you are
-searching, `enter` acts on the selected match and clears the search. `x` stops
-a background session (it asks first), and `y` copies the attach command. To
-end a session in another app, close it in that app. `c` starts a new session
-at the root of the selected session's project, or where overview was started
-when the list is empty, and shows it on the right. `d` shows the digests,
+searching, `enter` acts on the selected match and clears the search. On a
+terminal, `enter` moves the keyboard into the pane right of the list, and of
+several splits there, the one you used last. `x` stops a background session
+or closes a terminal, and asks first; closing a terminal kills what runs in
+it. `y` copies the attach command. To end a session in another app, close
+it in that app. `c` starts a new session at the root of the selected entry's
+project, or where overview was started when the list is empty, and shows it
+on the right. `t` opens a terminal there instead, shows it and moves the
+keyboard into it. `d` shows the digests,
 where `[` and `]` step through older ones and `D` writes a new one. `q`
 detaches, leaving the view and its sessions running, and `Q` quits the view.
 `?` lists every key.
@@ -110,6 +126,7 @@ then. tmux can only tell `ctrl+[` from Esc when the terminal
 sends extended keys. A terminal that does not sends a plain Esc, which goes
 to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
 set to the config directory it is watching, so they show up in the list.
+Terminals get it too, so a `claude` you type into one shows up as well.
 That is Claude Code's own way to pick a config directory, and the only
 environment variable overview sets or reads.
 
@@ -225,6 +242,10 @@ install it, and logs to `~/Library/Logs/overview/`.
   marked blocked until its next prompt.
 - The view never sends a session a message. It shows you the session's own
   terminal, and stopping keeps its conversation.
+- A terminal is told from a session by its panes: a window with a pane on
+  the tty of a listed Claude session is that session's. A Claude typed into
+  a terminal turns the terminal into a session once Claude Code lists it,
+  and when the session ends the window is a terminal again.
 - Only sessions started inside overview's tmux can be shown live. A session
   started in another terminal stays there, and the right side only describes
   it.

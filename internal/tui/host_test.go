@@ -159,7 +159,7 @@ func TestAwaySessionsGoLast(t *testing.T) {
 	m, _ := awayModel(t)
 	secs := m.sections()
 	last := secs[len(secs)-1]
-	if !last.Away || last.Title != awayTitle || len(last.Rows) != 1 || last.Rows[0].SessionID != "obs" {
+	if !last.Away || last.Title != awayTitle || len(last.Entries) != 1 || last.Entries[0].key() != "obs" {
 		t.Fatalf("sections %+v", secs)
 	}
 	m.filter = "obsidian"
@@ -179,7 +179,7 @@ func TestAwaySessionThatNeedsYouIsStillPinned(t *testing.T) {
 			m.rows[i].State = fleet.Blocked
 		}
 	}
-	if secs := m.sections(); !secs[0].NeedsYou || secs[0].Rows[0].SessionID != "obs" || secs[len(secs)-1].Away {
+	if secs := m.sections(); !secs[0].NeedsYou || secs[0].Entries[0].key() != "obs" || secs[len(secs)-1].Away {
 		t.Fatalf("sections %+v", secs)
 	}
 }

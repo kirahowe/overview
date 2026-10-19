@@ -312,12 +312,12 @@ func paneWithTTY(f *fakeMux, tty string) string {
 func TestTheStageFollowsTheCursor(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	want := paneWithTTY(f, m.ttys[m.ordered()[0].PID])
+	want := paneWithTTY(f, m.ttys[m.ordered()[0].row.PID])
 	if !f.staged(want) || m.stage != f.stage() {
 		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stage, want)
 	}
 	m = pressSettled(t, m, "j")
-	want = paneWithTTY(f, m.ttys[m.ordered()[1].PID])
+	want = paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
 	if !f.staged(want) || f.inWindow(f.stage()) != 2 {
 		t.Fatalf("after j the list is in %s, want %s's window alone", f.stage(), want)
 	}
@@ -402,7 +402,7 @@ func TestEnterOnABackgroundSessionAttachesBesideTheList(t *testing.T) {
 	}
 	// Detaching ends the attach, and the list goes to the holder.
 	f.exit(attach)
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	settle(t, m, cmd)
 	if !f.staged("%1") {
 		t.Fatalf("list in %s after the attach ended", f.stage())
@@ -458,11 +458,13 @@ func TestAListingFromBeforeASpawnIsDropped(t *testing.T) {
 	if m.paneOf(bg) != attach || len(f.moves) != moves {
 		t.Fatalf("a stale listing lost the attach: pane %q, moves %d then %d", m.paneOf(bg), moves, len(f.moves))
 	}
+	// A current listing is taken: the window, unmarked, is now a plain
+	// terminal, and the cursor stays in it.
 	f.panes = unmarked
 	m, cmd = step(m, panesMsg{panes: unmarked, gen: m.spawns})
 	m = settle(t, m, cmd)
-	if m.paneOf(bg) != "" || !f.staged("%1") {
-		t.Fatalf("a current listing was not taken: pane %q, list in %s", m.paneOf(bg), f.stage())
+	if m.paneOf(bg) != "" || m.sel != f.window(attach) || !f.staged(attach) {
+		t.Fatalf("a current listing was not taken: pane %q, sel %s, list in %s", m.paneOf(bg), m.sel, f.stage())
 	}
 }
 
@@ -484,7 +486,7 @@ func TestAFailedMoveWaitsForTheNextListing(t *testing.T) {
 		t.Fatalf("note %q, failed %q", m.note, m.failed)
 	}
 	f.moveErr = nil
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	settle(t, m, cmd)
 	if !f.staged(paneWithTTY(f, "ttys011")) {
 		t.Fatalf("list in %s after the retry", f.stage())
@@ -499,7 +501,7 @@ func TestAListLeftAloneMovesOn(t *testing.T) {
 	// and the pane closes. Until the list loses blue, the holder stands in.
 	moves, left := len(f.moves), f.stage()
 	f.exit(paneWithTTY(f, "ttys012"))
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.moves) != moves+1 || !f.staged("%1") || f.inWindow(left) != 0 {
 		t.Fatalf("moves %d then %d, list in %s, %d panes left in %s", moves, len(f.moves), f.stage(), f.inWindow(left), left)
@@ -524,7 +526,7 @@ func TestTheListKeepsItsWidth(t *testing.T) {
 	}
 	// The user drags the border, and the next listing has the new width.
 	f.panes[f.find("%0")].W = 42
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	m = settle(t, m, cmd)
 	moves := len(f.moves)
 	pressSettled(t, m, "j")
@@ -542,7 +544,7 @@ func TestASplitStaysWithItsSession(t *testing.T) {
 	blue := paneWithTTY(f, "ttys012")
 	split := f.split(blue)
 	moves := len(f.moves)
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.moves) != moves {
 		t.Fatalf("a split in the list's window moved the list: %v", f.moves)
@@ -590,7 +592,7 @@ func TestAHolderThatClosedIsStartedAgain(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	f.exit("%1")
-	m, cmd := step(m, panesMsg{panes: f.panes, gen: m.spawns})
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 	m = settle(t, m, cmd)
 	if len(f.spawned) != 1 || strings.Join(f.spawned[0].command, " ") != "overview stage" || f.spawned[0].session != "ov" {
 		t.Fatalf("spawned %+v", f.spawned)
@@ -694,7 +696,17 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 			},
 			"key": func(t *rapid.T) {
-				m = pressSettled(t, m, rapid.SampledFrom([]string{"j", "k", "g", "G", "n", "enter", "c", "esc"}).Draw(t, "key"))
+				m = pressSettled(t, m, rapid.SampledFrom([]string{"j", "k", "g", "G", "n", "enter", "c", "t", "esc"}).Draw(t, "key"))
+			},
+			"close": func(t *rapid.T) {
+				// x and y on a terminal close its window. (On a session
+				// they would run claude stop.)
+				if e, _, ok := m.selected(m.ordered()); ok && e.kind == terminalEntry {
+					m = pressSettled(t, m, "x", "y")
+					if f.inWindow(e.term.Window) != 0 && f.find("%0") >= 0 && f.window("%0") != e.term.Window {
+						t.Fatalf("%s is still open", e.term.Window)
+					}
+				}
 			},
 			"split": func(t *rapid.T) {
 				// The user splits a session's window.
@@ -709,7 +721,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 				f.split(rapid.SampledFrom(ids).Draw(t, "beside"))
 				var cmd tea.Cmd
-				m, cmd = step(m, panesMsg{panes: f.panes, gen: m.spawns})
+				m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 				m = settle(t, m, cmd)
 			},
 			"exit": func(t *rapid.T) {
@@ -726,7 +738,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 				f.exit(rapid.SampledFrom(ids).Draw(t, "pane"))
 				var cmd tea.Cmd
-				m, cmd = step(m, panesMsg{panes: f.panes, gen: m.spawns})
+				m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
 				m = settle(t, m, cmd)
 			},
 			"refresh": func(t *rapid.T) {
@@ -778,5 +790,182 @@ func TestSessionNameIsSafeForTmux(t *testing.T) {
 		if got := SessionName(fleet.Home{Dir: dir}); got != want {
 			t.Errorf("%s: %q, want %q", dir, got, want)
 		}
+	}
+}
+
+// repoModel is stagedModel with red's directory inside the repo /code/app.
+func repoModel(t *testing.T, f *fakeMux) model {
+	t.Helper()
+	r := row("s1", "red", "auth", 11)
+	r.Cwd = "/code/app/internal/x"
+	m := stagedModel(t, f, r)
+	m.projects.exists = func(p string) bool { return p == "/code/app/.jj" }
+	m.projects.roots = map[string]string{}
+	return m
+}
+
+func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "t")
+	if len(f.spawned) != 1 {
+		t.Fatalf("spawned %+v", f.spawned)
+	}
+	call := f.spawned[0]
+	if call.dir != "/code/app" || call.session != "ov" || len(call.command) != 0 ||
+		!slices.Equal(call.env, []string{m.home.ClaudeEnv()}) {
+		t.Fatalf("spawned %+v", call)
+	}
+	shell := f.panes[len(f.panes)-1]
+	if shell.Project != "/code/app" {
+		t.Fatalf("the terminal's window has project %q", shell.Project)
+	}
+	e, _, _ := m.selected(m.ordered())
+	if m.sel != shell.Window || e.kind != terminalEntry || e.term.Title != "zsh" {
+		t.Fatalf("sel %s (%+v), want the terminal %s", m.sel, e, shell.Window)
+	}
+	if !f.staged(shell.ID) || !slices.Equal(f.besides, []string{"%0"}) || len(f.selects) != 0 {
+		t.Fatalf("list in %s, besides %v, selects %v", f.stage(), f.besides, f.selects)
+	}
+	// It is listed under its project, after the session.
+	secs := m.sections()
+	if len(secs) != 1 || len(secs[0].Entries) != 2 || secs[0].Entries[1].key() != shell.Window {
+		t.Fatalf("sections %+v", secs)
+	}
+	// Back to it later, enter goes to the split used last, beside the list.
+	m = pressSettled(t, m, "k", "j", "enter")
+	if !f.staged(shell.ID) || len(f.besides) != 2 {
+		t.Fatalf("list in %s, besides %v", f.stage(), f.besides)
+	}
+}
+
+func TestTWithASearchHidingItClearsTheSearch(t *testing.T) {
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "/", "a", "u", "t", "h", "enter")
+	m.filter = "auth" // left in place, as an enter with no match leaves it
+	m = pressSettled(t, m, "t")
+	if m.filter != "" || m.sel != f.panes[len(f.panes)-1].Window {
+		t.Fatalf("filter %q, sel %s", m.filter, m.sel)
+	}
+}
+
+func TestXClosesATerminalAfterAYes(t *testing.T) {
+	f := newFakeMux()
+	m := repoModel(t, f)
+	m = pressSettled(t, m, "t")
+	win := m.sel
+	m = pressSettled(t, m, "x")
+	if m.confirm != win || !strings.Contains(ansi.Strip(m.View()), "Close terminal zsh?") {
+		t.Fatalf("confirm %q", m.confirm)
+	}
+	m = pressSettled(t, m, "n")
+	if m.confirm != "" || len(f.killed) != 0 {
+		t.Fatalf("a no closed it: confirm %q killed %v", m.confirm, f.killed)
+	}
+	m = pressSettled(t, m, "x", "y")
+	if !slices.Equal(f.killed, []string{win}) || f.find("%0") < 0 {
+		t.Fatalf("killed %v, list %d", f.killed, f.find("%0"))
+	}
+	// The list left the window before it closed, and the cursor is on
+	// what is left.
+	if m.sel == win || m.shown(win) || !strings.Contains(m.note, "closed zsh") || !f.staged(paneWithTTY(f, "ttys011")) {
+		t.Fatalf("sel %s, note %q, list in %s", m.sel, m.note, f.stage())
+	}
+}
+
+// claude exits, and the split the user made beside it stays: the cursor
+// stays in that window, now a terminal, so the list does not hop away from
+// where the user is typing.
+func TestTheCursorStaysInAWindowWhoseSessionEnded(t *testing.T) {
+	f := newFakeMux()
+	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
+	m := stagedModel(t, f, red, blue)
+	pane := paneWithTTY(f, "ttys012")
+	if m.sel != "s2" || !f.staged(pane) {
+		t.Fatalf("sel %s, list in %s", m.sel, f.stage())
+	}
+	split := f.split(pane)
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	moves := len(f.moves)
+	f.exit(pane)
+	m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	if m.sel != split.Window || !f.staged(split.ID) || len(f.moves) != moves {
+		t.Fatalf("sel %s, list in %s, moves %d then %d", m.sel, f.stage(), moves, len(f.moves))
+	}
+	// claude stops listing it, and nothing moves.
+	m, cmd = step(m, rowsMsg{rows: []fleet.Row{red}, ttys: map[int]string{11: "ttys011"}})
+	m = settle(t, m, cmd)
+	if m.sel != split.Window || len(f.moves) != moves {
+		t.Fatalf("sel %s, moves %d then %d", m.sel, moves, len(f.moves))
+	}
+}
+
+// A claude started by hand in a terminal exits back to its shell: the row
+// goes, the pane stays, and so does the cursor.
+func TestTheCursorStaysWhenClaudeExitsToItsShell(t *testing.T) {
+	f := newFakeMux()
+	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
+	m := stagedModel(t, f, red, blue)
+	pane := paneWithTTY(f, "ttys012")
+	m, cmd := step(m, rowsMsg{rows: []fleet.Row{red}, ttys: map[int]string{11: "ttys011"}})
+	m = settle(t, m, cmd)
+	if m.sel != f.window(pane) || !f.staged(pane) {
+		t.Fatalf("sel %s, list in %s", m.sel, f.stage())
+	}
+}
+
+func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
+	d := recordDraws(t)
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	if err := m.home.PinProject("/code/empty"); err != nil {
+		t.Fatal(err)
+	}
+	m, cmd := step(m, rowsMsg{pinned: m.home.Projects()})
+	m = settle(t, m, cmd)
+	e, _, ok := m.selected(m.ordered())
+	if !ok || e.kind != projectEntry || m.sel != "project:/code/empty" || !f.staged("%1") {
+		t.Fatalf("sel %s, entry %+v, list in %s", m.sel, e, f.stage())
+	}
+	if text := ansi.Strip(d["ttys901"]); !strings.Contains(text, "No sessions in /code/empty. c starts Claude here") {
+		t.Fatalf("holder shows %q", text)
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "no sessions") || !strings.Contains(view, "x unpin") {
+		t.Fatalf("view %s", view)
+	}
+	need, working, idle := m.counts()
+	if need+working+idle != 0 {
+		t.Fatal("the placeholder counts as a session")
+	}
+	// c starts claude there.
+	m = pressSettled(t, m, "c")
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || f.panes[f.find(m.opened.ID)].Project != "/code/empty" {
+		t.Fatalf("spawned %+v", f.spawned)
+	}
+	// x unpins it at once.
+	m, cmd = press(m, "esc", "g", "x")
+	if cmd == nil || m.confirm != "" {
+		t.Fatalf("x on the placeholder: confirm %q", m.confirm)
+	}
+	if msg := cmd().(doneMsg); msg.err != nil || msg.note != "unpinned /code/empty" || len(m.home.Projects()) != 0 {
+		t.Fatalf("done %+v, pinned %v", msg, m.home.Projects())
+	}
+}
+
+func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	m, cmd := step(m, rowsMsg{pinned: []string{"/code/empty"}})
+	m = settle(t, m, cmd)
+	m = pressSettled(t, m, "t")
+	e, _, _ := m.selected(m.ordered())
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || e.kind != terminalEntry || e.term.Project != "/code/empty" {
+		t.Fatalf("spawned %+v, sel %+v", f.spawned, e)
+	}
+	if m.shown("project:/code/empty") {
+		t.Fatal("the placeholder stayed beside the terminal")
 	}
 }

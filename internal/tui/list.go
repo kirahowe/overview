@@ -3,10 +3,13 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"overview/internal/fleet"
+	"overview/internal/tmux"
 )
 
 // needsYouTitle heads the pinned section and awayTitle the last one. Project
@@ -17,37 +20,84 @@ const (
 )
 
 // section is one block of the list: the pinned "needs you" block, the
-// sessions of one project, or the sessions other apps run.
+// entries of one project, or the sessions other apps run.
 type section struct {
 	Title    string
 	NeedsYou bool
 	Away     bool
-	Rows     []fleet.Row
+	Entries  []entry
 }
 
-// buildList is the single source of truth for the session list. The
-// renderer, the cursor, n/N and the status bar all read it.
+type entryKind int
+
+const (
+	sessionEntry  entryKind = iota
+	terminalEntry           // a window of plain shells, or a dev server
+	projectEntry            // a pinned project with nothing in it yet
+)
+
+// entry is one thing the cursor can be on: a Claude session, a terminal, or
+// the placeholder of an empty pinned project.
+type entry struct {
+	kind    entryKind
+	row     fleet.Row // sessionEntry
+	term    terminal  // terminalEntry
+	project string    // projectEntry: the project's root
+}
+
+// key names an entry for the cursor and for clicks, across refreshes: a
+// session's id, a terminal's window ("@7"), or "project:" and the root.
+func (e entry) key() string {
+	switch e.kind {
+	case terminalEntry:
+		return e.term.Window
+	case projectEntry:
+		return "project:" + e.project
+	}
+	return e.row.SessionID
+}
+
+// session is the entry's row, and whether it is a session at all.
+func (e entry) session() (fleet.Row, bool) { return e.row, e.kind == sessionEntry }
+
+func sessionEntries(rows []fleet.Row) []entry {
+	out := make([]entry, len(rows))
+	for i, r := range rows {
+		out[i] = entry{kind: sessionEntry, row: r}
+	}
+	return out
+}
+
+// buildList is the single source of truth for the list. The renderer, the
+// cursor, n/N and the status bar all read it.
 //
-// It drops the orchestrator and every row the query does not match, pins the
-// rows that need you in a first section (longest wait first), and puts the
-// rest into one section per project. Projects are ordered by display name.
-// A session that runs inside another app, as host reports, is not one the
-// user drives from a project, so unless it needs them it goes in a last
-// section of its own instead. Within a project or that section, working
-// sessions come before the rest, then the newest activity first, then the
-// session id. The result depends only on the set of rows, never on their
-// order.
-func buildList(rows []fleet.Row, query string, project func(cwd string) string, host func(fleet.Row) (string, bool)) []section {
-	terms := strings.Fields(strings.ToLower(query))
+// It drops the orchestrator and every entry the query does not match, pins
+// the sessions that need you in a first section (longest wait first), and
+// puts the rest into one section per project. Projects are ordered by
+// display name. A session that runs inside another app, as host reports, is
+// not one the user drives from a project, so unless it needs them it goes
+// in a last section of its own instead. Within a project or that section,
+// working sessions come before the rest, then the newest activity first,
+// then the session id. A project's terminals follow its sessions, by window
+// number. A pinned project with no session or terminal at all, whatever the
+// query, gets a placeholder of its own, which the query matches on the
+// project's name. The result depends only on the sets it is given, never on
+// their order.
+func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string, project func(cwd string) string, host func(fleet.Row) (string, bool)) []section {
+	words := strings.Fields(strings.ToLower(query))
 	var needs, away []fleet.Row
 	byProject := map[string][]fleet.Row{}
+	termsOf := map[string][]terminal{}
+	placeholder := map[string]string{} // project name to root
+	used := map[string]bool{}          // projects with a session or terminal
 	for _, r := range rows {
 		if r.Name == fleet.OrchestratorName {
 			continue
 		}
 		p := project(r.Cwd)
+		used[p] = true
 		app, isAway := host(r)
-		if !matches(r, p, app, terms) {
+		if !matches(r, p, app, words) {
 			continue
 		}
 		switch {
@@ -59,6 +109,23 @@ func buildList(rows []fleet.Row, query string, project func(cwd string) string, 
 			byProject[p] = append(byProject[p], r)
 		}
 	}
+	for _, t := range terms {
+		p := project(t.Project)
+		used[p] = true
+		if matchFields(words, p, t.Title, fleet.ShortDir(t.Path)) {
+			termsOf[p] = append(termsOf[p], t)
+		}
+	}
+	for _, root := range pinned {
+		p := project(root)
+		if root == "" || used[p] || !matchFields(words, p) {
+			continue
+		}
+		// Two pinned roots with one name are one project: keep the least.
+		if old, ok := placeholder[p]; !ok || root < old {
+			placeholder[p] = root
+		}
+	}
 
 	var out []section
 	if len(needs) > 0 {
@@ -68,23 +135,54 @@ func buildList(rows []fleet.Row, query string, project func(cwd string) string, 
 			}
 			return needs[i].SessionID < needs[j].SessionID
 		})
-		out = append(out, section{Title: needsYouTitle, NeedsYou: true, Rows: needs})
+		out = append(out, section{Title: needsYouTitle, NeedsYou: true, Entries: sessionEntries(needs)})
 	}
-	names := make([]string, 0, len(byProject))
+	names := make([]string, 0, len(byProject)+len(termsOf)+len(placeholder))
 	for p := range byProject {
 		names = append(names, p)
 	}
+	for p := range termsOf {
+		if _, ok := byProject[p]; !ok {
+			names = append(names, p)
+		}
+	}
+	for p := range placeholder {
+		names = append(names, p) // a placeholder's project has nothing else
+	}
 	sort.Slice(names, func(i, j int) bool { return nameLess(names[i], names[j]) })
 	for _, p := range names {
+		if root, ok := placeholder[p]; ok {
+			out = append(out, section{Title: p, Entries: []entry{{kind: projectEntry, project: root}}})
+			continue
+		}
 		rs := byProject[p]
 		sortActive(rs)
-		out = append(out, section{Title: p, Rows: rs})
+		es := sessionEntries(rs)
+		ts := termsOf[p]
+		sort.Slice(ts, func(i, j int) bool { return windowLess(ts[i].Window, ts[j].Window) })
+		for _, t := range ts {
+			es = append(es, entry{kind: terminalEntry, term: t})
+		}
+		out = append(out, section{Title: p, Entries: es})
 	}
 	if len(away) > 0 {
 		sortActive(away)
-		out = append(out, section{Title: awayTitle, Away: true, Rows: away})
+		out = append(out, section{Title: awayTitle, Away: true, Entries: sessionEntries(away)})
 	}
 	return out
+}
+
+// windowLess orders tmux window ids ("@7") by number, then as text.
+func windowLess(a, b string) bool {
+	na, errA := strconv.Atoi(strings.TrimPrefix(a, "@"))
+	nb, errB := strconv.Atoi(strings.TrimPrefix(b, "@"))
+	if errA == nil && errB == nil && na != nb {
+		return na < nb
+	}
+	if (errA == nil) != (errB == nil) {
+		return errA == nil
+	}
+	return a < b
 }
 
 // sortActive puts working sessions first, then the newest activity, then
@@ -112,14 +210,20 @@ func nameLess(a, b string) bool {
 	return a < b
 }
 
-// matches reports whether every term is found in at least one field. A term
-// is matched against one field at a time, so it can never straddle two. app
-// is the host app's name, "" for a session in a terminal.
+// matches reports whether every term is found in at least one of a
+// session's fields. app is the host app's name, "" for a session in a
+// terminal.
 func matches(r fleet.Row, project, app string, terms []string) bool {
+	return matchFields(terms, project, r.Title, r.LastPrompt, r.Name, app)
+}
+
+// matchFields reports whether every term, already lower case, is found in
+// at least one field, ignoring case. A term is matched against one field at
+// a time, so it can never straddle two.
+func matchFields(terms []string, fields ...string) bool {
 	if len(terms) == 0 {
 		return true
 	}
-	fields := [...]string{project, r.Title, r.LastPrompt, r.Name, app}
 	lower := make([]string, len(fields))
 	for i, f := range fields {
 		lower[i] = strings.ToLower(f)
@@ -140,12 +244,90 @@ func matches(r fleet.Row, project, app string, terms []string) bool {
 }
 
 // flatten is the list as the cursor walks it.
-func flatten(secs []section) []fleet.Row {
-	var out []fleet.Row
+func flatten(secs []section) []entry {
+	var out []entry
 	for _, s := range secs {
-		out = append(out, s.Rows...)
+		out = append(out, s.Entries...)
 	}
 	return out
+}
+
+// terminal is a window of the view's session that runs no Claude session:
+// shells, a dev server, a one-off command.
+type terminal struct {
+	Window  string // "@7"
+	Pane    string // its first pane, which the list goes beside
+	Project string // the project's root
+	Title   string // "node", or the shell's name when only shells run
+	Path    string // the first pane's directory
+}
+
+// shells are the commands a terminal's title skips over, since a shell is
+// what every terminal runs.
+var shells = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true, "ksh": true, "mksh": true,
+	"tcsh": true, "csh": true, "nu": true, "xonsh": true, "elvish": true, "pwsh": true,
+}
+
+// terminals finds the terminals among the panes, in window order. A window
+// of the view's session is one unless it holds the holder, an attach, a pane
+// on the tty of a listed Claude session (claude), or the pane c just opened
+// and the list has yet to adopt. The list's own pane is left out, so a
+// window with only the list is no terminal. A terminal's project is its
+// window's ProjectOption, or else the root of its first pane's directory.
+func terminals(panes []tmux.Pane, session, self, holder, opened string, claude map[string]bool, root func(string) string) []terminal {
+	byWindow := map[string][]tmux.Pane{}
+	skip := map[string]bool{}
+	var order []string
+	for _, p := range panes {
+		if p.Session != session || p.ID == self || p.Window == "" {
+			continue
+		}
+		if _, ok := byWindow[p.Window]; !ok {
+			order = append(order, p.Window)
+		}
+		byWindow[p.Window] = append(byWindow[p.Window], p)
+		if p.ID == holder || p.Attach != "" || (p.TTY != "" && claude[p.TTY]) || (opened != "" && p.ID == opened) {
+			skip[p.Window] = true
+		}
+	}
+	var out []terminal
+	for _, w := range order {
+		if skip[w] {
+			continue
+		}
+		ps := byWindow[w]
+		first := ps[0]
+		project := first.Project
+		if project == "" {
+			project = root(first.Path)
+		}
+		out = append(out, terminal{Window: w, Pane: first.ID, Project: project, Title: termTitle(ps), Path: first.Path})
+	}
+	sort.Slice(out, func(i, j int) bool { return windowLess(out[i].Window, out[j].Window) })
+	return out
+}
+
+// termTitle names a terminal by what runs in it: the distinct commands of
+// its panes that are not shells, or the first pane's shell when only shells
+// run.
+func termTitle(panes []tmux.Pane) string {
+	var cmds []string
+	for _, p := range panes {
+		c := strings.TrimPrefix(p.Command, "-")
+		if c != "" && !shells[c] && !slices.Contains(cmds, c) {
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) > 0 {
+		return strings.Join(cmds, ", ")
+	}
+	for _, p := range panes {
+		if c := strings.TrimPrefix(p.Command, "-"); c != "" {
+			return c
+		}
+	}
+	return "shell"
 }
 
 // projects maps a working directory to its project's display name. The repo
@@ -219,11 +401,14 @@ func repoRoot(cwd string, exists func(path string) bool) string {
 	}
 }
 
-// counts tallies the whole fleet, filter ignored, for the status bar.
+// counts tallies the sessions, filter ignored, for the status bar.
+// Terminals and placeholders are not sessions.
 func counts(secs []section) (need, working, idle int) {
 	for _, s := range secs {
-		for _, r := range s.Rows {
+		for _, e := range s.Entries {
+			r, ok := e.session()
 			switch {
+			case !ok:
 			case s.NeedsYou:
 				need++
 			case r.State == fleet.Working:
@@ -237,5 +422,5 @@ func counts(secs []section) (need, working, idle int) {
 }
 
 func (m model) counts() (need, working, idle int) {
-	return counts(buildList(m.rows, "", m.projects.name, m.hostOf))
+	return counts(buildList(m.rows, nil, nil, "", m.projects.name, m.hostOf))
 }

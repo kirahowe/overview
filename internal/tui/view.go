@@ -77,13 +77,13 @@ func (m model) View() string {
 
 func (m model) sessionsView() []string {
 	secs := m.sections()
-	rows := flatten(secs)
-	row, _, _ := m.selected(rows)
+	es := flatten(secs)
+	e, _, _ := m.selected(es)
 	info := ""
 	if m.filter != "" || m.filtering {
-		info = fmt.Sprintf("/%s · %d", m.filter, len(rows))
+		info = fmt.Sprintf("/%s · %d", m.filter, len(es))
 	}
-	lines, _ := m.listView(secs, row.SessionID)
+	lines, _ := m.listView(secs, e.key())
 	return box("sessions", info, lines, m.w, m.boxHeight(), !m.blurred)
 }
 
@@ -117,8 +117,9 @@ func box(title, info string, body []string, w, h int, focused bool) []string {
 	return append(out, bottom)
 }
 
-// listLines renders the whole list, unscrolled, with the session each line
-// belongs to ("" for headings, gaps and messages). Clicks read the owners.
+// listLines renders the whole list, unscrolled, with the key of the entry
+// each line belongs to ("" for headings, gaps and messages). Clicks read
+// the owners.
 func (m model) listLines(secs []section, sel string, w int) (lines, owners []string) {
 	add := func(owner string, ls ...string) {
 		lines = append(lines, ls...)
@@ -152,9 +153,15 @@ func (m model) listLines(secs []section, sel string, w int) (lines, owners []str
 		case sec.Away:
 			style = dim.Bold(true)
 		}
-		add("", style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", len(sec.Rows))))
-		for _, r := range sec.Rows {
-			add(r.SessionID, m.rowLines(r, w, r.SessionID == sel, sec.NeedsYou)...)
+		n := 0
+		for _, e := range sec.Entries {
+			if e.kind != projectEntry {
+				n++
+			}
+		}
+		add("", style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", n)))
+		for _, e := range sec.Entries {
+			add(e.key(), m.entryLines(e, w, e.key() == sel, sec.NeedsYou)...)
 		}
 	}
 	return lines, owners
@@ -191,6 +198,40 @@ func (m model) listView(secs []section, sel string) (lines, owners []string) {
 	lines, owners = m.listLines(secs, sel, m.w-4)
 	start := m.listStart(owners, sel, m.boxHeight()-2)
 	return lines[start:], owners[start:]
+}
+
+// entryLines renders one entry as two lines. A terminal shows what runs in
+// it and where, and an empty pinned project the keys that fill it.
+func (m model) entryLines(e entry, w int, selected, pinned bool) []string {
+	switch e.kind {
+	case terminalEntry:
+		return m.plainLines("$", e.term.Title, "terminal", fleet.ShortDir(e.term.Path), w, selected)
+	case projectEntry:
+		return m.plainLines("+", "no sessions", "", "c claude · t terminal · x unpin", w, selected)
+	}
+	return m.rowLines(e.row, w, selected, pinned)
+}
+
+// cursorBar is the style of the selected entry: solid while the list has
+// the keyboard, dimmed otherwise.
+func (m model) cursorBar() lipgloss.Style {
+	bar := lipgloss.NewStyle().Background(pal.CursorDimBg).Foreground(pal.CursorDimFg).Bold(true)
+	if !m.blurred {
+		bar = bar.Background(pal.CursorBg).Foreground(pal.CursorFg)
+	}
+	return bar
+}
+
+// plainLines renders an entry that is not a session in rowLines' shape:
+// mark, name and a right-hand note, then a dim second line.
+func (m model) plainLines(mark, name, right, sub string, w int, selected bool) []string {
+	name = ansi.Truncate(name, max(w-ansi.StringWidth(right)-4, 4), "…")
+	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
+	if selected {
+		bar := m.cursorBar()
+		return []string{bar.Render(fit(mark+" "+name+gap+right, w)), bar.Bold(false).Render(fit("  "+sub, w))}
+	}
+	return []string{dim.Render(mark) + " " + fg(pal.Text).Render(name) + gap + dim.Render(right), "  " + dim.Render(sub)}
 }
 
 // rowLines renders one session as two lines: name, place and age, then what
@@ -236,10 +277,7 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
 
 	if selected {
-		bar := lipgloss.NewStyle().Background(pal.CursorDimBg).Foreground(pal.CursorDimFg).Bold(true)
-		if !m.blurred {
-			bar = bar.Background(pal.CursorBg).Foreground(pal.CursorFg)
-		}
+		bar := m.cursorBar()
 		return []string{
 			bar.Render(fit(mark+" "+name+gap+right, w)),
 			bar.Bold(false).Render(fit("  "+sub, w)),
@@ -418,9 +456,10 @@ func (m model) helpBox() []string {
 	), section("act",
 		entry{"enter", "type into the session"},
 		entry{"ctrl+[", "back to the list"},
-		entry{"x", "stop (background)"},
+		entry{"x", "stop, close or unpin"},
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},
+		entry{"t", "new terminal in project"},
 	)...)
 	right := section("digest",
 		entry{"d", "show / hide digests"},
@@ -437,7 +476,7 @@ func (m model) helpBox() []string {
 		entry{"q", "detach, Q quits"},
 	)...)
 	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
-		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle")
+		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle  $ terminal")
 
 	const col = 40
 	// Side by side when the pane is wide enough, one column under the other
@@ -463,13 +502,21 @@ func (m model) helpBox() []string {
 }
 
 func (m model) confirmBox() []string {
+	w := min(m.w-4, 56)
+	for _, e := range m.ordered() {
+		if e.kind == terminalEntry && e.key() == m.confirm {
+			body := []string{bold.Foreground(pal.Text).Render("Close terminal " + e.term.Title + "?")}
+			body = append(body, wrap(dim.Render("What runs in it is killed."), w-4)...)
+			body = append(body, "", red.Render("y")+dim.Render(" close   ")+dim.Render("any other key cancels"))
+			return box("close terminal", "", body, w, len(body)+2, true)
+		}
+	}
 	name := m.confirm
 	for _, r := range m.rows {
 		if r.SessionID == m.confirm {
 			name = r.Name
 		}
 	}
-	w := min(m.w-4, 56)
 	body := []string{bold.Foreground(pal.Text).Render("Stop " + name + "?")}
 	body = append(body, wrap(dim.Render("Its conversation is kept, and claude attach brings it back."), w-4)...)
 	body = append(body, "", red.Render("y")+dim.Render(" stop   ")+dim.Render("any other key cancels"))
@@ -527,7 +574,7 @@ func (m model) statusBar() string {
 	sep := base.Render(" │ ")
 	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
 
-	keys := "↵ type · ^[ back · / search · n next · c new · ? help "
+	keys := "↵ type · ^[ back · / search · n next · c new · t term · ? help "
 	if m.screen == digestScreen {
 		keys = "[ ] older/newer · D write · d sessions · ? help "
 	}

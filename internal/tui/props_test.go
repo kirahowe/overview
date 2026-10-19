@@ -94,10 +94,15 @@ func genQuery(t *rapid.T) string {
 	return strings.Join(terms, rapid.SampledFrom([]string{" ", "  ", "\t"}).Draw(t, "sep"))
 }
 
+// sessionList is buildList with sessions only.
+func sessionList(rows []fleet.Row, query string, project func(string) string, host func(fleet.Row) (string, bool)) []section {
+	return buildList(rows, nil, nil, query, project, host)
+}
+
 func ids(secs []section) []string {
 	var out []string
-	for _, r := range flatten(secs) {
-		out = append(out, r.SessionID)
+	for _, e := range flatten(secs) {
+		out = append(out, e.key())
 	}
 	return out
 }
@@ -165,7 +170,7 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 		if rapid.Bool().Draw(t, "qupper") {
 			q = strings.ToUpper(q)
 		}
-		got := ids(buildList(rows, q, fakeProject, fakeHost))
+		got := ids(sessionList(rows, q, fakeProject, fakeHost))
 		sort.Strings(want)
 		sort.Strings(got)
 		if strings.Join(want, ",") != strings.Join(got, ",") {
@@ -176,18 +181,19 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 
 func TestPropSectionsHoldTheRightRows(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		secs := buildList(genRows(t), genQuery(t), fakeProject, fakeHost)
+		secs := sessionList(genRows(t), genQuery(t), fakeProject, fakeHost)
 		seen := map[string]bool{}
 		var prev *section
 		for i := range secs {
 			s := &secs[i]
-			if len(s.Rows) == 0 {
+			if len(s.Entries) == 0 {
 				t.Fatalf("empty section %q", s.Title)
 			}
 			if s.NeedsYou && (i != 0 || s.Title != needsYouTitle) {
 				t.Fatalf("needs-you section at %d titled %q, want first and %q", i, s.Title, needsYouTitle)
 			}
-			for j, r := range s.Rows {
+			for j, e := range s.Entries {
+				r := e.row
 				if seen[r.SessionID] {
 					t.Fatalf("%s appears twice", r.SessionID)
 				}
@@ -205,7 +211,7 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 				if j == 0 {
 					continue
 				}
-				p := s.Rows[j-1]
+				p := s.Entries[j-1].row
 				switch {
 				case s.NeedsYou:
 					if p.Since.After(r.Since) || (p.Since.Equal(r.Since) && p.SessionID >= r.SessionID) {
@@ -238,12 +244,12 @@ func TestPropIndependentOfInputOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, q := genRows(t), genQuery(t)
 		shuffled := rapid.Permutation(rows).Draw(t, "perm")
-		a := buildList(rows, q, fakeProject, fakeHost)
-		b := buildList(shuffled, q, fakeProject, fakeHost)
+		a := sessionList(rows, q, fakeProject, fakeHost)
+		b := sessionList(shuffled, q, fakeProject, fakeHost)
 		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
 			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
 		}
-		if !reflect.DeepEqual(ids(a), ids(buildList(rows, q, fakeProject, fakeHost))) {
+		if !reflect.DeepEqual(ids(a), ids(sessionList(rows, q, fakeProject, fakeHost))) {
 			t.Fatal("not deterministic")
 		}
 	})
@@ -259,7 +265,7 @@ func TestPropEmptyQueryIsEverything(t *testing.T) {
 				want++
 			}
 		}
-		if got := len(ids(buildList(rows, q, fakeProject, fakeHost))); got != want {
+		if got := len(ids(sessionList(rows, q, fakeProject, fakeHost))); got != want {
 			t.Fatalf("got %d rows, want %d", got, want)
 		}
 	})
@@ -270,10 +276,10 @@ func TestPropLongerQueryNeverAddsRows(t *testing.T) {
 		rows, q := genRows(t), genQuery(t)
 		extra := rapid.SampledFrom([]string{"a", "x", "e", " fix", " ", "  api", "\tzz"}).Draw(t, "extra")
 		base := map[string]bool{}
-		for _, id := range ids(buildList(rows, q, fakeProject, fakeHost)) {
+		for _, id := range ids(sessionList(rows, q, fakeProject, fakeHost)) {
 			base[id] = true
 		}
-		for _, id := range ids(buildList(rows, q+extra, fakeProject, fakeHost)) {
+		for _, id := range ids(sessionList(rows, q+extra, fakeProject, fakeHost)) {
 			if !base[id] {
 				t.Fatalf("%q matches %s but %q does not", q+extra, id, q)
 			}
@@ -292,14 +298,14 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 			{LastPrompt: a, Name: b},
 		} {
 			r.SessionID = "x"
-			if len(buildList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost)) != 0 {
+			if len(sessionList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost)) != 0 {
 				t.Fatalf("%q matched across fields %q|%q", term, a, b)
 			}
 		}
 		// Whitespace splits terms, so a "term" with a space is two terms and
 		// each may match a different field.
 		r := fleet.Row{SessionID: "x", Title: a, LastPrompt: b}
-		if len(buildList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost)) != 1 {
+		if len(sessionList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost)) != 1 {
 			t.Fatalf("%q %q should match as two terms", a, b)
 		}
 	})
@@ -311,7 +317,7 @@ func TestMatchingIsPerFieldAndCaseInsensitive(t *testing.T) {
 		"billing": true, "AUTH": true, "fix auth": true, "auth billing": true,
 		"authrotate": false, "fixauth": false, "keys fix": true, "nope": false,
 	} {
-		got := len(buildList([]fleet.Row{r}, q, fakeProject, fakeHost)) == 1
+		got := len(sessionList([]fleet.Row{r}, q, fakeProject, fakeHost)) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}
@@ -520,6 +526,282 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		}
 		if mv != (shift{to: want.ID, from: self.Window, size: size, fix: beside > 2}) {
 			t.Fatalf("plan %+v for want %s, list %+v, %d in its window", mv, want.ID, self, beside)
+		}
+	})
+}
+
+// genTerms draws terminals in distinct windows, in projects named like the
+// rows' (fakeProject takes the last path element).
+func genTerms(t *rapid.T) []terminal {
+	n := rapid.IntRange(0, 6).Draw(t, "terms")
+	wins := rapid.SliceOfNDistinct(rapid.IntRange(0, 30), n, n, rapid.ID[int]).Draw(t, "wins")
+	out := make([]terminal, n)
+	for i, w := range wins {
+		out[i] = terminal{
+			Window:  fmt.Sprintf("@%d", w),
+			Pane:    fmt.Sprintf("%%%d", 100+w),
+			Project: rapid.SampledFrom(cwds).Draw(t, "tproject"),
+			Title:   rapid.SampledFrom([]string{"zsh", "node", "vite, node", "make"}).Draw(t, "title"),
+			Path:    rapid.SampledFrom([]string{"/w/alpha/web", "/x/api", "/"}).Draw(t, "path"),
+		}
+	}
+	return out
+}
+
+func genPinned(t *rapid.T) []string {
+	return rapid.SliceOfDistinct(rapid.SampledFrom([]string{"/w/alpha", "/w/delta", "/w/Beta", "/p/omega", "/w/gamma"}), rapid.ID[string]).Draw(t, "pinned")
+}
+
+// With no query, every session but the orchestrator, every terminal and
+// every pinned project shows exactly once: a pinned project as a
+// placeholder exactly when no session or terminal is in it. A project's
+// terminals come after its sessions, by window number, and a placeholder
+// is alone in its section.
+func TestPropEveryEntryShowsOnce(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
+		secs := buildList(rows, terms, pinned, "", fakeProject, fakeHost)
+		count := map[string]int{}
+		for _, s := range secs {
+			sawTerm := false
+			for j, e := range s.Entries {
+				count[e.key()]++
+				switch e.kind {
+				case terminalEntry:
+					if s.NeedsYou || s.Away || s.Title != fakeProject(e.term.Project) {
+						t.Fatalf("terminal %s (project %q) in section %q", e.key(), e.term.Project, s.Title)
+					}
+					if sawTerm && !windowLess(s.Entries[j-1].term.Window, e.term.Window) {
+						t.Fatalf("terminals out of order in %q", s.Title)
+					}
+					sawTerm = true
+				case projectEntry:
+					if len(s.Entries) != 1 || s.Title != fakeProject(e.project) {
+						t.Fatalf("placeholder %s in %+v", e.key(), s)
+					}
+				case sessionEntry:
+					if sawTerm {
+						t.Fatalf("session %s after a terminal in %q", e.key(), s.Title)
+					}
+				}
+			}
+		}
+		used := map[string]bool{}
+		for _, r := range rows {
+			if r.Name != fleet.OrchestratorName {
+				used[fakeProject(r.Cwd)] = true
+				if count[r.SessionID] != 1 {
+					t.Fatalf("session %s shows %d times", r.SessionID, count[r.SessionID])
+				}
+			}
+		}
+		for _, tm := range terms {
+			used[fakeProject(tm.Project)] = true
+			if count[tm.Window] != 1 {
+				t.Fatalf("terminal %s shows %d times", tm.Window, count[tm.Window])
+			}
+		}
+		// Pinned roots with one name are one project, shown once.
+		holders := map[string]int{}
+		for _, p := range pinned {
+			if count["project:"+p] > 0 {
+				holders[fakeProject(p)]++
+			}
+		}
+		for _, p := range pinned {
+			name := fakeProject(p)
+			if used[name] && count["project:"+p] != 0 {
+				t.Fatalf("pinned %s has entries, yet a placeholder", p)
+			}
+			if !used[name] && holders[name] != 1 {
+				t.Fatalf("pinned %s is empty, and has %d placeholders", p, holders[name])
+			}
+		}
+	})
+}
+
+func TestPropEntriesIndependentOfInputOrder(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
+		a := buildList(rows, terms, pinned, q, fakeProject, fakeHost)
+		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
+			rapid.Permutation(pinned).Draw(t, "pinned"), q, fakeProject, fakeHost)
+		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
+			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
+		}
+	})
+}
+
+// A search shows a placeholder only when every term is in its project's
+// name, and never brings back a project with entries as a placeholder.
+func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
+		all := map[string]bool{}
+		for _, id := range ids(buildList(rows, terms, pinned, "", fakeProject, fakeHost)) {
+			all[id] = true
+		}
+		for _, e := range flatten(buildList(rows, terms, pinned, q, fakeProject, fakeHost)) {
+			if e.kind != projectEntry {
+				continue
+			}
+			if !all[e.key()] {
+				t.Fatalf("%q shows placeholder %s that the full list lacks", q, e.key())
+			}
+			name := strings.ToLower(fakeProject(e.project))
+			for _, w := range strings.Fields(strings.ToLower(q)) {
+				if !strings.Contains(name, w) {
+					t.Fatalf("%q shows the placeholder for %q", q, name)
+				}
+			}
+		}
+	})
+}
+
+func TestTerminalSearch(t *testing.T) {
+	term := terminal{Window: "@4", Pane: "%9", Project: "/w/shop", Title: "node", Path: "/x/shop/web"}
+	for q, want := range map[string]bool{
+		"": true, "shop": true, "NODE": true, "web": true, "node web": true, "shop/web": true,
+		"nodeweb": false, "zsh": false, "terminal": false,
+	} {
+		got := len(buildList(nil, []terminal{term}, nil, q, fakeProject, fakeHost)) == 1
+		if got != want {
+			t.Errorf("%q: got %v want %v", q, got, want)
+		}
+	}
+}
+
+func TestCountsSkipTerminalsAndPlaceholders(t *testing.T) {
+	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/a"}, State: fleet.Working}
+	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, "", fakeProject, fakeHost)
+	if need, working, idle := counts(secs); need != 0 || working != 1 || idle != 0 {
+		t.Fatalf("counts %d %d %d", need, working, idle)
+	}
+}
+
+// genPanes draws a tmux listing: panes in a few windows of the view's
+// session "ov" and of another, with the list, the holder, attaches and
+// claude ttys among them.
+func genPanes(t *rapid.T) []tmux.Pane {
+	n := rapid.IntRange(0, 10).Draw(t, "panes")
+	panes := make([]tmux.Pane, n)
+	for i := range panes {
+		panes[i] = tmux.Pane{
+			ID:      fmt.Sprintf("%%%d", i),
+			TTY:     fmt.Sprintf("ttys%03d", i),
+			Session: rapid.SampledFrom([]string{"ov", "ov", "ov", "other"}).Draw(t, "session"),
+			Window:  fmt.Sprintf("@%d", rapid.IntRange(0, 4).Draw(t, "window")),
+			Command: rapid.SampledFrom([]string{"zsh", "-zsh", "node", "claude", "vim", ""}).Draw(t, "command"),
+			Path:    rapid.SampledFrom([]string{"/w/a", "/w/a/sub", "/w/b", ""}).Draw(t, "path"),
+			Project: rapid.SampledFrom([]string{"", "", "/w/p"}).Draw(t, "project"),
+			Attach:  rapid.SampledFrom([]string{"", "", "", "bg1"}).Draw(t, "attach"),
+		}
+	}
+	return panes
+}
+
+// terminals lists exactly the windows of the view's session that hold a
+// pane besides the list and none of the holder, an attach, a listed
+// claude, or the pane c just opened. Each comes once, in window order,
+// named after its first such pane.
+func TestPropTerminals(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		panes := genPanes(t)
+		pick := func(label string) string {
+			if len(panes) == 0 || rapid.Bool().Draw(t, label+"none") {
+				return ""
+			}
+			return rapid.SampledFrom(panes).Draw(t, label).ID
+		}
+		self, holder, opened := pick("self"), pick("holder"), pick("opened")
+		claude := map[string]bool{}
+		for _, p := range panes {
+			if rapid.IntRange(0, 4).Draw(t, "claude") == 0 {
+				claude[p.TTY] = true
+			}
+		}
+		root := func(p string) string { return "root:" + p }
+		got := terminals(panes, "ov", self, holder, opened, claude, root)
+
+		want := map[string][]tmux.Pane{}
+		bad := map[string]bool{}
+		for _, p := range panes {
+			if p.Session != "ov" || p.ID == self {
+				continue
+			}
+			want[p.Window] = append(want[p.Window], p)
+			if p.ID == holder || p.Attach != "" || claude[p.TTY] || p.ID == opened {
+				bad[p.Window] = true
+			}
+		}
+		n := 0
+		for w := range want {
+			if !bad[w] {
+				n++
+			}
+		}
+		if len(got) != n {
+			t.Fatalf("%d terminals, want %d: %+v", len(got), n, got)
+		}
+		for i, tm := range got {
+			ps := want[tm.Window]
+			if len(ps) == 0 || bad[tm.Window] {
+				t.Fatalf("%s is not a terminal: %+v", tm.Window, ps)
+			}
+			if i > 0 && !windowLess(got[i-1].Window, tm.Window) {
+				t.Fatalf("out of order: %s then %s", got[i-1].Window, tm.Window)
+			}
+			first := ps[0]
+			wantProject := first.Project
+			if wantProject == "" {
+				wantProject = root(first.Path)
+			}
+			if tm.Pane != first.ID || tm.Path != first.Path || tm.Project != wantProject || tm.Title != termTitle(ps) {
+				t.Fatalf("terminal %+v from panes %+v", tm, ps)
+			}
+		}
+	})
+}
+
+func TestTermTitle(t *testing.T) {
+	p := func(cmds ...string) []tmux.Pane {
+		var out []tmux.Pane
+		for _, c := range cmds {
+			out = append(out, tmux.Pane{Command: c})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		panes []tmux.Pane
+		want  string
+	}{
+		{p("zsh"), "zsh"},
+		{p("-zsh", "bash"), "zsh"},
+		{p("zsh", "node"), "node"},
+		{p("node", "zsh", "vite", "node"), "node, vite"},
+		{p(""), "shell"},
+		{nil, "shell"},
+	} {
+		if got := termTitle(c.panes); got != c.want {
+			t.Errorf("%v: %q, want %q", c.panes, got, c.want)
+		}
+	}
+}
+
+// stuck moves the cursor to the window the session was in only when the
+// session has left it and the window is listed as a terminal.
+func TestPropStuck(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), "", fakeProject, fakeHost))
+		win := rapid.SampledFrom([]string{"", "@1", "@2", "@7"}).Draw(t, "win")
+		still := rapid.Bool().Draw(t, "still")
+		key, ok := stuck(win, still, es)
+		isTerm := false
+		for _, e := range es {
+			isTerm = isTerm || (e.kind == terminalEntry && e.term.Window == win)
+		}
+		if ok != (win != "" && !still && isTerm) || (ok && key != win) {
+			t.Fatalf("stuck(%q, %v) = %q, %v; terminal there %v", win, still, key, ok, isTerm)
 		}
 	})
 }

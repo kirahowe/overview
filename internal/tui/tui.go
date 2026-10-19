@@ -39,10 +39,11 @@ type (
 	tickMsg  time.Time
 	frameMsg time.Time
 	rowsMsg  struct {
-		rows  []fleet.Row
-		ttys  map[int]string
-		hosts map[int]host
-		err   error
+		rows   []fleet.Row
+		ttys   map[int]string
+		hosts  map[int]host
+		pinned []string
+		err    error
 	}
 	digestMsg struct {
 		d   fleet.Digest
@@ -64,15 +65,16 @@ type model struct {
 	rows    []fleet.Row
 	ttys    map[int]string
 	hosts   map[int]host // interactive sessions with no terminal, by pid
+	pinned  []string     // the pinned projects' roots
 	rowsErr error
 	loaded  bool
 
 	screen    screen
-	sel       string // session id under the cursor, kept across refreshes
+	sel       string // the key of the entry under the cursor, kept across refreshes
 	listTop   int    // first list line shown, kept so clicks do not shift it
 	filter    string
 	filtering bool
-	confirm   string // session id waiting on a yes to stop it
+	confirm   string // the key of a session to stop or a terminal to close, waiting on a yes
 	help      bool
 	frame     int
 
@@ -207,7 +209,7 @@ func (m model) refresh() tea.Msg {
 	rows, err := m.home.Rows()
 	out, _ := psTable()
 	ttys, hosts := places(parseProcs(string(out)), rows)
-	return rowsMsg{rows, ttys, hosts, err}
+	return rowsMsg{rows, ttys, hosts, m.home.Projects(), err}
 }
 
 func (m model) runDigest() tea.Msg {
@@ -222,7 +224,18 @@ func (m model) say(note string) model {
 
 // sections is the list as shown, with the filter applied.
 func (m model) sections() []section {
-	return buildList(m.rows, m.filter, m.projects.name, m.hostOf)
+	return buildList(m.rows, m.terminals(), m.pinned, m.filter, m.projects.name, m.hostOf)
+}
+
+// terminals are the windows of the view's session that run no session.
+func (m model) terminals() []terminal {
+	claude := map[string]bool{}
+	for _, r := range m.rows {
+		if tty := m.ttys[r.PID]; tty != "" && !r.Background() {
+			claude[tty] = true
+		}
+	}
+	return terminals(m.panes, m.session, m.self, m.holder, m.opened.ID, claude, m.projects.root)
 }
 
 // hostOf names the app a session runs inside, for one that has no terminal.
@@ -235,20 +248,20 @@ func (m model) hostOf(r fleet.Row) (string, bool) {
 }
 
 // ordered is the list flattened in the order the cursor walks it.
-func (m model) ordered() []fleet.Row { return flatten(m.sections()) }
+func (m model) ordered() []entry { return flatten(m.sections()) }
 
-// selected returns the row under the cursor and its place in rows, falling
-// back to the first row when the selected session has gone.
-func (m model) selected(rows []fleet.Row) (fleet.Row, int, bool) {
-	for i, r := range rows {
-		if r.SessionID == m.sel {
-			return r, i, true
+// selected returns the entry under the cursor and its place in es, falling
+// back to the first entry when the selected one has gone.
+func (m model) selected(es []entry) (entry, int, bool) {
+	for i, e := range es {
+		if e.key() == m.sel {
+			return e, i, true
 		}
 	}
-	if len(rows) == 0 {
-		return fleet.Row{}, -1, false
+	if len(es) == 0 {
+		return entry{}, -1, false
 	}
-	return rows[0], 0, true
+	return es[0], 0, true
 }
 
 // printable cleans typed or pasted filter text: tabs become spaces and other
@@ -265,42 +278,74 @@ func printable(s string) string {
 	}, s)
 }
 
-// keepSel puts the cursor on the first row if it is on none that is shown.
+// keepSel puts the cursor on the first entry if it is on none that is
+// shown.
 func (m model) keepSel() model {
-	rows := m.ordered()
-	if len(rows) == 0 {
+	es := m.ordered()
+	if len(es) == 0 || m.shown(m.sel) {
 		return m
 	}
-	for _, r := range rows {
-		if r.SessionID == m.sel {
-			return m
-		}
-	}
-	m.sel, m.confirm = rows[0].SessionID, ""
+	m.sel, m.confirm = es[0].key(), ""
 	return m
 }
 
-// moveTo puts the cursor on the ith row. Moving it also stops showing a
+// moveTo puts the cursor on the ith entry. Moving it also stops showing a
 // pane c started, so the stage follows the cursor again.
-func (m model) moveTo(rows []fleet.Row, i int) model {
-	if len(rows) == 0 {
+func (m model) moveTo(es []entry, i int) model {
+	if len(es) == 0 {
 		return m
 	}
-	i = max(0, min(i, len(rows)-1))
-	if rows[i].SessionID != m.sel {
-		m.sel, m.confirm, m.opened = rows[i].SessionID, "", tmux.Pane{}
+	i = max(0, min(i, len(es)-1))
+	if k := es[i].key(); k != m.sel {
+		m.sel, m.confirm, m.opened = k, "", tmux.Pane{}
+	}
+	return m
+}
+
+// stuck is where the cursor goes when the session it was on had a pane in
+// window win and has none there now: to that window's terminal, if the
+// window is listed as one. Claude may have exited and left a split behind,
+// and the user may be typing in it, so the list must not hop to another
+// window. ok is false when the cursor should stay where it is.
+func stuck(win string, stillThere bool, es []entry) (string, bool) {
+	if win == "" || stillThere {
+		return "", false
+	}
+	for _, e := range es {
+		if e.kind == terminalEntry && e.term.Window == win {
+			return e.key(), true
+		}
+	}
+	return "", false
+}
+
+// stick applies stuck across one update, from the model before it.
+func (m model) stick(before model) model {
+	e, _, ok := before.selected(before.ordered())
+	r, isSession := e.session()
+	if !ok || !isSession {
+		return m
+	}
+	was, _ := before.pane(before.paneOf(r))
+	now, _ := m.pane(m.paneOf(r))
+	if key, ok := stuck(was.Window, now.Window == was.Window, m.ordered()); ok {
+		m.sel = key
 	}
 	return m
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := m
 	next, cmd := m.update(msg)
 	m = next.(model)
+	// Rows and panes come and go: keep the cursor on a shown entry, and in
+	// the window it was in when its session ended there.
+	m = m.stick(before).keepSel()
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
-		row, _, _ := m.selected(m.ordered())
-		_, owners := m.listLines(m.sections(), row.SessionID, 1)
-		m.listTop = m.listStart(owners, row.SessionID, m.boxHeight()-2)
+		e, _, _ := m.selected(m.ordered())
+		_, owners := m.listLines(m.sections(), e.key(), 1)
+		m.listTop = m.listStart(owners, e.key(), m.boxHeight()-2)
 	}
 	m, stage := m.restage()
 	return m, tea.Batch(cmd, stage)
@@ -314,7 +359,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blurred = false
 	case tea.BlurMsg:
 		m.blurred = true
-	case panesTick, panesMsg, stagedMsg, spawnedMsg:
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		return m.handle(m.keyActions(msg))
@@ -342,6 +387,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh, tick())
 	case rowsMsg:
 		m.rows, m.ttys, m.hosts, m.rowsErr, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.err, true
+		if msg.err == nil {
+			m.pinned = msg.pinned
+		}
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.adopt().keepSel()
 	case digestMsg:
@@ -380,8 +428,9 @@ func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 // apply carries out one action. It is the only place input changes the
 // model, and it runs nothing itself: any work comes back as a Cmd.
 func (m model) apply(a action) (model, tea.Cmd) {
-	rows := m.ordered()
-	row, i, ok := m.selected(rows)
+	es := m.ordered()
+	e, i, ok := m.selected(es)
+	row, isSession := e.session()
 	switch a.do {
 	case quit:
 		return m, tea.Quit
@@ -405,10 +454,18 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		}
 		m.help = false
 	case confirmStop:
-		id := m.confirm
+		key := m.confirm
 		m.confirm = ""
+		for _, c := range es {
+			if c.key() != key {
+				continue
+			}
+			if c.kind == terminalEntry && m.mux != nil {
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.self, m.holder, c.term, m.panes, m.spawns)
+			}
+		}
 		for _, r := range m.rows {
-			if r.SessionID == id {
+			if r.SessionID == key {
 				home, l := m.home, r.Live
 				return m.say("stopping " + r.Name + "…"), func() tea.Msg {
 					return doneMsg{"stopped " + l.Name, home.Stop(l)}
@@ -429,15 +486,15 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case refresh:
 		return m, m.refresh
 	case move:
-		return m.moveTo(rows, i+a.n), nil
+		return m.moveTo(es, i+a.n), nil
 	case moveTo:
-		return m.moveTo(rows, a.n), nil
+		return m.moveTo(es, a.n), nil
 	case nextNeedy:
 		// Wraps round the list.
-		for d := 1; d <= len(rows); d++ {
-			j := ((i+a.n*d)%len(rows) + len(rows)) % len(rows)
-			if rows[j].NeedsYou() {
-				return m.moveTo(rows, j), nil
+		for d := 1; d <= len(es); d++ {
+			j := ((i+a.n*d)%len(es) + len(es)) % len(es)
+			if r, ok := es[j].session(); ok && r.NeedsYou() {
+				return m.moveTo(es, j), nil
 			}
 		}
 		return m.say("nothing needs you"), nil
@@ -477,13 +534,13 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		return m.act(row)
+		return m.act(e)
 	case click:
 		double := a.id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
 		m.clickID, m.clickAt = a.id, a.at
-		for j, r := range rows {
-			if r.SessionID == a.id {
-				m = m.moveTo(rows, j)
+		for j, c := range es {
+			if c.key() == a.id {
+				m = m.moveTo(es, j)
 			}
 		}
 		if double {
@@ -491,21 +548,29 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.apply(action{do: open})
 		}
 	case stop:
-		if app, away := m.hostOf(row); ok && away {
-			return m.say(row.Name + " belongs to " + app + ". Close it there."), nil
+		switch {
+		case ok && e.kind == terminalEntry:
+			m.confirm = e.key()
+		case ok && e.kind == projectEntry:
+			home, root, name := m.home, e.project, m.projects.name(e.project)
+			return m, func() tea.Msg { return doneMsg{"unpinned " + name, home.UnpinProject(root)} }
+		case !isSession:
+			return m.say("nothing to stop"), nil
+		default:
+			if app, away := m.hostOf(row); away {
+				return m.say(row.Name + " belongs to " + app + ". Close it there."), nil
+			}
+			if !row.Background() {
+				return m.say("only background sessions can be stopped from here"), nil
+			}
+			m.confirm = row.SessionID
 		}
-		if !ok || !row.Background() {
-			return m.say("only background sessions can be stopped from here"), nil
-		}
-		m.confirm = row.SessionID
 	case newSession:
-		if !ok {
-			// With nothing listed, start where overview itself was started.
-			row = fleet.Row{Live: fleet.Live{Name: "overview", Cwd: m.cwd}}
-		}
-		return m.start(row)
+		return m.start(m.rootOf(e, ok))
+	case newTerminal:
+		return m.openTerminal(m.rootOf(e, ok))
 	case copyID:
-		if !ok {
+		if !isSession {
 			return m, nil
 		}
 		text := row.SessionID
@@ -515,6 +580,21 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m, func() tea.Msg { return copied(text, copyText(text)) }
 	}
 	return m, nil
+}
+
+// rootOf is the root of the project an entry belongs to, where c and t
+// start: a session's, a terminal's, or a pinned project's. With nothing
+// selected it is the project overview was started in.
+func (m model) rootOf(e entry, ok bool) string {
+	switch {
+	case !ok:
+		return m.projects.root(m.cwd)
+	case e.kind == terminalEntry:
+		return e.term.Project
+	case e.kind == projectEntry:
+		return e.project
+	}
+	return m.projects.root(e.row.Cwd)
 }
 
 // now is the clock that stamps mouse input. Tests replace it.
@@ -534,11 +614,22 @@ func copied(text string, err error) tea.Msg {
 	return noteMsg("copied " + text)
 }
 
-// act does what enter means for a row: it moves the focus to the session
-// on the stage. A background session gets an attach pane first. One that
-// runs inside another app brings that app forward, since that is where it
-// is used.
-func (m model) act(row fleet.Row) (model, tea.Cmd) {
+// act does what enter means for an entry: it moves the focus beside the
+// list. A background session gets an attach pane first. One that runs
+// inside another app brings that app forward, since that is where it is
+// used. A pinned project with nothing in it only says how to start one.
+func (m model) act(e entry) (model, tea.Cmd) {
+	switch e.kind {
+	case projectEntry:
+		return m.say("Nothing runs in " + m.projects.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
+	case terminalEntry:
+		if m.mux == nil {
+			return m.say("terminals open only inside overview's tmux"), nil
+		}
+		m.entering = true
+		return m, nil
+	}
+	row := e.row
 	if h, away := m.hosts[row.PID]; away && !row.Background() {
 		if h.Path == "" || m.reveal == nil {
 			return m.say(awayNote(row.Name, h)), nil
@@ -559,24 +650,40 @@ func (m model) act(row fleet.Row) (model, tea.Cmd) {
 		return m.say(m.stageHint(row)), nil
 	}
 	attach := m.home.AttachCmd(row.Live)
-	env := []string{m.home.ClaudeEnv()}
 	return m.say("attaching to " + row.Name + "…"), spawnCmd(m.mux, spawn{kind: spawnAttach, key: row.ID, name: row.Name,
-		session: m.session, dir: row.Cwd, env: env, command: attach.Args})
+		session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach.Args})
 }
 
-// start runs a new claude at the root of row's project, in a window of its
-// own that the stage shows until the session joins the list.
-func (m model) start(row fleet.Row) (model, tea.Cmd) {
-	dir, where := m.projects.root(row.Cwd), m.projects.name(row.Cwd)
+// claudeEnv is what a pane overview starts is given, so a claude in it,
+// started by overview or typed by the user, joins this config directory.
+func (m model) claudeEnv() []string { return []string{m.home.ClaudeEnv()} }
+
+// start runs a new claude at dir, a project's root, in a window of its own
+// that the stage shows until the session joins the list.
+func (m model) start(dir string) (model, tea.Cmd) {
 	if dir == "" {
-		return m.say(row.Name + " has no directory, so there is no project to start in"), nil
+		return m.say("there is no directory to start a session in"), nil
 	}
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
-	env := []string{m.home.ClaudeEnv()}
+	where := m.projects.name(dir)
 	return m.say("starting a session in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnSession, name: "a session in " + where,
-		session: m.session, dir: dir, env: env, command: m.home.NewCmd().Args})
+		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewCmd().Args})
+}
+
+// openTerminal starts tmux's default shell at dir, a project's root, in a
+// window of its own, and the cursor goes to it.
+func (m model) openTerminal(dir string) (model, tea.Cmd) {
+	if dir == "" {
+		return m.say("there is no directory to open a terminal in"), nil
+	}
+	if m.mux == nil {
+		return m.say("terminals open only inside overview's tmux"), nil
+	}
+	where := m.projects.name(dir)
+	return m.say("opening a terminal in " + where + "…"), spawnCmd(m.mux, spawn{kind: spawnTerminal, name: "a terminal in " + where,
+		session: m.session, dir: dir, env: m.claudeEnv()})
 }
 
 // awayNote says where a session that runs inside another app is.

@@ -18,7 +18,7 @@ import (
 var keyPool = []string{
 	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "x", "y", "d", "1", "2", "?",
 	"tab", "l", "h", "r", "D", "ctrl+d", "ctrl+u", " ", "backspace", "down", "up",
-	"[", "]", "c", "z",
+	"[", "]", "c", "t", "z",
 }
 
 var typeable = []string{"a", "e", "o", "r", "b", "f", "w", "x", "A", " ", "u"}
@@ -49,12 +49,12 @@ func checkInvariants(t *rapid.T, m model) {
 	if len(rows) > 0 {
 		found := false
 		for _, r := range rows {
-			found = found || r.SessionID == m.sel
+			found = found || r.key() == m.sel
 		}
 		if !found {
 			t.Fatalf("cursor %q is not on a visible row of %d (filter %q)", m.sel, len(rows), m.filter)
 		}
-		if _, i, ok := m.selected(rows); !ok || rows[i].SessionID != m.sel {
+		if _, i, ok := m.selected(rows); !ok || rows[i].key() != m.sel {
 			t.Fatalf("selected() disagrees with sel %q", m.sel)
 		}
 	}
@@ -66,10 +66,10 @@ func checkInvariants(t *rapid.T, m model) {
 	}
 	seen := map[string]bool{}
 	for _, r := range rows {
-		if seen[r.SessionID] {
-			t.Fatalf("%s listed twice", r.SessionID)
+		if seen[r.key()] {
+			t.Fatalf("%s listed twice", r.key())
 		}
-		seen[r.SessionID] = true
+		seen[r.key()] = true
 	}
 }
 
@@ -102,7 +102,7 @@ func mouseAt(m model, b tea.MouseButton, x, y int, at time.Time) model {
 // shownLine is the screen line of a session's first list line, or -1.
 func shownLine(m model, id string) int {
 	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.SessionID)
+	_, owners := m.listView(m.sections(), cur.key())
 	for i, o := range owners {
 		if o == id {
 			return i + 1
@@ -133,7 +133,7 @@ func TestStateMachine(t *testing.T) {
 			},
 			"refresh": func(t *rapid.T) {
 				r, tt := genStateRows(t)
-				m = update(m, rowsMsg{rows: r, ttys: tt})
+				m = update(m, rowsMsg{rows: r, ttys: tt, pinned: genPinned(t)})
 			},
 			"refresh error": func(t *rapid.T) {
 				m = update(m, rowsMsg{err: fmt.Errorf("claude agents --json: boom")})
@@ -167,7 +167,7 @@ func TestStateMachine(t *testing.T) {
 					// one on it is enter.
 					ref = before
 					cur, _, _ := before.selected(before.ordered())
-					_, owners := before.listView(before.sections(), cur.SessionID)
+					_, owners := before.listView(before.sections(), cur.key())
 					line := y - 1
 					if line < 0 || line >= min(len(owners), lh-2) || owners[line] == "" {
 						break
@@ -175,11 +175,11 @@ func TestStateMachine(t *testing.T) {
 					id := owners[line]
 					rows := before.ordered()
 					for j, r := range rows {
-						if r.SessionID == id {
+						if r.key() == id {
 							ref = ref.moveTo(rows, j)
 						}
 					}
-					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys}) // settles listTop
+					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys, pinned: ref.pinned, err: ref.rowsErr}) // settles listTop
 					if m.sel != id {
 						t.Fatalf("click on %s left the cursor on %s", id, m.sel)
 					}
