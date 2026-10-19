@@ -122,21 +122,33 @@ func listPane(ps []pane) pane {
 	return pane{}
 }
 
-// The built binary, launched in a terminal of its own: the view marks its
-// pane and stands beside the holder, c opens a session window that the list
-// moves into, a split there stays with its window while the cursor is
-// elsewhere, and the list keeps the width it is dragged to. A relaunch with
-// new flags restarts the view in place, and one with the same flags does not.
-func TestOverviewInTmux(t *testing.T) {
+// rig is the built binary launched in a terminal of its own, against a
+// private server, with a fake claude that lists what listing holds.
+type rig struct {
+	ov, term                server
+	bin, dir, listing, fake string
+	config, home, work      string
+	list                    pane
+	holder                  string
+}
+
+// launch builds overview and starts it on two private servers named after
+// tag, then waits for the view and its holder.
+func launch(t *testing.T, tag string) *rig {
+	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	ov := private(t, fmt.Sprintf("ovtest-e2e-%d", os.Getpid()))
-	term := private(t, fmt.Sprintf("ovtest-e2e-term-%d", os.Getpid()))
-
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin", "overview")
-	build := exec.Command("go", "build", "-o", bin, ".")
+	r := &rig{
+		ov:   private(t, fmt.Sprintf("ovtest-e2e-%s%d", tag, os.Getpid())),
+		term: private(t, fmt.Sprintf("ovtest-e2e-term-%s%d", tag, os.Getpid())),
+	}
+	r.dir = t.TempDir()
+	if real, err := filepath.EvalSymlinks(r.dir); err == nil {
+		r.dir = real
+	}
+	r.bin = filepath.Join(r.dir, "bin", "overview")
+	build := exec.Command("go", "build", "-o", r.bin, ".")
 	build.Dir = ".."
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -144,36 +156,47 @@ func TestOverviewInTmux(t *testing.T) {
 
 	// The fake claude lists what the test writes to listing, and as a new
 	// session it just waits, so its pane stays open.
-	listing := filepath.Join(dir, "listing.json")
-	fake := filepath.Join(dir, "claude")
-	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = agents ]; then cat %q 2>/dev/null || echo '[]'; exit 0; fi\nexec sleep 600\n", listing)
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	r.listing = filepath.Join(r.dir, "listing.json")
+	r.fake = filepath.Join(r.dir, "claude")
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = agents ]; then cat %q 2>/dev/null || echo '[]'; exit 0; fi\nexec sleep 600\n", r.listing)
+	if err := os.WriteFile(r.fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	config := filepath.Join(dir, "config")
-	home := filepath.Join(dir, ".claude-e2e")
-	work := filepath.Join(dir, "work")
-	for _, d := range []string{config, home, work} {
+	r.config = filepath.Join(r.dir, "config")
+	r.home = filepath.Join(r.dir, ".claude-e2e")
+	r.work = filepath.Join(r.dir, "work")
+	for _, d := range []string{r.config, r.home, r.work} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(config, "config"), []byte("theme = revdiff\nclaude = "+fake+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.config, "config"), []byte("theme = revdiff\nclaude = "+r.fake+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// The terminal is a pane of the second server. env -u TMUX, since tmux
 	// refuses to attach from inside another tmux.
-	term.must("-f", "/dev/null", "new-session", "-d", "-x", "200", "-y", "50", "-c", work,
-		"env", "-u", "TMUX", bin, "--socket", ov.name, "--config", config, "--home", home)
+	r.term.must("-f", "/dev/null", "new-session", "-d", "-x", "200", "-y", "50", "-c", r.work,
+		"env", "-u", "TMUX", r.bin, "--socket", r.ov.name, "--config", r.config, "--home", r.home)
 
-	var holder string
 	waitFor(t, "the view and its holder", func() (bool, string) {
-		holder, _ = ov.run("show-options", "-qv", "-t", "overview-e2e", "@overview-holder")
-		ok, say := beside(ov.panes(), holder, 0)
-		return ok && holder != "", "holder " + holder + ": " + say
+		r.holder, _ = r.ov.run("show-options", "-qv", "-t", "overview-e2e", "@overview-holder")
+		ok, say := beside(r.ov.panes(), r.holder, 0)
+		return ok && r.holder != "", "holder " + r.holder + ": " + say
 	})
-	list := listPane(ov.panes())
+	r.list = listPane(r.ov.panes())
+	return r
+}
+
+// The built binary, launched in a terminal of its own: the view marks its
+// pane and stands beside the holder, c opens a session window that the list
+// moves into, a split there stays with its window while the cursor is
+// elsewhere, and the list keeps the width it is dragged to. A relaunch with
+// new flags restarts the view in place, and one with the same flags does not.
+func TestOverviewInTmux(t *testing.T) {
+	r := launch(t, "")
+	ov, term, bin, listing, fake := r.ov, r.term, r.bin, r.listing, r.fake
+	config, home, work, list := r.config, r.home, r.work, r.list
 	if clients := ov.must("list-clients", "-F", "#{client_tty}"); clients == "" {
 		t.Fatal("the terminal never attached")
 	}
@@ -300,4 +323,208 @@ func TestOverviewInTmux(t *testing.T) {
 			t.Fatalf("session pane %s went with the restart", s.id)
 		}
 	}
+}
+
+// screen is what the list pane shows.
+func (r *rig) screen() string {
+	out, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+	return out
+}
+
+// press sends keys to the list, one tmux key name each.
+func (r *rig) press(keys ...string) {
+	r.ov.t.Helper()
+	for _, k := range keys {
+		r.ov.must("send-keys", "-t", r.list.id, k)
+	}
+}
+
+// lists makes the fake claude list these session panes, all in dir.
+func (r *rig) lists(t *testing.T, dir string, ps ...pane) {
+	t.Helper()
+	live := []map[string]any{}
+	for i, p := range ps {
+		live = append(live, map[string]any{"pid": p.pid, "cwd": dir, "kind": "interactive",
+			"sessionId": fmt.Sprintf("s-%d", i), "name": fmt.Sprintf("e2e-%d", i), "status": "idle",
+			"startedAt": time.Now().UnixMilli()})
+	}
+	b, _ := json.Marshal(live)
+	if err := os.WriteFile(r.listing, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fresh waits for a pane that before lacks and that satisfies is, and
+// returns it.
+func (r *rig) fresh(t *testing.T, what string, before []pane, is func(pane) bool) pane {
+	t.Helper()
+	old := map[string]bool{}
+	for _, p := range before {
+		old[p.id] = true
+	}
+	var got pane
+	waitFor(t, what, func() (bool, string) {
+		for _, p := range r.ov.panes() {
+			if !old[p.id] && is(p) {
+				got = p
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("panes %+v", r.ov.panes())
+	})
+	return got
+}
+
+func (r *rig) windowOf(id string) string {
+	for _, p := range r.ov.panes() {
+		if p.id == id {
+			return p.window
+		}
+	}
+	return ""
+}
+
+// active is the pane the view's session shows focused.
+func (r *rig) active() string {
+	out, _ := r.ov.run("display-message", "-p", "-t", "=overview-e2e:", "#{pane_id}")
+	return out
+}
+
+// Terminals and pinned projects, end to end: t opens a terminal that is
+// listed under its project and focused. A Claude that exits beside a split
+// leaves the cursor in its window, now a terminal. x and y close a terminal
+// and the list survives. A project pinned in the file, or with a, shows a
+// placeholder, and c there starts a session in it.
+func TestTerminalsAndProjects(t *testing.T) {
+	r := launch(t, "t")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+
+	// A session in work, listed.
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the session in the list", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "e2e-0"), s
+	})
+
+	// t opens a terminal in work's project, listed after the session, with
+	// the list beside it and the keyboard in it.
+	before = r.ov.panes()
+	r.press("t")
+	shell := r.fresh(t, "a terminal window", before, isShell)
+	waitFor(t, "the terminal shown and focused", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), shell.id, 0)
+		return ok && r.active() == shell.id, say + ", active " + r.active()
+	})
+	if got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-project"); got != r.work {
+		t.Fatalf("the terminal's project is %q, want %q", got, r.work)
+	}
+	waitFor(t, "the terminal under the session", func() (bool, string) {
+		s := r.screen()
+		i, j := strings.Index(s, "e2e-0"), strings.Index(s, "$ ")
+		return i >= 0 && j > i && strings.Contains(s[j:], "terminal"), s
+	})
+
+	// The session's window gets a split, and then its claude exits. The
+	// cursor stays in that window, now a terminal, so the list stays put.
+	r.ov.must("select-pane", "-t", r.list.id)
+	r.press("g")
+	waitFor(t, "the list beside the session", func() (bool, string) { return beside(r.ov.panes(), session.id, 0) })
+	split := r.ov.must("split-window", "-d", "-v", "-t", session.id, "-P", "-F", "#{pane_id}", "sleep 600")
+	time.Sleep(700 * time.Millisecond) // the view sees the split
+	r.ov.must("kill-pane", "-t", session.id)
+	r.lists(t, r.work)
+	waitFor(t, "two terminals and no session", func() (bool, string) {
+		s := r.screen()
+		return strings.Count(s, "$ ") == 2 && !strings.Contains(s, "e2e-0"), s
+	})
+	for range 6 { // three seconds: a refresh and some listings
+		if ok, say := beside(r.ov.panes(), split, 0); !ok {
+			t.Fatalf("the list left the split: %s", say)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// x and y on the new terminal close its window. The list was in it,
+	// and survives, beside the terminal before it.
+	r.press("G")
+	waitFor(t, "the list beside the new terminal", func() (bool, string) { return beside(r.ov.panes(), shell.id, 0) })
+	r.press("x")
+	waitFor(t, "the question", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "Close terminal"), s
+	})
+	r.press("y")
+	waitFor(t, "the terminal closed", func() (bool, string) {
+		return r.windowOf(shell.id) == "" && r.windowOf(shell.window) == "", fmt.Sprintf("panes %+v", r.ov.panes())
+	})
+	waitFor(t, "the list beside the split", func() (bool, string) { return beside(r.ov.panes(), split, 0) })
+	if l := listPane(r.ov.panes()); l.id != r.list.id || l.pid != r.list.pid {
+		t.Fatalf("the list is %+v, was %+v", l, r.list)
+	}
+
+	// A project pinned in the file gets a placeholder, and c there starts
+	// a session in it.
+	proj := filepath.Join(r.dir, "aproj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(r.home, "overview"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.home, "overview", "projects"), []byte(proj+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the placeholder", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "no sessions") && strings.Contains(s, "x unpin"), s
+	})
+	r.press("g") // aproj sorts before work
+	waitFor(t, "the holder for the placeholder", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
+	before = r.ov.panes()
+	r.press("c")
+	started := r.fresh(t, "a session in the pinned project", before, isSleep)
+	if got := r.ov.must("show-options", "-wqv", "-t", started.id, "@overview-project"); got != proj {
+		t.Fatalf("the session's project is %q, want %q", got, proj)
+	}
+	waitFor(t, "the list beside it", func() (bool, string) { return beside(r.ov.panes(), started.id, 0) })
+
+	// a, then a typed path, pins another project, and the cursor goes to
+	// its placeholder.
+	other := filepath.Join(r.dir, "zother")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.ov.must("select-pane", "-t", r.list.id)
+	// Wide enough to show the temporary directory's long path.
+	r.ov.must("resize-pane", "-t", r.list.id, "-x", "170")
+	r.press("a")
+	waitFor(t, "the picker", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "add project"), s
+	})
+	r.ov.must("send-keys", "-t", r.list.id, "-l", filepath.Join(r.dir, "zoth"))
+	waitFor(t, "the match", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "zother"), s
+	})
+	r.press("Tab")
+	waitFor(t, "the completion", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "zother/"), s
+	})
+	r.press("Enter")
+	waitFor(t, "the pinned project", func() (bool, string) {
+		b, _ := os.ReadFile(filepath.Join(r.home, "overview", "projects"))
+		return strings.Contains(string(b), other+"\n"), string(b)
+	})
+	waitFor(t, "its placeholder, selected, with the holder", func() (bool, string) {
+		s := r.screen()
+		ok, say := beside(r.ov.panes(), r.holder, 0)
+		return ok && strings.Count(s, "no sessions") == 1 && strings.Contains(s, "zother"), say + "\n" + s
+	})
 }
