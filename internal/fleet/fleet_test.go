@@ -197,15 +197,37 @@ func TestOrchestratorCommandLine(t *testing.T) {
 	if _, err := cronFor(time.Minute); err == nil {
 		t.Fatal("a one minute tick was accepted")
 	}
-	args, err := Home{Dir: "/h/.claude-kira", OrchestratorDir: "/p/orchestrator"}.orchestratorArgs(time.Hour, "sonnet", "")
+	h := Home{Dir: "/h/.claude-kira", OrchestratorDir: "/p/orchestrator", Exe: "/b/overview"}
+	args, err := h.orchestratorArgs(time.Hour, "sonnet", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"--bg", "--name overview-orchestrator", "--permission-mode dontAsk",
-		`"Bash(overview *)"`, `"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`", `"Edit(//p/orchestrator/digest.md)"`} {
+		`"Bash(/b/overview activity --home /h/.claude-kira)"`, `"Bash(/b/overview publish --home /h/.claude-kira digest.md)"`,
+		`"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`", `"Edit(//p/orchestrator/digest.md)"`} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command line lacks %s:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Bash(overview *)") {
+		t.Fatalf("the orchestrator may run any overview command:\n%s", joined)
+	}
+	// Both prompts give the commands, which carry the home, and the
+	// config directory when it is not the default.
+	h.ConfigDir = "/c/my config"
+	for _, resume := range []string{"", "sess-1"} {
+		args, err := h.orchestratorArgs(time.Hour, "sonnet", resume)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt := args[len(args)-1]
+		for _, want := range []string{"`/b/overview activity --home /h/.claude-kira --config '/c/my config'`",
+			"`/b/overview publish --home /h/.claude-kira --config '/c/my config' digest.md`",
+			"`/b/overview sessions --home /h/.claude-kira --config '/c/my config'`"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("resume %q: the prompt lacks %s:\n%s", resume, want, prompt)
+			}
 		}
 	}
 }

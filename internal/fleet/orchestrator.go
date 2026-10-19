@@ -146,28 +146,62 @@ func cronFor(every time.Duration) (string, error) {
 	}
 }
 
+// overviewCmd is the shell command line that runs overview's sub command
+// against this home, with the config directory when it is not the
+// default, and then args.
+func (h Home) overviewCmd(sub string, args ...string) string {
+	exe := h.Exe
+	if exe == "" {
+		exe = "overview"
+	}
+	words := []string{exe, sub, "--home", h.Dir}
+	if h.ConfigDir != "" {
+		words = append(words, "--config", h.ConfigDir)
+	}
+	words = append(words, args...)
+	for i, w := range words {
+		words[i] = shellQuote(w)
+	}
+	return strings.Join(words, " ")
+}
+
+// shellQuote quotes s for a POSIX shell when it needs it.
+func shellQuote(s string) string {
+	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./:@%+=,", r))
+	}) < 0
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // orchestratorArgs is the command line that starts the orchestrator as a
 // background session, or brings back the conversation `resume` names. It may
-// run the overview command, schedule its own ticks, read this home's
-// transcripts and write its draft digest. With dontAsk as the permission
-// mode, anything else is refused without a prompt, since nobody is attached
-// to answer one.
+// run the overview commands its prompt gives, which name this home, schedule
+// its own ticks, read this home's transcripts and write its draft digest.
+// With dontAsk as the permission mode, anything else is refused without a
+// prompt, since nobody is attached to answer one.
 func (h Home) orchestratorArgs(every time.Duration, model, resume string) ([]string, error) {
 	cron, err := cronFor(every)
 	if err != nil {
 		return nil, err
 	}
+	activity, publish, sessions := h.overviewCmd("activity"), h.overviewCmd("publish", "digest.md"), h.overviewCmd("sessions")
 	settings, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": []string{
-		"Bash(overview *)", "CronCreate", "CronList", "CronDelete",
+		"Bash(" + activity + ")", "Bash(" + publish + ")", "Bash(" + sessions + ")",
+		"CronCreate", "CronList", "CronDelete",
 		"Read(/" + h.Dir + "/projects/**)", "Read(/" + h.Dir + "/overview/**)",
 		"Edit(/" + h.OrchestratorDir + "/digest.md)",
 	}}})
+	commands := fmt.Sprintf(" Your overview commands, to run exactly as written: `%s` prints the activity extract, "+
+		"`%s` publishes digest.md, and `%s` lists the sessions.", activity, publish, sessions)
 	prompt := fmt.Sprintf("Start orchestrating. Your tick schedule is the cron expression `%s`. "+
-		"Schedule it as AGENTS.md describes, then run the first tick now.", cron)
+		"Schedule it as AGENTS.md describes, then run the first tick now.", cron) + commands
 	args := []string{"--bg"}
 	if resume != "" {
 		prompt = fmt.Sprintf("You were restarted, and the restart erased your tick schedule. "+
-			"It is the cron expression `%s`. Schedule it again, then run a tick now.", cron)
+			"It is the cron expression `%s`. Schedule it again, then run a tick now.", cron) + commands
 		args = append(args, "--resume", resume)
 	}
 	return append(args, "--name", OrchestratorName, "--model", model,

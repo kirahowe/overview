@@ -23,6 +23,10 @@ type Home struct {
 	// User is the user's home directory, which short directory names in
 	// a digest are relative to.
 	User string
+	// Exe is the overview binary, and ConfigDir overview's config
+	// directory when it is not the default, "" when it is. The
+	// orchestrator runs overview with them.
+	Exe, ConfigDir string
 }
 
 // ResolveHome finds the config directory that spec names, as --home or the

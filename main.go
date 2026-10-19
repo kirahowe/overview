@@ -217,8 +217,8 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 	return fmt.Errorf("unknown orchestrator action %q", action)
 }
 
-// resolveHome finds the config directory cfg names and gives it the claude
-// and orchestrator directory to run with.
+// resolveHome finds the config directory cfg names and gives it the claude,
+// orchestrator directory and overview command to run with.
 func resolveHome(cfg config.Config, orchDir string) (fleet.Home, error) {
 	dir, err := fleet.ResolveHome(cfg.Home, cfg.User)
 	if err != nil {
@@ -227,7 +227,15 @@ func resolveHome(cfg config.Config, orchDir string) (fleet.Home, error) {
 	if orchDir == "" {
 		orchDir = fleet.DefaultOrchestratorDir()
 	}
-	return fleet.Home{Dir: dir, Claude: cfg.Claude, OrchestratorDir: orchDir, User: cfg.User}, nil
+	exe, err := os.Executable()
+	if err != nil {
+		return fleet.Home{}, err
+	}
+	h := fleet.Home{Dir: dir, Claude: cfg.Claude, OrchestratorDir: orchDir, User: cfg.User, Exe: exe}
+	if cfg.Dir != config.DefaultDir(cfg.User) {
+		h.ConfigDir = cfg.Dir
+	}
+	return h, nil
 }
 
 // themes lists the themes, marking the one in use, or prints the named one
