@@ -1,0 +1,14 @@
+diff --git a/m.c b/m.c
+index 822f004..9577595 100644
+--- a/m.c
++++ b/m.c
+@@ -5,7 +5,8 @@ int main() {
+ int other() {
+   b();
+   c();
+-  d();
++  D();
+   e();
+   f();
+ }
++-- x
