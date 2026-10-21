@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,8 +13,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"overview/internal/config"
+	"overview/internal/diffview"
 	"overview/internal/fleet"
+	"overview/internal/review"
+	"overview/internal/tmux"
 	"overview/internal/tui"
 )
 
@@ -33,6 +40,12 @@ const usage = `overview: watch the Claude Code sessions of one config directory
                               tmux with every setting as a flag (internal)
   overview stage              the pane the view draws details into (internal)
   overview themes [name]      list the themes, or print one as a file to edit
+  overview review notes|reply|addressed --store <file> ...
+                              read and answer the notes of a review (for
+                              the agent; see overview review help)
+  overview review view --store <file> --dir <dir> [flags]
+                              the review itself, which the view starts in
+                              a pane under a session (internal)
 
 Flags:
   --home <name|path>   Claude Code config directory; "work" means
@@ -68,6 +81,11 @@ func main() {
 		return
 	case "stage":
 		tui.Stage()
+		return
+	case "review":
+		if err := reviewCmd(args); err != nil {
+			fail(err)
+		}
 		return
 	}
 
@@ -137,7 +155,7 @@ func main() {
 		var theme tui.Theme
 		if theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
 			err = tui.Run(tui.View{Home: home, Model: *model, Theme: theme,
-				Socket: *socketPath, Session: *session, User: user, Cwd: *viewCwd})
+				Socket: *socketPath, Session: *session, User: user, Cwd: *viewCwd, ThemeArg: cfg.Theme, ConfigDir: cfg.Dir})
 		}
 	case "sessions":
 		err = printSessions(home, cfg.User)
@@ -289,6 +307,49 @@ func printSessions(home fleet.Home, user string) error {
 		fmt.Printf("%-8s %-22s %-28s %6s  %s\n", r.State, r.Name, fleet.ShortDir(r.Cwd, user), tui.Ago(r.Since), tui.Subject(r))
 	}
 	return nil
+}
+
+// reviewCmd runs overview review: the viewer, given every setting as a
+// flag by the view that starts it, or one of the agent's commands.
+func reviewCmd(args []string) error {
+	if len(args) == 0 || args[0] != "view" {
+		return review.Command(args, os.Stdin, os.Stdout, time.Now, rand.Reader)
+	}
+	fs := flag.NewFlagSet("overview review view", flag.ExitOnError)
+	store := fs.String("store", "", "")
+	dir := fs.String("dir", "", "")
+	started := fs.Int64("started", 0, "")
+	transcript := fs.String("transcript", "", "")
+	socket := fs.String("socket-path", "", "")
+	target := fs.String("target", "", "")
+	title := fs.String("title", "", "")
+	theme := fs.String("theme", config.DefaultTheme, "")
+	configDir := fs.String("config", "", "")
+	fs.Parse(args[1:])
+	if *store == "" || *dir == "" {
+		return errors.New("overview review view needs --store and --dir")
+	}
+	th, err := tui.LoadTheme(*theme, *configDir)
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cfg := diffview.Config{Store: *store, Dir: *dir, Transcript: *transcript, Target: *target, Title: *title,
+		Exe: exe, Theme: th, Profile: lipgloss.ColorProfile()}
+	if *started > 0 {
+		cfg.Started = time.Unix(*started, 0)
+	}
+	if *socket == "" {
+		return diffview.Run(cfg, nil)
+	}
+	srv := tmux.At(*socket, "")
+	if self, ok, err := srv.Self(os.Getpid()); err == nil && ok {
+		cfg.Self = self
+	}
+	return diffview.Run(cfg, srv)
 }
 
 func fail(err error) {

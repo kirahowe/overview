@@ -23,8 +23,10 @@ See README.md for behaviour and docs/ for design notes.
   a terminal with the list in it; pinned projects, `c` in one and `a` with
   a typed path and `tab`; the list staying put while a terminal becomes a
   session under the keyboard; and `q` detaching only the terminal it was
-  typed in. It builds only with `-tags e2e`, so the gate skips it; run it
-  after changing launch, the view or tmux handling.
+  typed in; and a review, from `v` through a note sent into a fake
+  session's prompt, the agent's reply and `x` resolving it. It builds only
+  with `-tags e2e`, so the gate skips it; run it after changing launch,
+  the view, tmux handling or reviews.
 - Never point a test or a trial run at the `overview` socket, not even to
   read it. Use `--socket <name>` and `--config <dir>`.
 - Go 1.27 or later, no cgo.

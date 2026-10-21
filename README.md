@@ -114,7 +114,8 @@ terminal, `enter` moves the keyboard into the pane right of the list, and of
 several splits there, the one you used last. `x` stops a background session
 or closes a terminal, and asks first; closing a terminal kills what runs in
 it. `y` copies the attach command. To end a session in another app, close
-it in that app. `c` starts a new session at the root of the selected entry's
+it in that app. `v` reviews the selected session's changes, as the next
+section describes. `c` starts a new session at the root of the selected entry's
 project, or where overview was started when the list is empty, shows it on
 the right and moves the keyboard into it. `t` does the same with a
 terminal. `d` shows the digests,
@@ -154,6 +155,44 @@ set to the config directory it is watching, so they show up in the list.
 Terminals get it too, so a `claude` you type into one shows up as well.
 That is Claude Code's own way to pick a config directory, and the only
 environment variable overview sets or reads.
+
+## Reviewing a session's changes
+
+`v` on a session opens a review of what it changed, in a split under
+the session, and moves the keyboard into it. `v` again, from the list,
+goes back to that review. The review shows the diff side by side when
+the pane is wide enough and inline otherwise, and `m` switches between
+the two. It starts from where the repository was when the session
+started, so the commits the session made are part of it, and `b`
+switches to only the changes not yet committed. It works the same in a
+git repository and a jj one.
+
+You write notes on the diff. `enter` or `c` opens a note on the line
+under the cursor, and `v` there starts a range: move to the range's
+other end and press `enter`. `enter` saves the note, `ctrl+j` starts a
+new line in it and `esc` cancels, asking first when you have written
+something. A note sits under its lines, and `enter` on a note replies
+to it. `e` edits a note or reply you have not sent yet.
+
+`s` sends everything you have not sent yet to the session, as one
+message pasted into its prompt, with the commands the agent answers
+with. That works whether the session is idle or busy: a busy session
+reads the message after its current step. Sending refuses when the
+prompt has a draft in it or the session is showing a question, so it
+never mixes into what you were typing.
+
+The agent answers each note in its thread with `overview review reply`,
+and can say it has dealt with one with `overview review addressed`. Its
+replies appear under your notes as it writes them, and the diff reloads
+as the session works. The list shows how many notes a session has open,
+and `reply` when an answer waits for you. A note is never deleted: `x`
+resolves it, and `x` again reopens it. Only you can do either; nothing
+the agent runs can. `h` shows the resolved notes again.
+
+`z` makes the review taller, then gives it the whole window, then puts
+it back. `?` lists every key, and `q` closes the review. The notes stay
+in `<home>/overview/reviews/`, one file per session, and come back when
+you open the review again.
 
 ## Configuration
 
@@ -227,9 +266,13 @@ The keys are `accent` (focused borders, headings, keys in the help),
 while the list has the keyboard), `cursor-dim-fg` and `cursor-dim-bg` (the
 selected row otherwise), `status-fg` and `status-bg` (the bottom bar),
 `pill-fg` (text on the state badge beside a session's details), `blocked`,
-`asking`, `working`, and
-`code`. An unknown key or a bad colour is an error, so a typo does not
-silently fall back to the default.
+`asking`, `working`,
+`code`, and for reviews `added` and `removed` (the signs and numbers of
+changed lines), `added-bg` and `removed-bg` (their backgrounds),
+`added-word-bg` and `removed-word-bg` (the words that changed), and
+`syntax`, the name of the chroma style that colours code, such as
+`onedark` or `github`. An unknown key, a bad colour or an unknown style
+is an error, so a typo does not silently fall back to the default.
 
 ## Install
 
@@ -271,8 +314,15 @@ to `~/Library/Logs/overview/`.
 - An interrupted turn fires no hook. The view falls back to Claude Code's own
   busy or idle in that case, but a session interrupted while blocked stays
   marked blocked until its next prompt.
-- The view never sends a session a message. It shows you the session's own
-  terminal, and stopping keeps its conversation.
+- The view never sends a session a message, except a review's notes when
+  you press `s`. It shows you the session's own terminal, and stopping
+  keeps its conversation.
+- Only you resolve a note through overview, and the agent has no command
+  for it. A program running as you could still write to the review's
+  file directly.
+- Sending notes reads Claude Code's prompt off the screen to check it is
+  empty. A Claude Code that draws its prompt differently makes sending
+  refuse until overview learns the new look.
 - A terminal is told from a session by its panes: a window with a pane on
   the tty of a listed Claude session is that session's. A Claude typed into
   a terminal turns the terminal into a session once Claude Code lists it,
