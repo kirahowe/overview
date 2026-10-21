@@ -28,6 +28,10 @@ const AttachOption = "@overview-attach"
 // pane option, so the listing says which pane it is.
 const HolderOption = "@overview-holder"
 
+// ReviewOption is the pane option on a review of a session's changes,
+// holding the session's ID.
+const ReviewOption = "@overview-review"
+
 // ViewOption is the pane option on the view's pane that says what it runs:
 // its settings and the binary, so a relaunch can tell a view that is out
 // of date.
@@ -36,10 +40,11 @@ const ViewOption = "@overview-view"
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}" +
-	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}\t#{pane_current_path}"
+	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
+	"\t#{" + ReviewOption + "}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 13
+const paneFields = 14
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -55,12 +60,14 @@ type Pane struct {
 	Attach  string // the pane's AttachOption, "" when unset
 	Holder  bool   // the pane's HolderOption is set
 	View    string // the pane's ViewOption, "" when unset
+	Review  string // the pane's ReviewOption, "" when unset
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
-// its output.
+// its output, and feed does the same with stdin as the command's input.
 type Server struct {
 	run    func(args ...string) (string, error)
+	feed   func(stdin string, args ...string) (string, error)
 	socket string
 }
 
@@ -74,7 +81,7 @@ func At(path, conf string) Server {
 	if conf != "" {
 		base = append(base, "-f", conf)
 	}
-	return Server{socket: path, run: runner(base)}
+	return Server{socket: path, run: runner(base), feed: feeder(base)}
 }
 
 // Named returns the server on the socket that tmux -L name would use, found
@@ -104,8 +111,14 @@ func SocketPath(name string) (string, error) {
 }
 
 func runner(base []string) func(args ...string) (string, error) {
-	return func(args ...string) (string, error) {
+	feed := feeder(base)
+	return func(args ...string) (string, error) { return feed("", args...) }
+}
+
+func feeder(base []string) func(stdin string, args ...string) (string, error) {
+	return func(stdin string, args ...string) (string, error) {
 		cmd := exec.Command("tmux", append(base, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -133,7 +146,7 @@ func ParsePanes(out string) []Pane {
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, List: f[6] == "1",
-			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", View: f[11], Path: f[12],
+			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", View: f[11], Review: f[12], Path: f[13],
 		})
 	}
 	return panes
@@ -221,6 +234,52 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 		return Pane{}, fmt.Errorf("tmux %s: unexpected output %q", args[0], out)
 	}
 	return Pane{ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3], Path: dir}, nil
+}
+
+// Split runs command in a new pane below target, size tall ("40%" or a
+// number of lines), in dir, and focuses it. The pane returned knows its
+// ID, tty, session and window.
+func (s Server) Split(target, dir, size string, env []string, command ...string) (Pane, error) {
+	return s.create([]string{"split-window", "-v", "-l", size, "-t", target}, dir, env, command)
+}
+
+// Resize makes pane size tall, as Split takes it.
+func (s Server) Resize(pane, size string) error {
+	_, err := s.run("resize-pane", "-t", pane, "-y", size)
+	return err
+}
+
+// Zoom toggles whether pane fills its window.
+func (s Server) Zoom(pane string) error {
+	_, err := s.run("resize-pane", "-Z", "-t", pane)
+	return err
+}
+
+// Live takes pane out of copy mode, where a paste would not be
+// bracketed and Enter would not reach the program, and returns what runs
+// there in the foreground and the text it shows, without colours. One
+// tmux call does it all, so the screen is the one the program draws.
+func (s Server) Live(pane string) (command, screen string, err error) {
+	out, err := s.run("copy-mode", "-q", "-t", pane, ";",
+		"display-message", "-p", "-t", pane, "#{pane_current_command}", ";",
+		"capture-pane", "-p", "-t", pane)
+	if err != nil {
+		return "", "", err
+	}
+	command, screen, _ = strings.Cut(out, "\n")
+	return command, screen, nil
+}
+
+// Paste types text into pane as one bracketed paste, then presses Enter.
+// The text goes through stdin, since tmux limits how long a command's
+// arguments may be, into a buffer named buffer that the paste deletes.
+// tmux runs the three commands in order, so nothing typed in between
+// lands inside the message.
+func (s Server) Paste(pane, buffer, text string) error {
+	_, err := s.feed(text, "load-buffer", "-b", buffer, "-", ";",
+		"paste-buffer", "-p", "-d", "-b", buffer, "-t", pane, ";",
+		"send-keys", "-t", pane, "Enter")
+	return err
 }
 
 // Move puts pane list in target's window as a full-height column on the

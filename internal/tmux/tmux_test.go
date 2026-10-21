@@ -17,10 +17,10 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t\"--theme\" \"x\"\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
@@ -28,7 +28,7 @@ func TestParsePanes(t *testing.T) {
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview",
 			View: `"--theme" "x"`, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24,
-			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Path: "/w/app/odd\tdir"},
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -52,6 +52,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Attach:  rapid.SampledFrom([]string{"", "bg1"}).Draw(t, "attach"),
 				Holder:  rapid.Bool().Draw(t, "holder"),
 				View:    rapid.SampledFrom([]string{"", `"--theme" "a b"`}).Draw(t, "view"),
+				Review:  rapid.SampledFrom([]string{"", "5f2c-1d"}).Draw(t, "review"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -63,8 +64,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				}
 				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Path)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -529,4 +530,78 @@ func TestFocused(t *testing.T) {
 	want(other, true)
 	sock.Must("new-window", "-t", "=ov:", "sleep", "300")
 	want(other, false) // its window is no longer the current one
+}
+
+// A review opens in a split under its session's pane, and the paste of a
+// message reaches the pane whole, however long, with Enter after it.
+func TestSplitCaptureAndPaste(t *testing.T) {
+	s := testServer(t)
+	target, err := s.Spawn("ov", "/", nil, "cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	split, err := s.Split(target.ID, "/", "40%", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPaneOption(split.ID, ReviewOption, "sid-1"); err != nil {
+		t.Fatal(err)
+	}
+	panes, err := s.Panes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, p := range panes {
+		if p.ID == split.ID {
+			found = p.Review == "sid-1" && p.Window == target.Window
+		}
+	}
+	if !found {
+		t.Fatalf("the split should be marked and beside its target: %+v", panes)
+	}
+	if err := s.Resize(split.ID, "5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Zoom(split.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Zoom(split.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Live leaves copy mode, where a paste would go in unbracketed.
+	if _, err := s.run("copy-mode", "-t", target.ID); err != nil {
+		t.Fatal(err)
+	}
+	command, _, err := s.Live(target.ID)
+	if err != nil || command != "cat" {
+		t.Fatalf("command %q err %v", command, err)
+	}
+	if out, _ := s.run("display-message", "-p", "-t", target.ID, "#{pane_in_mode}"); strings.TrimSpace(out) != "0" {
+		t.Fatalf("still in copy mode: %q", out)
+	}
+	// More than tmux takes as a command's arguments.
+	long := strings.Repeat("x", 40000)
+	text := "first line\nsecond line " + long[:10] + "\n" + long
+	if err := s.Paste(target.ID, "ovt-msg", text); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := s.run("list-buffers"); strings.Contains(out, "ovt-msg") {
+		t.Fatalf("the buffer should go with the paste: %q", out)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, out, err := s.Live(target.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// cat echoes the typed line, then writes it back after Enter.
+		if strings.Count(out, "second line xxxxxxxxxx") == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the paste never arrived whole:\n%s", out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
