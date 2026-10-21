@@ -22,6 +22,9 @@ func TestBuiltinThemesSetEveryColour(t *testing.T) {
 				t.Errorf("%s leaves %s unset", name, k.key)
 			}
 		}
+		if th.Syntax == "" {
+			t.Errorf("%s leaves syntax unset", name)
+		}
 	}
 	if len(builtinNames()) < 2 {
 		t.Fatalf("built-ins: %v", builtinNames())
@@ -38,6 +41,7 @@ func TestParseThemeErrors(t *testing.T) {
 		"no equals":    "accent #fff",
 		"empty value":  "accent =",
 		"bad base":     "base = nope",
+		"bad syntax":   "syntax = nope",
 	} {
 		if _, err := ParseTheme("x", src, base); err == nil {
 			t.Errorf("%s: %q parsed", name, src)

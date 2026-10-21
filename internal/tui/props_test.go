@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
 	"pgregory.net/rapid"
 
@@ -431,6 +432,7 @@ func TestPropThemeFormatRoundTrips(t *testing.T) {
 		for _, k := range themeKeys {
 			*k.get(&th) = drawColor(t, k.key)
 		}
+		th.Syntax = rapid.SampledFrom(styles.Names()).Draw(t, "syntax")
 		base, _ := builtinTheme(rapid.SampledFrom(builtinNames()).Draw(t, "base"))
 		got, err := ParseTheme("x", th.Format(), base)
 		if err != nil {

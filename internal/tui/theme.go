@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
 
 	"overview/internal/config"
@@ -29,6 +30,14 @@ type Theme struct {
 	StatusFg, StatusBg, PillFg  lipgloss.Color
 	Blocked, Asking, Working    lipgloss.Color
 	Code                        lipgloss.Color
+	// The review's diff: the markers and line numbers of added and
+	// removed lines, their backgrounds, and the stronger backgrounds of
+	// the words that changed within them.
+	Added, Removed             lipgloss.Color
+	AddedBg, RemovedBg         lipgloss.Color
+	AddedWordBg, RemovedWordBg lipgloss.Color
+	// Syntax is the chroma style that colours code in a review.
+	Syntax string
 }
 
 // themeKeys names each colour in a theme file, in the order Format writes
@@ -52,7 +61,17 @@ var themeKeys = []struct {
 	{"asking", func(t *Theme) *lipgloss.Color { return &t.Asking }},
 	{"working", func(t *Theme) *lipgloss.Color { return &t.Working }},
 	{"code", func(t *Theme) *lipgloss.Color { return &t.Code }},
+	{"added", func(t *Theme) *lipgloss.Color { return &t.Added }},
+	{"removed", func(t *Theme) *lipgloss.Color { return &t.Removed }},
+	{"added-bg", func(t *Theme) *lipgloss.Color { return &t.AddedBg }},
+	{"removed-bg", func(t *Theme) *lipgloss.Color { return &t.RemovedBg }},
+	{"added-word-bg", func(t *Theme) *lipgloss.Color { return &t.AddedWordBg }},
+	{"removed-word-bg", func(t *Theme) *lipgloss.Color { return &t.RemovedWordBg }},
 }
+
+// syntaxKey names the theme's chroma style, the one key that is not a
+// colour.
+const syntaxKey = "syntax"
 
 var hexColor = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
@@ -81,6 +100,13 @@ func ParseTheme(name, src string, base Theme) (Theme, error) {
 		delete(kv, "base")
 	}
 	t.Name = name
+	if v, ok := kv[syntaxKey]; ok {
+		if styles.Registry[v] == nil {
+			return Theme{}, fmt.Errorf("theme %s: syntax: no chroma style %q", name, v)
+		}
+		t.Syntax = v
+		delete(kv, syntaxKey)
+	}
 	for _, k := range themeKeys {
 		v, ok := kv[k.key]
 		if !ok {
@@ -104,8 +130,9 @@ func (t Theme) Format() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n", t.Name)
 	for _, k := range themeKeys {
-		fmt.Fprintf(&b, "%-13s = %s\n", k.key, *k.get(&t))
+		fmt.Fprintf(&b, "%-15s = %s\n", k.key, *k.get(&t))
 	}
+	fmt.Fprintf(&b, "%-15s = %s\n", syntaxKey, t.Syntax)
 	return b.String()
 }
 
