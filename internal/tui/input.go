@@ -49,6 +49,7 @@ const (
 	pickTab     // complete the query to the selected match
 	pickEnter   // pin the selected match
 	pickCancel  // close the picker
+	openReview  // review the selected session's changes in a split under it
 )
 
 type action struct {
@@ -197,6 +198,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(newSession)
 	case "t":
 		return do(newTerminal)
+	case "v":
+		return do(openReview)
 	case "a":
 		return do(addProject)
 	}

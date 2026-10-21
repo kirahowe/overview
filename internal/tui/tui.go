@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
+	"overview/internal/review"
 	"overview/internal/tmux"
 )
 
@@ -51,6 +52,7 @@ type (
 		roots  roots
 		// written is when each row's transcript was last written, by path.
 		written map[string]time.Time
+		reviews map[string]review.Summary
 		err     error
 	}
 	digestMsg struct {
@@ -148,6 +150,15 @@ type model struct {
 	// pick is the add-project picker, open while it takes the list pane.
 	pick picker
 
+	// reviews sums up each session's review, by session ID, as the latest
+	// refresh read them. reviewArgs are the flags every review is started
+	// with.
+	reviews    map[string]review.Summary
+	reviewArgs []string
+	// opening is the sessions whose review is being opened, so a second
+	// v before the pane lands does not open another.
+	opening map[string]bool
+
 	// The last click on a list row, to tell a double click.
 	clickID string
 	clickAt time.Time
@@ -165,6 +176,9 @@ type View struct {
 	Socket, Session string
 	User            string // the user's home directory
 	Cwd             string // where overview was started
+	// ThemeArg and ConfigDir are the --theme and --config the view was
+	// started with, which a review is started with too.
+	ThemeArg, ConfigDir string
 }
 
 // Run opens the view and blocks until the user quits. It runs in the pane
@@ -174,6 +188,7 @@ func Run(v View) error {
 	useTheme(v.Theme)
 	m := newModel(v.Home, v.Model)
 	m.user, m.cwd = resolvePath(v.User), v.Cwd
+	m.reviewArgs = []string{"--theme", v.ThemeArg, "--config", v.ConfigDir, "--socket-path", v.Socket}
 	socket, session := v.Socket, v.Session
 	exe, err := os.Executable()
 	if err != nil {
@@ -223,6 +238,8 @@ type deps struct {
 	modTime  func(path string) time.Time // when a file was last written, zero if unknown
 	// recentTurns reads the last n turns of a transcript.
 	recentTurns func(path string, n int) []fleet.Turn
+	// reviews reads the reviews of rows' sessions, by session ID.
+	reviews func(home fleet.Home, rows []fleet.Row) map[string]review.Summary
 }
 
 // roots finds the project roots of dirs.
@@ -230,7 +247,7 @@ func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve
 
 func systemDeps() deps {
 	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
-		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns}
+		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns, reviews: readReviews}
 }
 
 func modTime(path string) time.Time {
@@ -322,7 +339,7 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host
 			written[r.Transcript] = m.deps.modTime(r.Transcript)
 		}
 	}
-	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), written, nil}
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), written, m.deps.reviews(m.home, rows), nil}
 }
 
 // turnsKey names a transcript as it was when written at a moment.
@@ -633,7 +650,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.unblur()
 	case tea.BlurMsg:
 		m.blurred = true
-	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg:
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		// Input that reaches the list proves the user is there, whether or
@@ -676,6 +693,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.rows, m.ttys, m.hosts, m.rowRoots, m.written, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, msg.written, true
+		m.reviews = msg.reviews
 		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
 			m.pinned = msg.pinned
 		}
@@ -881,6 +899,11 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
 		return m.openTerminal(m.rootOf(e, ok))
+	case openReview:
+		if !isSession {
+			return m.say("v reviews a session's changes: move to a session"), nil
+		}
+		return m.openReview(row)
 	case addProject:
 		m.pick = picker{open: true}
 		return m.readPicks()

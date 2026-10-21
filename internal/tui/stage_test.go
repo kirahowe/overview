@@ -36,6 +36,7 @@ type fakeMux struct {
 	layouts []string          // the windows whose layout was read
 	set     map[string]string // the layouts set, by window
 	detach  int
+	splits  []spawnCall // the reviews Split opened, dir and command
 
 	drawn map[string]string // what the view wrote to each tty
 	focus string            // the active pane of the window shown
@@ -242,6 +243,14 @@ func (f *fakeMux) Select(pane string) error {
 }
 
 func (f *fakeMux) Detach() error { f.detach++; return nil }
+
+// Split puts a new pane in target's window.
+func (f *fakeMux) Split(target, dir, size string, env []string, command ...string) (tmux.Pane, error) {
+	p := f.split(target)
+	f.splits = append(f.splits, spawnCall{dir: dir, env: env, command: command})
+	f.focus = p.ID
+	return p, nil
+}
 
 // exit ends a pane's process, which closes it.
 func (f *fakeMux) exit(id string) {

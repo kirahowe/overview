@@ -66,3 +66,7 @@ func (h Home) digestsDir() string   { return filepath.Join(h.dataDir(), "digests
 func (h Home) pendingFile() string  { return filepath.Join(h.dataDir(), "digest-pending") }
 func (h Home) cursorFile() string   { return filepath.Join(h.dataDir(), "digest-cursor") }
 func (h Home) projectsFile() string { return filepath.Join(h.dataDir(), "projects") }
+
+// ReviewsDir holds the review of each session that has one, a log named
+// after the session.
+func (h Home) ReviewsDir() string { return filepath.Join(h.dataDir(), "reviews") }

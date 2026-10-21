@@ -46,6 +46,7 @@ type multiplexer interface {
 	SelectBeside(pane string) error
 	KillWindow(window string) error
 	KillPane(pane string) error
+	Split(target, dir, size string, env []string, command ...string) (tmux.Pane, error)
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
@@ -388,17 +389,18 @@ func (m model) restage() (model, tea.Cmd) {
 	}
 	var cmds []tea.Cmd
 	// The focus moves only to the pane it was asked for, once the list is
-	// beside it. A cursor that moved on has cleared it already.
+	// beside it: the entry's own pane, or another in its window, such as
+	// its review. A cursor that moved on has cleared it already.
 	if target := m.entering; target != "" {
 		m.entering = ""
-		mux, self, beside := m.mux, m.self, m.besideTerminal(want)
-		if target == want && m.stageOf(m.panes) == m.windowOf(want) {
+		mux, self, beside := m.mux, m.self, target == want && m.besideTerminal(want)
+		if m.windowOf(target) == m.windowOf(want) && m.stageOf(m.panes) == m.windowOf(want) {
 			cmds = append(cmds, func() tea.Msg {
 				err := error(nil)
 				if beside {
 					err = mux.SelectBeside(self)
 				} else {
-					err = mux.Select(want)
+					err = mux.Select(target)
 				}
 				if err != nil {
 					return noteMsg(err.Error())
@@ -497,6 +499,17 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			}
 			m = m.say("opened " + msg.name)
 		}
+	case reviewOpenedMsg:
+		m.landed++
+		m.opening = withKey(m.opening, msg.id, false)
+		if msg.pane.ID == "" {
+			return m.say("could not open the review: " + msg.err.Error()), nil
+		}
+		if msg.err != nil {
+			m = m.say("could not mark the review: " + msg.err.Error())
+		}
+		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
+		m.entering = msg.pane.ID
 	case closedMsg:
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil

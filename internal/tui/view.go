@@ -308,6 +308,9 @@ func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
 		}
 	}
 	placed = place + " · "
+	if b := reviewBadge(m.reviews[r.SessionID]); b != "" {
+		placed = b + " · " + placed
+	}
 	right := placed + when
 	nameStyle := fg(pal.Text)
 	if away && !r.NeedsYou() {
@@ -499,6 +502,7 @@ func (m model) helpBox() []string {
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},
 		entry{"t", "new terminal in project"},
+		entry{"v", "review its changes"},
 		entry{"a", "add a project"},
 	)...)
 	right := section("digest",
