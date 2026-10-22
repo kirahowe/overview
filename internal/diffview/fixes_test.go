@@ -130,3 +130,45 @@ func TestTheStartIsFoundOnce(t *testing.T) {
 		t.Fatalf("diff read %d times", n)
 	}
 }
+
+// The cursor's mark takes one cell in split view as in unified, so the
+// code of the line under the cursor stays where the other lines' is.
+func TestTheCursorDoesNotShiftItsLine(t *testing.T) {
+	for _, split := range []bool{true, false} {
+		f, cfg := newTest(t, twoFiles)
+		m := open(t, f, cfg, 160, 30)
+		if m.opts.split != split {
+			m = press(t, m, "m")
+		}
+		i := m.cur
+		on := m.draw(i)[0]
+		m = press(t, m, "j")
+		off := m.draw(i)[0]
+		text := func(r []Seg) string {
+			var b strings.Builder
+			for _, s := range r[1:] { // after the mark's cell
+				b.WriteString(s.Text)
+			}
+			return b.String()
+		}
+		if text(on) != text(off) {
+			t.Fatalf("split %v: the line moved under the cursor:\n%q\n%q", split, text(on), text(off))
+		}
+	}
+}
+
+// } and ] put the header they jump to at the top of the screen, with the
+// cursor on its first line.
+func TestJumpsPutTheHeaderOnTop(t *testing.T) {
+	f, cfg := newTest(t, twoFiles)
+	m := open(t, f, cfg, 100, 8)
+	for _, k := range []string{"}", "]"} {
+		m = press(t, m, k)
+		if top := m.items[m.top].kind; top != hunkItem && top != fileItem {
+			t.Fatalf("%s: the screen starts at a %v", k, top)
+		}
+		if m.cur != nextSelectable(m.items, m.top, 1) {
+			t.Fatalf("%s: cursor %d, top %d", k, m.cur, m.top)
+		}
+	}
+}

@@ -122,7 +122,8 @@ func (m model) step(dir int) model {
 }
 
 // jump moves to the first selectable item after the next item that is,
-// in direction dir.
+// in direction dir, with that item, a hunk's or a file's header, at the
+// top of the screen.
 func (m model) jump(dir int, is func(item) bool) model {
 	for j := m.cur + dir; j >= 0 && j < len(m.items); j += dir {
 		if !is(m.items[j]) {
@@ -135,7 +136,8 @@ func (m model) jump(dir int, is func(item) bool) model {
 			}
 		}
 		if k := nextSelectable(m.items, j, 1); m.items[k].selectable() {
-			return m.moveTo(k)
+			m.cur, m.top, m.off = k, j, 0
+			return m.scrollToCursor()
 		}
 	}
 	return m
