@@ -7,7 +7,7 @@ them to the session with one key.
 ## What it is for
 
 When a session finishes a change, you press `r` on it in the list. A
-diff of its changes opens in a split under the session, side by side or
+diff of its changes opens in a split above the session, side by side or
 inline. You move through the diff, leave notes on lines or ranges, and
 press `s` to send every unsent note to the session as one message. The
 agent answers in the note's thread and changes the code. The diff
@@ -152,7 +152,7 @@ Without a session pane to send to, `s` copies the message instead.
 
 ### In the list
 
-`r` on a session opens its review in a split under it, or moves to the
+`v` on a session opens its review in a split above it, or moves to the
 review when one is open. The pane is marked with the pane option
 `@overview-review`, so the listing knows it. A session with notes shows
 how many are open and whether a reply from the agent waits for you.

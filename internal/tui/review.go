@@ -10,7 +10,7 @@ import (
 	"overview/internal/tmux"
 )
 
-// A session's review runs as overview review view in a split under the
+// A session's review runs as overview review view in a split above the
 // session's own pane, marked with the session's ID so the listing can
 // tell it, and so v finds it again rather than opening another.
 
@@ -45,7 +45,7 @@ func reviewCommand(exe, store, target string, r fleet.Row, flags []string) []str
 }
 
 // openReview moves the keyboard into a session's review, opening one
-// under the session when it has none.
+// above the session when it has none.
 func (m model) openReview(r fleet.Row) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("reviews open only inside overview's tmux"), nil
@@ -59,7 +59,7 @@ func (m model) openReview(r fleet.Row) (model, tea.Cmd) {
 	}
 	target := m.paneOf(r)
 	if target == "" {
-		return m.say("a review opens under a session that runs in overview's tmux"), nil
+		return m.say("a review opens above a session that runs in overview's tmux"), nil
 	}
 	store, err := review.PathFor(m.home.ReviewsDir(), r.SessionID)
 	if err != nil {

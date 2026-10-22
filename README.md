@@ -158,7 +158,7 @@ environment variable overview sets or reads.
 
 ## Reviewing a session's changes
 
-`v` on a session opens a review of what it changed, in a split under
+`v` on a session opens a review of what it changed, in a split above
 the session, and moves the keyboard into it. `v` again, from the list,
 goes back to that review. The review shows the diff side by side when
 the pane is wide enough and inline otherwise, and `m` switches between

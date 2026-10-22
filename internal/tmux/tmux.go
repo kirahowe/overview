@@ -236,11 +236,11 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 	return Pane{ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3], Path: dir}, nil
 }
 
-// Split runs command in a new pane below target, size tall ("40%" or a
+// Split runs command in a new pane above target, size tall ("40%" or a
 // number of lines), in dir, and focuses it. The pane returned knows its
 // ID, tty, session and window.
 func (s Server) Split(target, dir, size string, env []string, command ...string) (Pane, error) {
-	return s.create([]string{"split-window", "-v", "-l", size, "-t", target}, dir, env, command)
+	return s.create([]string{"split-window", "-v", "-b", "-l", size, "-t", target}, dir, env, command)
 }
 
 // Resize makes pane size tall, as Split takes it.

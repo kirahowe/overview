@@ -532,7 +532,7 @@ func TestFocused(t *testing.T) {
 	want(other, false) // its window is no longer the current one
 }
 
-// A review opens in a split under its session's pane, and the paste of a
+// A review opens in a split above its session's pane, and the paste of a
 // message reaches the pane whole, however long, with Enter after it.
 func TestSplitCaptureAndPaste(t *testing.T) {
 	s := testServer(t)
@@ -559,6 +559,13 @@ func TestSplitCaptureAndPaste(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the split should be marked and beside its target: %+v", panes)
+	}
+	top := func(id string) string {
+		out, _ := s.run("display-message", "-p", "-t", id, "#{pane_top}")
+		return strings.TrimSpace(out)
+	}
+	if top(split.ID) != "0" || top(target.ID) == "0" {
+		t.Fatalf("the split should sit above its target: tops %s and %s", top(split.ID), top(target.ID))
 	}
 	if err := s.Resize(split.ID, "5"); err != nil {
 		t.Fatal(err)

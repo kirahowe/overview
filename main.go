@@ -45,7 +45,7 @@ const usage = `overview: watch the Claude Code sessions of one config directory
                               the agent; see overview review help)
   overview review view --store <file> --dir <dir> [flags]
                               the review itself, which the view starts in
-                              a pane under a session (internal)
+                              a pane above a session (internal)
 
 Flags:
   --home <name|path>   Claude Code config directory; "work" means

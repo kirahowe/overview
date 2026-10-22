@@ -1,6 +1,6 @@
 // Package diffview is the review viewer: a session's changes as a diff, side
 // by side or inline, with notes on lines that are sent to the session with
-// one key. It runs as `overview review view` in a pane under the session.
+// one key. It runs as `overview review view` in a pane above the session.
 //
 // The model is a value. Update decides what happens and returns any work as
 // a Cmd; the layout and the frame are pure functions of the model.

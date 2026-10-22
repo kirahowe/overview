@@ -49,7 +49,7 @@ const (
 	pickTab     // complete the query to the selected match
 	pickEnter   // pin the selected match
 	pickCancel  // close the picker
-	openReview  // review the selected session's changes in a split under it
+	openReview  // review the selected session's changes in a split above it
 )
 
 type action struct {

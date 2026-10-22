@@ -61,11 +61,12 @@ func TestReview(t *testing.T) {
 	r.ov.must("select-pane", "-t", r.list.id)
 	r.press("v")
 	var rev string
-	waitFor(t, "the review under the session", func() (bool, string) {
-		out := r.ov.must("list-panes", "-a", "-F", "#{pane_id} #{@overview-review} #{window_id}")
+	waitFor(t, "the review above the session", func() (bool, string) {
+		out := r.ov.must("list-panes", "-a", "-F", "#{pane_id} #{@overview-review} #{window_id} #{pane_top}")
+		sessionTop := r.ov.must("display-message", "-p", "-t", session.id, "#{pane_top}")
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Fields(line)
-			if len(f) == 3 && f[1] == "s-0" && f[2] == r.windowOf(session.id) {
+			if len(f) == 4 && f[1] == "s-0" && f[2] == r.windowOf(session.id) && f[3] == "0" && sessionTop != "0" {
 				rev = f[0]
 				return true, ""
 			}

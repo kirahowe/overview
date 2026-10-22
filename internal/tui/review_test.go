@@ -12,7 +12,7 @@ import (
 	"overview/internal/review"
 )
 
-// v opens a session's review in a split under its pane, with everything
+// v opens a session's review in a split above its pane, with everything
 // the review needs on its command line, and the keyboard goes into it. A
 // second v goes back to that review rather than opening another.
 func TestReviewOpensUnderTheSession(t *testing.T) {
@@ -57,7 +57,7 @@ func TestReviewNeedsASessionPane(t *testing.T) {
 	bg := fleet.Row{Live: fleet.Live{PID: 9, ID: "bg1", Kind: "background", SessionID: "s-2", Name: "bg", Cwd: "/code/app"}}
 	m := stagedModel(t, f, bg)
 	m = pressSettled(t, m, "v")
-	if len(f.splits) != 0 || !strings.Contains(m.note, "under a session") {
+	if len(f.splits) != 0 || !strings.Contains(m.note, "above a session") {
 		t.Fatalf("splits %+v note %q", f.splits, m.note)
 	}
 }
