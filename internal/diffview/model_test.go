@@ -709,7 +709,7 @@ func TestNavigation(t *testing.T) {
 	if m2 := press(t, m, "N"); m2.note != "no more notes that way" {
 		t.Errorf("N with no notes: %q", m2.note)
 	}
-	if m2 := press(t, m, "?"); !m2.help || !strings.Contains(screen(m2), "next and previous hunk") {
+	if m2 := press(t, m, "?"); !m2.help || !strings.Contains(screen(m2), "next and previous hunk") || !strings.Contains(screen(m2), "close this help") {
 		t.Error("? shows no help")
 	} else if m3 := press(t, m2, "j"); m3.help || cursorSpot(m3) != cursorSpot(m) {
 		t.Error("a key in the help did more than close it")

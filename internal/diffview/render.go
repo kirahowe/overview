@@ -604,34 +604,93 @@ func short(id string) string {
 	return id
 }
 
-var helpText = []string{
-	"Moving",
-	"  j k ↓ ↑        line by line          ctrl+d ctrl+u   half a page",
-	"  g G            first and last        ] [             next and previous file",
-	"  } {            next and previous hunk  n N           next and previous note",
-	"",
-	"Notes",
-	"  enter c        write a note on the line, or reply to the note",
-	"  v              start a range, then move and press enter",
-	"  e              edit a note or reply you have not sent",
-	"  x              resolve or reopen a note (only you can)",
-	"  s              send every unsent note and reply to the session",
-	"  h              show or hide resolved notes",
-	"",
-	"View",
-	"  m              split or unified      b               since the session started, or uncommitted",
-	"  R              reload the diff       z               taller, full screen, back",
-	"  q              close the review      ? esc           close this",
+// helpSections are the keys the help lists, in sections, as the list's
+// own help does.
+var helpSections = []struct {
+	title   string
+	entries [][2]string // keys, then what they do
+}{
+	{"move", [][2]string{
+		{"j k", "line by line"},
+		{"ctrl+d ctrl+u", "half a page"},
+		{"g G", "first and last line"},
+		{"] [", "next and previous file"},
+		{"} {", "next and previous hunk"},
+		{"n N", "next and previous note"},
+	}},
+	{"notes", [][2]string{
+		{"enter c", "write a note, or reply to one"},
+		{"v", "start a range, then enter"},
+		{"e", "edit what you have not sent"},
+		{"x", "resolve or reopen (only you can)"},
+		{"s", "send to the session"},
+		{"h", "show or hide resolved notes"},
+	}},
+	{"view", [][2]string{
+		{"m", "split or unified"},
+		{"b", "since the start, or uncommitted"},
+		{"z", "taller, full screen, back"},
+		{"R", "reload the diff"},
+		{"q", "close the review"},
+		{"? esc", "close this help"},
+	}},
 }
 
+// helpGap is the space between the help's columns, and between a key
+// and what it does.
+const helpGap = 4
+
+// helpRows lays the sections out side by side as far as the width
+// allows, every key in one column and every description in the next,
+// and stacks them when even two do not fit.
 func (m model) helpRows() [][]Seg {
-	var out [][]Seg
-	for _, l := range helpText {
-		st := m.pal.text
-		if l != "" && l[0] != ' ' {
-			st = m.pal.accent
+	keyW, whatW := 0, 0
+	for _, sec := range helpSections {
+		for _, e := range sec.entries {
+			keyW = max(keyW, uniseg.StringWidth(e[0]))
+			whatW = max(whatW, uniseg.StringWidth(e[1]))
 		}
-		out = append(out, pad([]Seg{plain(" "+truncate(l, max(1, m.w-1)), st)}, m.w, Style{}))
+	}
+	colW := keyW + helpGap + whatW
+	cols := max(1, min(len(helpSections), (m.w-2+helpGap)/(colW+helpGap)))
+	section := func(i int) [][]Seg {
+		sec := helpSections[i]
+		rows := [][]Seg{{{sec.title, m.pal.accent}}}
+		for _, e := range sec.entries {
+			key := pad([]Seg{{e[0], m.pal.accent}}, keyW+helpGap, Style{})
+			rows = append(rows, append(key, Seg{e[1], m.pal.text}))
+		}
+		return rows
+	}
+	// Section i goes in column i mod cols, with a blank row between two in
+	// one column.
+	columns := make([][][]Seg, cols)
+	for i := range helpSections {
+		c := i % cols
+		if len(columns[c]) > 0 {
+			columns[c] = append(columns[c], nil)
+		}
+		columns[c] = append(columns[c], section(i)...)
+	}
+	height := 0
+	for _, c := range columns {
+		height = max(height, len(c))
+	}
+	out := [][]Seg{pad(nil, m.w, Style{})}
+	for r := range height {
+		row := []Seg{{"  ", Style{}}}
+		for c, col := range columns {
+			var cell []Seg
+			if r < len(col) {
+				cell = col[r]
+			}
+			w := colW
+			if c < cols-1 {
+				w += helpGap
+			}
+			row = append(row, pad(cell, w, Style{})...)
+		}
+		out = append(out, pad(row, m.w, Style{}))
 	}
 	return out
 }
