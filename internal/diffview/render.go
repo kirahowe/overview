@@ -366,7 +366,7 @@ func (m model) unifiedRow(i int, it item) [][]Seg {
 // half is one side of a split row, w cells wide, its rows filled to w.
 func (m model) half(fi, hi, li, mate, nw, w int, lead Seg) [][]Seg {
 	g0 := []Seg{lead}
-	gutter := nw + 3 + len(lead.Text) // the mark's cell, if any, is one byte
+	gutter := nw + 3 + uniseg.StringWidth(lead.Text) // the mark's one cell, if any
 	if lead.Text == "" {
 		gutter = nw + 3
 		g0 = nil
