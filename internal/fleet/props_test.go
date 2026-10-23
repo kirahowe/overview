@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -429,35 +430,81 @@ func genTaskEvent() *rapid.Generator[HookEvent] {
 	})
 }
 
-func TestPropMergeTasks(t *testing.T) {
-	ref := rapid.Custom(func(t *rapid.T) TaskRef {
-		return TaskRef{Project: rapid.SampledFrom([]string{"", "p"}).Draw(t, "project"),
+func genRef() *rapid.Generator[TaskRef] {
+	return rapid.Custom(func(t *rapid.T) TaskRef {
+		r := TaskRef{Project: rapid.SampledFrom([]string{"", "p"}).Draw(t, "project"),
 			Dir: rapid.SampledFrom([]string{"/a", "/b"}).Draw(t, "dir"), ID: rapid.IntRange(1, 12).Draw(t, "id")}
+		if rapid.Bool().Draw(t, "timed") {
+			r.Linked = time.Unix(1_700_000_000+int64(rapid.IntRange(0, 100).Draw(t, "at")), 0).UTC()
+		}
+		return r
 	})
+}
+
+// Appending what TasksToAppend says, batch by batch, keeps the folded
+// list short, each ref once, the last ref linked last, and a second
+// append of the same batch adds nothing.
+func TestPropTasksLog(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		var cur []TaskRef
-		for i, refs := range rapid.SliceOfN(rapid.SliceOfN(ref, 0, 4), 1, 20).Draw(t, "batches") {
-			next, changed := MergeTasks(cur, refs)
-			if changed != !sameTasks(next, cur) {
-				t.Fatalf("batch %d: changed=%v with %+v -> %+v", i, changed, cur, next)
+		var lines []TaskRef
+		now := time.Unix(1_800_000_000, 0).UTC()
+		for i, batch := range rapid.SliceOfN(rapid.SliceOfN(genRef(), 0, 4), 1, 20).Draw(t, "batches") {
+			lines = append(lines, TasksToAppend(FoldTasks(lines), batch, now)...)
+			cur := FoldTasks(lines)
+			if len(cur) > maxTasks {
+				t.Fatalf("batch %d: %d tasks", i, len(cur))
 			}
-			if len(next) > maxTasks {
-				t.Fatalf("batch %d: %d tasks", i, len(next))
-			}
-			seen := map[TaskRef]bool{}
-			for _, r := range next {
-				if seen[r] {
-					t.Fatalf("batch %d: duplicate %+v in %+v", i, r, next)
+			for j, r := range cur {
+				if slices.IndexFunc(cur, r.Same) != j {
+					t.Fatalf("batch %d: duplicate %+v in %+v", i, r, cur)
 				}
-				seen[r] = true
 			}
-			if len(refs) > 0 && next[len(next)-1] != refs[len(refs)-1] {
-				t.Fatalf("batch %d: last ref %+v is not last in %+v", i, refs[len(refs)-1], next)
+			if len(batch) > 0 && !cur[len(cur)-1].Same(batch[len(batch)-1]) {
+				t.Fatalf("batch %d: last ref %+v is not last in %+v", i, batch[len(batch)-1], cur)
 			}
-			if again, changedAgain := MergeTasks(next, refs); changedAgain || !reflect.DeepEqual(again, next) {
-				t.Fatalf("batch %d: second merge changed %+v -> %+v", i, next, again)
+			if len(batch) > 0 {
+				if again := TasksToAppend(cur, batch[len(batch)-1:], now); len(again) != 0 {
+					t.Fatalf("batch %d: linking the last ref again appends %+v", i, again)
+				}
 			}
-			cur = next
+			// Folding what it folded to changes nothing, so a compacted
+			// file reads as the log did.
+			if !reflect.DeepEqual(FoldTasks(cur), cur) {
+				t.Fatalf("batch %d: folding is not idempotent: %+v", i, cur)
+			}
+		}
+	})
+}
+
+// Two hooks that read the file at once and append their own links, in
+// any interleaving of their lines, leave both links in it, and a ref
+// linked before keeps its first time.
+func TestPropConcurrentLinksKeepBoth(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base := rapid.SliceOfN(genRef(), 0, 6).Draw(t, "base")
+		cur := FoldTasks(base)
+		a := rapid.SliceOfN(genRef(), 1, 3).Draw(t, "a")
+		b := rapid.SliceOfN(genRef(), 1, 3).Draw(t, "b")
+		now := time.Unix(1_800_000_000, 0).UTC()
+		la, lb := TasksToAppend(cur, a, now), TasksToAppend(cur, b, now.Add(time.Second))
+		var lines []TaskRef
+		i, j := 0, 0
+		for i < len(la) || j < len(lb) {
+			if j == len(lb) || i < len(la) && rapid.Bool().Draw(t, "a first") {
+				lines, i = append(lines, la[i]), i+1
+			} else {
+				lines, j = append(lines, lb[j]), j+1
+			}
+		}
+		got := FoldTasks(append(slices.Clone(base), lines...))
+		for _, r := range append(slices.Clone(a), b...) {
+			k := slices.IndexFunc(got, r.Same)
+			if k < 0 {
+				t.Fatalf("%+v was dropped: %+v", r, got)
+			}
+			if c := slices.IndexFunc(cur, r.Same); c >= 0 && !cur[c].Linked.IsZero() && !got[k].Linked.Equal(cur[c].Linked) {
+				t.Fatalf("%+v lost its first time %v: %+v", r, cur[c].Linked, got[k])
+			}
 		}
 	})
 }

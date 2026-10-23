@@ -1,24 +1,39 @@
 package fleet
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
-// maxTasks is how many linked issues a session's record keeps.
-const maxTasks = 8
+// maxTasks is how many linked issues a session's tasks file keeps, and
+// compactAt how many lines it may grow to before the hook rewrites it.
+const (
+	maxTasks  = 8
+	compactAt = 64
+)
 
 // TaskRef names an issue a session took on, as the hook saw it. Project is
 // the issues project id when the reference gave one; Dir is the directory the
 // command named (made absolute against the event's cwd) or else the event's cwd.
+// Linked is when the session first took it on, zero when that is unknown.
 type TaskRef struct {
-	Project string `json:"project,omitempty"`
-	Dir     string `json:"dir,omitempty"`
-	ID      int    `json:"id"`
+	Project string    `json:"project,omitempty"`
+	Dir     string    `json:"dir,omitempty"`
+	ID      int       `json:"id"`
+	Linked  time.Time `json:"linked,omitzero"`
+}
+
+// Same says whether two refs name the same issue the same way, whenever
+// each was linked.
+func (r TaskRef) Same(o TaskRef) bool {
+	return r.Project == o.Project && r.Dir == o.Dir && r.ID == o.ID
 }
 
 // EventTasks returns the issues an event shows the session taking on. The
@@ -48,70 +63,111 @@ func EventTasks(ev HookEvent, fallbackCwd string) []TaskRef {
 	return nil
 }
 
-// MergeTasks adds refs to a session's task list. Linking a ref the list
-// already has moves it to the end, the list keeps the newest maxTasks, and
-// changed is true only when the result differs from cur.
-func MergeTasks(cur, refs []TaskRef) (merged []TaskRef, changed bool) {
-	if len(refs) == 0 {
-		return cur, false
-	}
-	tasks := append([]TaskRef(nil), cur...)
-	for _, r := range refs {
-		for i, t := range tasks {
-			if t == r {
-				tasks = append(tasks[:i], tasks[i+1:]...)
-				break
+// A session's tasks file is a log the hook only appends to, one ref as a
+// JSON object per line. The session's own hook and those of its parallel
+// subagents all link to it, and an append of one short line is atomic, so
+// no link can drop another the way a read, merge and rewrite would.
+
+// FoldTasks is the task list that lines, read in order, add up to: each
+// ref once, as late as it was last linked, with the first time it was
+// linked, and the newest maxTasks of them.
+func FoldTasks(lines []TaskRef) []TaskRef {
+	var out []TaskRef
+	for _, r := range lines {
+		if i := slices.IndexFunc(out, r.Same); i >= 0 {
+			if !out[i].Linked.IsZero() {
+				r.Linked = out[i].Linked
 			}
+			out = slices.Delete(out, i, i+1)
 		}
-		tasks = append(tasks, r)
+		out = append(out, r)
 	}
-	if len(tasks) > maxTasks {
-		tasks = tasks[len(tasks)-maxTasks:]
+	if len(out) > maxTasks {
+		out = out[len(out)-maxTasks:]
 	}
-	if sameTasks(tasks, cur) {
-		return cur, false
+	return out
+}
+
+// TasksToAppend is the lines the hook appends to link refs, at now, to a
+// session whose tasks file folds to cur. A ref already the last linked
+// adds nothing, so an event seen twice writes nothing the second time. A
+// ref linked before keeps its first time.
+func TasksToAppend(cur, refs []TaskRef, now time.Time) []TaskRef {
+	var out []TaskRef
+	for _, r := range refs {
+		if len(cur) > 0 && cur[len(cur)-1].Same(r) {
+			continue
+		}
+		r.Linked = now
+		if i := slices.IndexFunc(cur, r.Same); i >= 0 && !cur[i].Linked.IsZero() {
+			r.Linked = cur[i].Linked
+		}
+		out = append(out, r)
+		cur = FoldTasks(append(slices.Clone(cur), r))
 	}
-	return tasks, true
+	return out
+}
+
+// ParseTasks reads a tasks file's lines. A line that does not parse, such
+// as one cut short by a full disk, is skipped.
+func ParseTasks(b []byte) []TaskRef {
+	var out []TaskRef
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		var r TaskRef
+		if len(bytes.TrimSpace(line)) > 0 && json.Unmarshal(line, &r) == nil && r.ID > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (h Home) tasksFile(id string) string {
 	return filepath.Join(h.sessionsDir(), filepath.Base(id)+".tasks")
 }
 
-func (h Home) loadTasks(id string) []TaskRef {
-	var tasks []TaskRef
-	if b, err := os.ReadFile(h.tasksFile(id)); err == nil {
-		_ = json.Unmarshal(b, &tasks)
+// readTasks is the session's tasks file's lines, nil when it has none.
+func (h Home) readTasks(id string) []TaskRef {
+	b, err := os.ReadFile(h.tasksFile(id))
+	if err != nil {
+		return nil
 	}
-	return tasks
+	return ParseTasks(b)
 }
 
-// linkTasks links what ev shows to its session. It reads and writes only the
-// session's tasks file, and writes only when the list changed.
-func (h Home) linkTasks(ev HookEvent, fallbackCwd string) {
+// loadTasks is the issues the session has taken on.
+func (h Home) loadTasks(id string) []TaskRef { return FoldTasks(h.readTasks(id)) }
+
+// linkTasks links what ev shows to its session. It appends to the
+// session's tasks file, one write per line, only when a link is new, and
+// rewrites the file folded once it has grown past compactAt lines.
+func (h Home) linkTasks(ev HookEvent, fallbackCwd string, now time.Time) {
 	refs := EventTasks(ev, fallbackCwd)
 	if len(refs) == 0 {
 		return
 	}
-	merged, changed := MergeTasks(h.loadTasks(ev.SessionID), refs)
-	if !changed {
+	lines := h.readTasks(ev.SessionID)
+	add := TasksToAppend(FoldTasks(lines), refs, now)
+	if len(add) == 0 || os.MkdirAll(h.sessionsDir(), 0o755) != nil {
 		return
 	}
-	if b, err := json.Marshal(merged); err == nil {
-		_ = h.writeSessionsFile(h.tasksFile(ev.SessionID), b)
+	f, err := os.OpenFile(h.tasksFile(ev.SessionID), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return
 	}
-}
-
-func sameTasks(a, b []TaskRef) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	for _, r := range add {
+		if b, err := json.Marshal(r); err == nil {
+			_, _ = f.Write(append(b, '\n'))
 		}
 	}
-	return true
+	f.Close()
+	if len(lines)+len(add) > compactAt {
+		var b []byte
+		for _, r := range FoldTasks(h.readTasks(ev.SessionID)) {
+			line, _ := json.Marshal(r)
+			b = append(append(b, line...), '\n')
+		}
+		_ = h.writeSessionsFile(h.tasksFile(ev.SessionID), b)
+	}
 }
 
 // OpeningTask reports the issue named by the opening line overview writes

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,7 +13,7 @@ import (
 
 func TestIssuesStarts(t *testing.T) {
 	const cwd = "/work/app"
-	r := func(project, dir string, id int) TaskRef { return TaskRef{project, dir, id} }
+	r := func(project, dir string, id int) TaskRef { return TaskRef{Project: project, Dir: dir, ID: id} }
 	for _, c := range []struct {
 		name, cmd string
 		want      []TaskRef
@@ -124,12 +125,12 @@ func TestOpeningTask(t *testing.T) {
 		want   TaskRef
 		ok     bool
 	}{
-		{"Work on overview#6: Show tasks", TaskRef{"overview", cwd, 6}, true},
-		{"  \n Work on a.b_c-d#12", TaskRef{"a.b_c-d", cwd, 12}, true},
-		{"Work on x#1 now", TaskRef{"x", cwd, 1}, true},
-		{"Work on x#1.", TaskRef{"x", cwd, 1}, true},
-		{"Work on x#1\nmore", TaskRef{"x", cwd, 1}, true},
-		{"Work on x#1 more", TaskRef{"x", cwd, 1}, true},
+		{"Work on overview#6: Show tasks", TaskRef{Project: "overview", Dir: cwd, ID: 6}, true},
+		{"  \n Work on a.b_c-d#12", TaskRef{Project: "a.b_c-d", Dir: cwd, ID: 12}, true},
+		{"Work on x#1 now", TaskRef{Project: "x", Dir: cwd, ID: 1}, true},
+		{"Work on x#1.", TaskRef{Project: "x", Dir: cwd, ID: 1}, true},
+		{"Work on x#1\nmore", TaskRef{Project: "x", Dir: cwd, ID: 1}, true},
+		{"Work on x#1 more", TaskRef{Project: "x", Dir: cwd, ID: 1}, true},
 		{"Work on x#0", TaskRef{}, false},
 		{"Work on x#", TaskRef{}, false},
 		{"Work on x#1a", TaskRef{}, false},
@@ -156,31 +157,95 @@ func bashEvent(cmd string) HookEvent {
 	return HookEvent{Name: "PostToolUse", ToolName: "Bash", ToolInput: in}
 }
 
-func TestMergeTasks(t *testing.T) {
-	a, b := TaskRef{Dir: "/w", ID: 1}, TaskRef{Dir: "/w", ID: 2}
-	got, changed := MergeTasks(nil, []TaskRef{a, b})
-	if !changed || !reflect.DeepEqual(got, []TaskRef{a, b}) {
-		t.Fatalf("got %+v, %v", got, changed)
+func TestFoldTasks(t *testing.T) {
+	at := func(m int) time.Time { return time.Unix(1_700_000_000+int64(m)*60, 0).UTC() }
+	a, b := TaskRef{Dir: "/w", ID: 1, Linked: at(0)}, TaskRef{Dir: "/w", ID: 2, Linked: at(1)}
+	if got := FoldTasks([]TaskRef{a, b}); !reflect.DeepEqual(got, []TaskRef{a, b}) {
+		t.Fatalf("got %+v", got)
 	}
-	// Linking the first again moves it to the end.
-	got, changed = MergeTasks(got, []TaskRef{a})
-	if !changed || !reflect.DeepEqual(got, []TaskRef{b, a}) {
-		t.Fatalf("relink: %+v, %v", got, changed)
-	}
-	if _, changed = MergeTasks(got, []TaskRef{a}); changed {
-		t.Fatal("relinking the last ref changed the list")
-	}
-	if _, changed = MergeTasks(got, nil); changed {
-		t.Fatal("no refs changed the list")
+	// Linking the first again moves it to the end, and it keeps the
+	// time it was first linked.
+	again := a
+	again.Linked = at(5)
+	if got := FoldTasks([]TaskRef{a, b, again}); !reflect.DeepEqual(got, []TaskRef{b, a}) {
+		t.Fatalf("relink: %+v", got)
 	}
 	// Eight at most, the newest kept.
-	var cur []TaskRef
+	var lines []TaskRef
 	for i := 1; i <= 12; i++ {
-		cur, _ = MergeTasks(cur, []TaskRef{{ID: i}})
+		lines = append(lines, TaskRef{ID: i})
 	}
-	if len(cur) != maxTasks || cur[0].ID != 5 || cur[7].ID != 12 {
+	if cur := FoldTasks(lines); len(cur) != maxTasks || cur[0].ID != 5 || cur[7].ID != 12 {
 		t.Fatalf("kept %+v", cur)
 	}
+}
+
+func TestTasksToAppend(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	a, b := TaskRef{Dir: "/w", ID: 1}, TaskRef{Dir: "/w", ID: 2}
+	got := TasksToAppend(nil, []TaskRef{a, b}, now)
+	if len(got) != 2 || !got[0].Same(a) || !got[1].Same(b) || !got[0].Linked.Equal(now) {
+		t.Fatalf("got %+v", got)
+	}
+	cur := FoldTasks(got)
+	if add := TasksToAppend(cur, []TaskRef{b}, now.Add(time.Hour)); len(add) != 0 {
+		t.Fatalf("relinking the last ref appended %+v", add)
+	}
+	add := TasksToAppend(cur, []TaskRef{a}, now.Add(time.Hour))
+	if len(add) != 1 || !add[0].Linked.Equal(now) {
+		t.Fatalf("relinking a appended %+v, want its first time", add)
+	}
+	if add := TasksToAppend(cur, nil, now); len(add) != 0 {
+		t.Fatalf("no refs appended %+v", add)
+	}
+}
+
+func TestParseTasksSkipsBadLines(t *testing.T) {
+	got := ParseTasks([]byte("{\"dir\":\"/w\",\"id\":1}\n{\"dir\":\"/w\",\"id\n\n{\"id\":2,\"linked\":\"2026-10-23T10:00:00Z\"}\n"))
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 || got[1].Linked.IsZero() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// Links that arrive together, from a session and its subagents, each
+// append a line, and none drops another. Past compactAt lines the file is
+// rewritten to what it folds to.
+func TestLinkTasksAppendsAndCompacts(t *testing.T) {
+	h := Home{Dir: t.TempDir()}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	ev := func(id int) HookEvent { return withID(bashEvent(fmt.Sprint("issues start ", id))) }
+	h.linkTasks(ev(1), "/w", now)
+	h.linkTasks(ev(2), "/w", now.Add(time.Minute))
+	h.linkTasks(ev(2), "/w", now.Add(2*time.Minute))
+	if lines := h.readTasks("s1"); len(lines) != 2 {
+		t.Fatalf("lines %+v", lines)
+	}
+	for i := 0; i < compactAt; i++ {
+		h.linkTasks(ev(1+i%2), "/w", now.Add(time.Duration(i)*time.Hour))
+	}
+	lines := h.readTasks("s1")
+	if len(lines) > compactAt || len(lines) < 2 {
+		t.Fatalf("%d lines after compacting", len(lines))
+	}
+	got := h.loadTasks("s1")
+	if len(got) != 2 || !got[0].Linked.Equal(now) || !got[1].Linked.Equal(now.Add(time.Minute)) {
+		t.Fatalf("tasks %+v", got)
+	}
+}
+
+func withID(ev HookEvent) HookEvent {
+	ev.SessionID = "s1"
+	return ev
+}
+
+// refs is rs without their link times.
+func refs(rs []TaskRef) []TaskRef {
+	out := make([]TaskRef, len(rs))
+	for i, r := range rs {
+		r.Linked = time.Time{}
+		out[i] = r
+	}
+	return out
 }
 
 func TestEventTasks(t *testing.T) {
@@ -254,7 +319,7 @@ func TestHookLinksTasksFromSubagentsAndWritesOnlyOnChange(t *testing.T) {
 
 	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
 	got := h.loadSession("s1")
-	if tasks := h.loadTasks("s1"); !reflect.DeepEqual(tasks, []TaskRef{{Dir: "/x", ID: 7}}) {
+	if tasks := h.loadTasks("s1"); !reflect.DeepEqual(refs(tasks), []TaskRef{{Dir: "/x", ID: 7}}) || tasks[0].Linked.IsZero() {
 		t.Fatalf("subagent start not linked: %+v", tasks)
 	}
 	if got.State != Working || got.LastPrompt != "go" {
@@ -307,7 +372,7 @@ func TestHookSubagentLinkNeverRewritesTheSessionRecord(t *testing.T) {
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("record changed:\n%s\n%s", before, after)
 	}
-	if got := h.loadTasks("s1"); !reflect.DeepEqual(got, []TaskRef{{Dir: "/x", ID: 7}}) {
+	if got := h.loadTasks("s1"); !reflect.DeepEqual(refs(got), []TaskRef{{Dir: "/x", ID: 7}}) {
 		t.Fatalf("tasks %+v", got)
 	}
 	// Sessions ignores the tasks file, and the rows carry its tasks.
