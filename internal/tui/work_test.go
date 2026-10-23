@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"overview/internal/fleet"
 	"overview/internal/issues"
 )
@@ -243,5 +245,169 @@ func TestResolveLinksKeepsTheLatestLast(t *testing.T) {
 	got := resolveLinks([]fleet.Row{r}, ts, map[string]bool{"/w/app": true}, func(d string) string { return d })
 	if want := []string{"/w/app#2", "/w/app#1"}; !slices.Equal(got["s"], want) {
 		t.Fatalf("links %v, want %v", got["s"], want)
+	}
+}
+
+// taskModel runs in the fake tmux with two sessions in /code/app, which
+// tracks its issues: s1 works on #6, and #4 is in review with nobody on
+// it. s2 is linked to nothing.
+func taskModel(t *testing.T, f *fakeMux) model {
+	t.Helper()
+	s1, s2 := row("s1", "red", "", 11), row("s2", "blue", "", 12)
+	s1.Cwd, s2.Cwd = "/code/app", "/code/app"
+	s1.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
+	m := stagedModel(t, f, s1, s2)
+	ts := trackers{"/code/app": tracked("app",
+		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
+		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"},
+	)}
+	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys, trackers: ts})
+	return settle(t, m, cmd)
+}
+
+func selectKey(t *testing.T, m model, key string) model {
+	t.Helper()
+	for i, e := range m.ordered() {
+		if e.key() == key {
+			return m.moveTo(m.ordered(), i)
+		}
+	}
+	t.Fatalf("%s is not listed: %v", key, ids(m.sections()))
+	return m
+}
+
+func TestTaskModelLists(t *testing.T) {
+	m := taskModel(t, newFakeMux())
+	want := []string{"task:/code/app#4", "task:/code/app#6", "s1", "s2"}
+	if got := ids(m.sections()); !slices.Equal(got, want) {
+		t.Fatalf("listed %v, want %v", got, want)
+	}
+	if need, _, _ := m.counts(); need != 1 {
+		t.Fatalf("need %d, want the review", need)
+	}
+}
+
+func TestEnterOnAWorkstreamGoesToItsFirstSession(t *testing.T) {
+	f := newFakeMux()
+	m := taskModel(t, f)
+	m = selectKey(t, m, "task:/code/app#6")
+	m = settle(t, m, nil)
+	m, cmd := step(m, keyMsg("r")) // any update restages
+	m = settle(t, m, cmd)
+	s1 := paneWithTTY(f, "ttys011")
+	if !f.staged(s1) {
+		t.Fatalf("on #6 the list is in %s, want beside s1's %s", f.stage(), s1)
+	}
+	m = pressSettled(t, m, "enter")
+	if !slices.Equal(f.selects, []string{s1}) {
+		t.Fatalf("selects %v, want [%s]", f.selects, s1)
+	}
+	if m.sel != "task:/code/app#6" {
+		t.Fatalf("enter moved the cursor to %s", m.sel)
+	}
+}
+
+func TestAWorkstreamWithNoSessionsSaysHowToStartOne(t *testing.T) {
+	f := newFakeMux()
+	m := taskModel(t, f)
+	m = pressSettled(t, m, "g") // #4, first
+	if m.sel != "task:/code/app#4" || !f.staged("%1") {
+		t.Fatalf("sel %s, list in %s", m.sel, f.stage())
+	}
+	text := ansi.Strip(f.drawn["ttys901"])
+	for _, want := range []string{"app#4", "show cost", "review", "p2", "c starts a session on this task"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("holder lacks %q: %q", want, text)
+		}
+	}
+	m = pressSettled(t, m, "enter")
+	if m.note != "No session works on #4. c starts one." || len(f.selects) != 0 {
+		t.Fatalf("note %q selects %v", m.note, f.selects)
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "no sessions") {
+		t.Fatal("no 'no sessions' line under #4")
+	}
+}
+
+func TestCStartsASessionOnTheTask(t *testing.T) {
+	for _, key := range []string{"task:/code/app#6", "s1"} {
+		f := newFakeMux()
+		m := taskModel(t, f)
+		m = selectKey(t, m, key)
+		m = pressSettled(t, m, "c")
+		if len(f.spawned) != 1 {
+			t.Fatalf("%s: spawned %+v", key, f.spawned)
+		}
+		call := f.spawned[0]
+		if call.dir != "/code/app" || len(call.command) != 2 || call.command[1] != "Work on app#6: keep width" {
+			t.Fatalf("%s: spawned %+v", key, call)
+		}
+		if p := f.panes[f.find(m.opened.ID)]; p.Project != "/code/app" || p.Task != "" {
+			t.Fatalf("%s: the window has project %q task %q", key, p.Project, p.Task)
+		}
+	}
+	// Elsewhere, c is a plain claude: on s2, and on s1's agents entry,
+	// which sits under no workstream.
+	for _, key := range []string{"s2", "agents/s1"} {
+		f := newFakeMux()
+		m := selectKey(t, taskModel(t, f), key)
+		m = pressSettled(t, m, "c")
+		if len(f.spawned) != 1 || len(f.spawned[0].command) != 1 {
+			t.Fatalf("%s: spawned %+v", key, f.spawned)
+		}
+	}
+}
+
+func TestTOpensATerminalForTheTask(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "s1")
+	m = pressSettled(t, m, "t")
+	shell := f.panes[len(f.panes)-1]
+	if shell.Project != "/code/app" || shell.Task != "/code/app#6" || m.sel != shell.Window {
+		t.Fatalf("terminal %+v, sel %s", shell, m.sel)
+	}
+	want := []string{"task:/code/app#4", "task:/code/app#6", "s1", shell.Window, "s2"}
+	if got := ids(m.sections()); !slices.Equal(got, want) {
+		t.Fatalf("listed %v, want %v", got, want)
+	}
+	// Once #6 is done, the terminal is the project's, as its session is.
+	m.trackers = trackers{"/code/app": tracked("app",
+		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"})}
+	want = []string{"task:/code/app#4", "s1", "s2", shell.Window}
+	if got := ids(m.sections()); !slices.Equal(got, want) {
+		t.Fatalf("after #6 closed: listed %v, want %v", got, want)
+	}
+}
+
+func TestKeysForASessionSayWhereToGoOnAWorkstream(t *testing.T) {
+	m := selectKey(t, taskModel(t, newFakeMux()), "task:/code/app#6")
+	for _, k := range []string{"x", "v", "y"} {
+		m2, cmd := press(m, k)
+		if cmd != nil || m2.confirm != "" || !strings.Contains(m2.note, "move to one under #6") {
+			t.Errorf("%s: cmd %v confirm %q note %q", k, cmd != nil, m2.confirm, m2.note)
+		}
+	}
+}
+
+func TestAnAliasActsAsItsSession(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "agents/s1")
+	m = settle(t, m, nil)
+	m, cmd := step(m, keyMsg("r"))
+	m = settle(t, m, cmd)
+	s1 := paneWithTTY(f, "ttys011")
+	if !f.staged(s1) {
+		t.Fatalf("list in %s, want beside %s", f.stage(), s1)
+	}
+	var copied string
+	m.deps.copyText = func(s string) error { copied = s; return nil }
+	m, cmd = press(m, "y")
+	update(m, cmd())
+	if copied != "s1" {
+		t.Fatalf("y copied %q", copied)
+	}
+	m = pressSettled(t, m, "enter")
+	if !slices.Equal(f.selects, []string{s1}) {
+		t.Fatalf("selects %v", f.selects)
 	}
 }

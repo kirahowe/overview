@@ -203,6 +203,14 @@ func tasksOf(ts trackers, known []string, rows []fleet.Row, root func(string) st
 // tasks is the model's tasks, as the list shows them.
 func (m model) tasks() tasks { return tasksOf(m.trackers, m.knownRoots(), m.rows, m.root) }
 
+// projectID is the issues project id of the project at root.
+func (m model) projectID(root string) string {
+	if t, ok := m.trackers[root]; ok && t.id != "" {
+		return t.id
+	}
+	return filepath.Base(root)
+}
+
 // opening is the first prompt of a session started on a workstream, which
 // the hook reads to link it: "Work on overview#6: <title>".
 func opening(projectID string, i issues.Issue) string {

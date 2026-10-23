@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
@@ -158,28 +159,37 @@ func awayModel(t *testing.T) (model, *[]string) {
 func TestAwaySessionsGoLast(t *testing.T) {
 	m, _ := awayModel(t)
 	secs := m.sections()
-	last := secs[len(secs)-1]
-	if !last.Away || last.Title != awayTitle || len(last.Entries) != 1 || last.Entries[0].key() != "obs" {
+	away := secs[len(secs)-2]
+	if !away.Away || away.Title != awayTitle || len(away.Entries) != 1 || away.Entries[0].key() != "obs" || !secs[len(secs)-1].Agents {
 		t.Fatalf("sections %+v", secs)
 	}
 	m.filter = "obsidian"
 	if got := ids(m.sections()); len(got) != 1 || got[0] != "obs" {
 		t.Fatalf("searching for the app found %v", got)
 	}
-	view := m.View()
-	if !strings.Contains(view, awayTitle) || !strings.Contains(view, "Obsidian ·") {
-		t.Fatal("the row does not name its app")
+	m.filter = ""
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	found := false
+	for _, l := range lines {
+		found = found || strings.Contains(l, "claude-bd") && strings.HasSuffix(strings.TrimSpace(l), "Obsidian")
+	}
+	if !strings.Contains(ansi.Strip(m.View()), awayTitle) || !found {
+		t.Fatalf("the row does not name its app:\n%s", strings.Join(lines, "\n"))
 	}
 }
 
-func TestAwaySessionThatNeedsYouIsStillPinned(t *testing.T) {
+// A session in another app that needs you stays in its section, and leads
+// the agents list.
+func TestAwaySessionThatNeedsYouLeadsTheAgents(t *testing.T) {
 	m, _ := awayModel(t)
 	for i := range m.rows {
 		if m.rows[i].SessionID == "obs" {
 			m.rows[i].State = fleet.Blocked
 		}
 	}
-	if secs := m.sections(); !secs[0].NeedsYou || secs[0].Entries[0].key() != "obs" || secs[len(secs)-1].Away {
+	secs := m.sections()
+	away, agents := secs[len(secs)-2], secs[len(secs)-1]
+	if !away.Away || away.Entries[0].key() != "obs" || !agents.Agents || agents.Entries[0].key() != "agents/obs" {
 		t.Fatalf("sections %+v", secs)
 	}
 }

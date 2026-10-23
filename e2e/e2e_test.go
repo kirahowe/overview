@@ -455,10 +455,14 @@ func TestTerminalsAndProjects(t *testing.T) {
 	if got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-project"); got != r.work {
 		t.Fatalf("the terminal's project is %q, want %q", got, r.work)
 	}
-	waitFor(t, "the terminal under the session", func() (bool, string) {
+	waitFor(t, "the terminal under the session, with its directory", func() (bool, string) {
 		s := r.screen()
 		i, j := strings.Index(s, "e2e-0"), strings.Index(s, "$ ")
-		return i >= 0 && j > i && strings.Contains(s[j:], "terminal"), s
+		if i < 0 || j <= i {
+			return false, s
+		}
+		line, _, _ := strings.Cut(s[j:], "\n")
+		return strings.Contains(line, filepath.Base(r.work)), s
 	})
 
 	// The session's window gets a split, and then its claude exits. The
@@ -513,7 +517,7 @@ func TestTerminalsAndProjects(t *testing.T) {
 	}
 	waitFor(t, "the placeholder", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(s, "no sessions") && strings.Contains(s, "x unpin"), s
+		return strings.Contains(s, "+ c claude · t terminal"), s
 	})
 	r.press("g") // aproj sorts before work
 	waitFor(t, "the holder for the placeholder", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
@@ -557,7 +561,7 @@ func TestTerminalsAndProjects(t *testing.T) {
 	waitFor(t, "its placeholder, selected, with the holder", func() (bool, string) {
 		s := r.screen()
 		ok, say := beside(r.ov.panes(), r.holder, 0)
-		return ok && strings.Count(s, "no sessions") == 1 && strings.Contains(s, "zother"), say + "\n" + s
+		return ok && strings.Count(s, "+ c claude · t terminal") == 1 && strings.Contains(s, "zother") && strings.Contains(s, "x unpin"), say + "\n" + s
 	})
 }
 

@@ -1030,9 +1030,10 @@ func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
 	if !f.staged(shell.ID) || !slices.Equal(f.besides, []string{"%0"}) || len(f.selects) != 0 || f.focus != shell.ID {
 		t.Fatalf("list in %s, besides %v, selects %v, focus %s", f.stage(), f.besides, f.selects, f.focus)
 	}
-	// It is listed under its project, after the session.
+	// It is listed under its project, after the session, and not in the
+	// agents list.
 	secs := m.sections()
-	if len(secs) != 1 || len(secs[0].Entries) != 2 || secs[0].Entries[1].key() != shell.Window {
+	if len(secs) != 2 || len(secs[0].Entries) != 2 || secs[0].Entries[1].key() != shell.Window || len(secs[1].Entries) != 1 {
 		t.Fatalf("sections %+v", secs)
 	}
 	// Back to it later, enter goes to the split used last, beside the list.
@@ -1173,7 +1174,7 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 	if text := ansi.Strip(f.drawn["ttys901"]); !strings.Contains(text, "No sessions in /code/empty. c starts Claude here") {
 		t.Fatalf("holder shows %q", text)
 	}
-	if view := ansi.Strip(m.View()); !strings.Contains(view, "no sessions") || !strings.Contains(view, "x unpin") {
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "+ c claude · t terminal") || !strings.Contains(view, "x unpin") {
 		t.Fatalf("view %s", view)
 	}
 	need, working, idle := m.counts()

@@ -9,56 +9,103 @@ import (
 	"strings"
 
 	"overview/internal/fleet"
+	"overview/internal/issues"
 	"overview/internal/tmux"
 )
 
-// needsYouTitle heads the pinned section and awayTitle the last one. Project
-// sections are headed by the project's display name.
+// awayTitle heads the section of sessions other apps run, and agentsTitle
+// the last one. Project sections are headed by the project's display name.
 const (
-	needsYouTitle = "needs you"
-	awayTitle     = "in other apps"
+	awayTitle   = "in other apps"
+	agentsTitle = "agents"
 )
 
-// section is one block of the list: the pinned "needs you" block, the
-// entries of one project, or the sessions other apps run.
+// section is one block of the list: the entries of one project, the
+// sessions other apps run, or the agents list of every session.
 type section struct {
-	Title    string
-	NeedsYou bool
-	Away     bool
-	Entries  []entry
+	Title   string
+	Away    bool
+	Agents  bool
+	Tracked bool // the project tracks its work with issues
+	Entries []entry
 }
 
 type entryKind int
 
 const (
-	sessionEntry  entryKind = iota
-	terminalEntry           // a window of plain shells, or a dev server
-	projectEntry            // a pinned project with nothing in it yet
+	sessionEntry    entryKind = iota
+	terminalEntry             // a window of plain shells, or a dev server
+	projectEntry              // a pinned project with nothing in it yet
+	workstreamEntry           // an issue that is being worked on
 )
 
-// entry is one thing the cursor can be on: a Claude session, a terminal, or
-// the placeholder of an empty pinned project.
+// The prefixes of the keys of the entries that are not a session's own.
+const (
+	taskPrefix   = "task:"
+	agentsPrefix = "agents"
+)
+
+// entry is one thing the cursor can be on: a Claude session, a terminal,
+// the placeholder of an empty pinned project, or a workstream.
+//
+// A session can be listed more than once: under each workstream it is
+// linked to, and in the agents list. Its primary entry, under the
+// workstream it was linked to last or else in its project, has alias "".
+// The others have the placement as their alias, and act exactly as the
+// primary does.
 type entry struct {
 	kind    entryKind
-	row     fleet.Row // sessionEntry
-	term    terminal  // terminalEntry
-	project string    // projectEntry: the project's root
+	row     fleet.Row    // sessionEntry
+	term    terminal     // terminalEntry
+	project string       // projectEntry: the project's root; and a workstream's, see task
+	issue   issues.Issue // workstreamEntry, and see task
+	// task is the key of the workstream an entry sits under, or a
+	// workstream's own. project and issue are then that workstream's. An
+	// agents alias has the project and issue of its session's primary
+	// workstream, if any, but no task.
+	task  string
+	alias string // a session's placement, "" for its primary entry
 }
 
 // key names an entry for the cursor and for clicks, across refreshes: a
-// session's id, a terminal's window ("@7"), or "project:" and the root.
+// session's id, a terminal's window ("@7"), "project:" and the root, or
+// "task:" and the workstream's key. A session's alias puts its placement
+// and a slash before its id: "task:/w/app#6/<id>" or "agents/<id>".
 func (e entry) key() string {
 	switch e.kind {
 	case terminalEntry:
 		return e.term.Window
 	case projectEntry:
 		return "project:" + e.project
+	case workstreamEntry:
+		return taskPrefix + e.task
+	}
+	if e.alias != "" {
+		return e.alias + "/" + e.row.SessionID
 	}
 	return e.row.SessionID
 }
 
 // session is the entry's row, and whether it is a session at all.
 func (e entry) session() (fleet.Row, bool) { return e.row, e.kind == sessionEntry }
+
+// workstream is the workstream an entry is or sits under, and whether it
+// has one.
+func (e entry) workstream() (root string, i issues.Issue, ok bool) {
+	return e.project, e.issue, e.task != ""
+}
+
+// children are the entries listed under the workstream task in es, in
+// order.
+func children(es []entry, task string) []entry {
+	var out []entry
+	for _, e := range es {
+		if e.task == task && e.kind != workstreamEntry && e.alias != agentsPrefix {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 func sessionEntries(rows []fleet.Row) []entry {
 	out := make([]entry, len(rows))
@@ -68,43 +115,150 @@ func sessionEntries(rows []fleet.Row) []entry {
 	return out
 }
 
+// active says whether an issue's status makes it a workstream by itself.
+func active(status string) bool {
+	return status == issues.InProgress || status == issues.Review || status == issues.Blocked
+}
+
+// workstreamLess orders a project's workstreams: by status as issues.Rank
+// has it, then priority, then number, then root.
+func workstreamLess(a, b entry) bool {
+	if ra, rb := issues.Rank(a.issue.Status), issues.Rank(b.issue.Status); ra != rb {
+		return ra < rb
+	}
+	if pa, pb := issues.PriorityRank(a.issue.Priority), issues.PriorityRank(b.issue.Priority); pa != pb {
+		return pa < pb
+	}
+	if a.issue.ID != b.issue.ID {
+		return a.issue.ID < b.issue.ID
+	}
+	return a.project < b.project
+}
+
+// issueRef is how an issue is named: its ref as the CLI gives it, or the
+// project id and number.
+func issueRef(id string, i issues.Issue) string {
+	if i.Ref != "" {
+		return i.Ref
+	}
+	return id + "#" + strconv.Itoa(i.ID)
+}
+
+// needsFirst orders the sessions that need you first, longest wait first,
+// then the rest as sortActive does.
+func needsFirst(rs []fleet.Row) {
+	sort.Slice(rs, func(i, j int) bool {
+		ni, nj := rs[i].NeedsYou(), rs[j].NeedsYou()
+		switch {
+		case ni != nj:
+			return ni
+		case !ni:
+			return activeLess(rs[i], rs[j])
+		case !rs[i].Since.Equal(rs[j].Since):
+			return rs[i].Since.Before(rs[j].Since)
+		}
+		return rs[i].SessionID < rs[j].SessionID
+	})
+}
+
 // buildList is the single source of truth for the list. The renderer, the
-// cursor, n/N and the status bar all read it.
+// cursor, n/N and the header all read it.
 //
-// It drops the orchestrator and every entry the query does not match, pins
-// the sessions that need you in a first section (longest wait first), and
-// puts the rest into one section per project. Projects are ordered by
-// display name. A session that runs inside another app, as host reports, is
-// not one the user drives from a project, so unless it needs them it goes
-// in a last section of its own instead. Within a project or that section,
-// working sessions come before the rest, then the newest activity first,
-// then the session id. A project's terminals follow its sessions, by window
-// number. A pinned project with no session or terminal at all, whatever the
-// query, gets a placeholder of its own, which the query matches on the
-// project's name. project names the project a directory belongs to, and
-// short is how a terminal's directory is shown, which the query also
-// matches. The result depends only on the sets it is given, never on their
-// order.
-func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string, project, short func(dir string) string, host func(fleet.Row) (string, bool)) []section {
+// It drops the orchestrator and every entry the query does not match, and
+// puts the rest into one section per project, ordered by display name.
+// A project that tracks its work with issues lists its workstreams first:
+// each open issue that is in progress, in review or blocked, or that a
+// session is linked to, ordered by workstreamLess. Under each come the
+// sessions linked to it, working first and then the newest activity, then
+// the terminals opened for it, by window number. A session linked to
+// several sits under each, and its primary entry is under the one it was
+// linked to last. Then come the project's other sessions, in the same
+// order, and its other terminals. A session that runs inside another app,
+// as host reports, is not one the user drives from a project, so unless
+// it is linked it goes in a section of its own instead. A pinned project
+// with no entry at all, whatever the query, gets a placeholder of its
+// own, which the query matches on the project's name. Last comes the
+// agents list: every session shown above once, those that need you
+// first, longest wait first.
+//
+// A workstream matches the query on its ref, title and project name, and
+// is shown when it or anything under it matches. When it matches itself,
+// everything under it is shown. project names the project a directory
+// belongs to, and short is how a terminal's directory is shown, which the
+// query also matches. The result depends only on the sets it is given,
+// never on their order.
+func buildList(rows []fleet.Row, terms []terminal, pinned []string, tk tasks, query string, project, short func(dir string) string, host func(fleet.Row) (string, bool)) []section {
 	words := strings.Fields(strings.ToLower(query))
-	var needs, away []fleet.Row
+
+	// The workstreams, by key, before the query.
+	streams := map[string]entry{}
+	tracked := map[string]bool{} // project names
+	for root, list := range tk.open {
+		tracked[project(root)] = true
+		for _, i := range list {
+			if issues.Open(i.Status) {
+				k := taskKey(root, i.ID)
+				streams[k] = entry{kind: workstreamEntry, project: root, issue: i, task: k}
+			}
+		}
+	}
+	links := map[string][]string{} // by session id, only to workstreams
+	linked := map[string]bool{}    // workstreams with a session
+	for _, r := range rows {
+		if r.Name == fleet.OrchestratorName {
+			continue
+		}
+		for _, k := range tk.links[r.SessionID] {
+			if _, ok := streams[k]; ok {
+				links[r.SessionID] = append(links[r.SessionID], k)
+				linked[k] = true
+			}
+		}
+	}
+	for k, e := range streams {
+		if !active(e.issue.Status) && !linked[k] {
+			delete(streams, k)
+		}
+	}
+	wsMatch := map[string]bool{}
+	for k, e := range streams {
+		ref := issueRef(tk.ids[e.project], e.issue)
+		wsMatch[k] = matchFields(words, ref, "#"+strconv.Itoa(e.issue.ID), e.issue.Title, project(e.project))
+	}
+
+	var away []fleet.Row
 	byProject := map[string][]fleet.Row{}
+	under := map[string][]entry{} // what sits under each workstream
 	termsOf := map[string][]terminal{}
 	placeholder := map[string]string{} // project name to root
-	used := map[string]bool{}          // projects with a session or terminal
+	used := map[string]bool{}          // projects with an entry
+	for _, e := range streams {
+		used[project(e.project)] = true
+	}
 	for _, r := range rows {
 		if r.Name == fleet.OrchestratorName {
 			continue
 		}
 		p := project(r.Cwd)
-		used[p] = true
 		app, isAway := host(r)
-		if !matches(r, p, app, words) {
+		hit := matches(r, p, app, words)
+		if ks := links[r.SessionID]; len(ks) > 0 {
+			for j, k := range ks {
+				if !hit && !wsMatch[k] {
+					continue
+				}
+				ws := streams[k]
+				e := entry{kind: sessionEntry, row: r, project: ws.project, issue: ws.issue, task: k}
+				if j != len(ks)-1 {
+					e.alias = taskPrefix + k
+				}
+				under[k] = append(under[k], e)
+			}
 			continue
 		}
+		used[p] = true
 		switch {
-		case r.NeedsYou():
-			needs = append(needs, r)
+		case !hit:
 		case isAway:
 			away = append(away, r)
 		default:
@@ -114,8 +268,21 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string
 	for _, t := range terms {
 		p := project(t.Project)
 		used[p] = true
-		if matchFields(words, p, t.Title, short(t.Path)) {
+		hit := matchFields(words, p, t.Title, short(t.Path))
+		if ws, ok := streams[t.Task]; ok && project(ws.project) == p {
+			if hit || wsMatch[t.Task] {
+				under[t.Task] = append(under[t.Task], entry{kind: terminalEntry, term: t, project: ws.project, issue: ws.issue, task: t.Task})
+			}
+			continue
+		}
+		if hit {
 			termsOf[p] = append(termsOf[p], t)
+		}
+	}
+	wsOf := map[string][]entry{} // the shown workstreams, by project name
+	for k, e := range streams {
+		if wsMatch[k] || len(under[k]) > 0 {
+			wsOf[project(e.project)] = append(wsOf[project(e.project)], e)
 		}
 	}
 	for _, root := range pinned {
@@ -129,49 +296,101 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, query string
 		}
 	}
 
-	var out []section
-	if len(needs) > 0 {
-		sort.Slice(needs, func(i, j int) bool {
-			if !needs[i].Since.Equal(needs[j].Since) {
-				return needs[i].Since.Before(needs[j].Since)
-			}
-			return needs[i].SessionID < needs[j].SessionID
-		})
-		out = append(out, section{Title: needsYouTitle, NeedsYou: true, Entries: sessionEntries(needs)})
-	}
-	names := make([]string, 0, len(byProject)+len(termsOf)+len(placeholder))
+	names := map[string]bool{}
 	for p := range byProject {
-		names = append(names, p)
+		names[p] = true
 	}
 	for p := range termsOf {
-		if _, ok := byProject[p]; !ok {
-			names = append(names, p)
-		}
+		names[p] = true
+	}
+	for p := range wsOf {
+		names[p] = true
 	}
 	for p := range placeholder {
-		names = append(names, p) // a placeholder's project has nothing else
+		names[p] = true // a placeholder's project has nothing else
 	}
-	sort.Slice(names, func(i, j int) bool { return nameLess(names[i], names[j]) })
-	for _, p := range names {
+	order := make([]string, 0, len(names))
+	for p := range names {
+		order = append(order, p)
+	}
+	sort.Slice(order, func(i, j int) bool { return nameLess(order[i], order[j]) })
+
+	var out []section
+	for _, p := range order {
 		if root, ok := placeholder[p]; ok {
-			out = append(out, section{Title: p, Entries: []entry{{kind: projectEntry, project: root}}})
+			out = append(out, section{Title: p, Tracked: tracked[p], Entries: []entry{{kind: projectEntry, project: root}}})
 			continue
+		}
+		var es []entry
+		ws := wsOf[p]
+		sort.Slice(ws, func(i, j int) bool { return workstreamLess(ws[i], ws[j]) })
+		for _, w := range ws {
+			es = append(es, w)
+			var sess []entry
+			var wterms []terminal
+			for _, c := range under[w.task] {
+				if c.kind == terminalEntry {
+					wterms = append(wterms, c.term)
+				} else {
+					sess = append(sess, c)
+				}
+			}
+			sort.Slice(sess, func(i, j int) bool { return activeLess(sess[i].row, sess[j].row) })
+			es = append(es, sess...)
+			sortWindows(wterms)
+			for _, t := range wterms {
+				es = append(es, entry{kind: terminalEntry, term: t, project: w.project, issue: w.issue, task: w.task})
+			}
 		}
 		rs := byProject[p]
 		sortActive(rs)
-		es := sessionEntries(rs)
+		es = append(es, sessionEntries(rs)...)
 		ts := termsOf[p]
-		sort.Slice(ts, func(i, j int) bool { return windowLess(ts[i].Window, ts[j].Window) })
+		sortWindows(ts)
 		for _, t := range ts {
 			es = append(es, entry{kind: terminalEntry, term: t})
 		}
-		out = append(out, section{Title: p, Entries: es})
+		out = append(out, section{Title: p, Tracked: tracked[p], Entries: es})
 	}
 	if len(away) > 0 {
 		sortActive(away)
 		out = append(out, section{Title: awayTitle, Away: true, Entries: sessionEntries(away)})
 	}
+	out = appendAgents(out, links, streams)
 	return out
+}
+
+// appendAgents adds the agents list: an alias of every session shown in
+// secs, once, those that need you first. A linked session's alias has the
+// project and issue of its primary workstream.
+func appendAgents(secs []section, links map[string][]string, streams map[string]entry) []section {
+	seen := map[string]bool{}
+	var rs []fleet.Row
+	for _, s := range secs {
+		for _, e := range s.Entries {
+			if r, ok := e.session(); ok && !seen[r.SessionID] {
+				seen[r.SessionID] = true
+				rs = append(rs, r)
+			}
+		}
+	}
+	if len(rs) == 0 {
+		return secs
+	}
+	needsFirst(rs)
+	es := make([]entry, len(rs))
+	for i, r := range rs {
+		es[i] = entry{kind: sessionEntry, row: r, alias: agentsPrefix}
+		if ks := links[r.SessionID]; len(ks) > 0 {
+			ws := streams[ks[len(ks)-1]]
+			es[i].project, es[i].issue = ws.project, ws.issue
+		}
+	}
+	return append(secs, section{Title: agentsTitle, Agents: true, Entries: es})
+}
+
+func sortWindows(ts []terminal) {
+	sort.Slice(ts, func(i, j int) bool { return windowLess(ts[i].Window, ts[j].Window) })
 }
 
 // windowLess orders tmux window ids ("@7") by number, then as text.
@@ -190,16 +409,18 @@ func windowLess(a, b string) bool {
 // sortActive puts working sessions first, then the newest activity, then
 // orders by session id.
 func sortActive(rs []fleet.Row) {
-	sort.Slice(rs, func(i, j int) bool {
-		wi, wj := rs[i].State == fleet.Working, rs[j].State == fleet.Working
-		if wi != wj {
-			return wi
-		}
-		if !rs[i].Since.Equal(rs[j].Since) {
-			return rs[i].Since.After(rs[j].Since)
-		}
-		return rs[i].SessionID < rs[j].SessionID
-	})
+	sort.Slice(rs, func(i, j int) bool { return activeLess(rs[i], rs[j]) })
+}
+
+func activeLess(a, b fleet.Row) bool {
+	wa, wb := a.State == fleet.Working, b.State == fleet.Working
+	if wa != wb {
+		return wa
+	}
+	if !a.Since.Equal(b.Since) {
+		return a.Since.After(b.Since)
+	}
+	return a.SessionID < b.SessionID
 }
 
 // nameLess orders project names alphabetically, ignoring case, with the
@@ -410,15 +631,19 @@ func repoRoot(cwd string, exists func(path string) bool) string {
 	}
 }
 
-// counts tallies the sessions, filter ignored, for the status bar.
-// Terminals and placeholders are not sessions.
+// counts tallies the list, filter ignored, for the header: the sessions
+// that need you and the workstreams in review, the working sessions, and
+// the idle ones. Each session counts once, and terminals and placeholders
+// not at all.
 func counts(secs []section) (need, working, idle int) {
 	for _, s := range secs {
 		for _, e := range s.Entries {
 			r, ok := e.session()
 			switch {
-			case !ok:
-			case s.NeedsYou:
+			case e.kind == workstreamEntry && e.issue.Status == issues.Review:
+				need++
+			case !ok || e.alias != "":
+			case r.NeedsYou():
 				need++
 			case r.State == fleet.Working:
 				working++
@@ -431,5 +656,5 @@ func counts(secs []section) (need, working, idle int) {
 }
 
 func (m model) counts() (need, working, idle int) {
-	return counts(buildList(m.rows, nil, nil, "", m.name, m.short, m.hostOf))
+	return counts(buildList(m.rows, m.terminals(), nil, m.tasks(), "", m.name, m.short, m.hostOf))
 }

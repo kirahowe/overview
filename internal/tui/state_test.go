@@ -156,11 +156,11 @@ func TestStateMachine(t *testing.T) {
 				m = mouseAt(m, tea.MouseButtonLeft, x, y, at)
 
 				var ref model
-				switch lh := before.boxHeight(); {
+				switch lh := before.listHeight(); {
 				case before.confirm != "" || before.help:
 					// A click closes an overlay as esc does.
 					ref, _ = press(before, "esc")
-				case before.screen == digestScreen, y >= lh, before.pick.open:
+				case before.screen == digestScreen, y > lh, before.pick.open:
 					ref = before
 				default:
 					// A click on a row is the cursor moved there, and a second
@@ -169,7 +169,7 @@ func TestStateMachine(t *testing.T) {
 					cur, _, _ := before.selected(before.ordered())
 					_, owners := before.listView(before.sections(), cur.key())
 					line := y - 1
-					if line < 0 || line >= min(len(owners), lh-2) || owners[line] == "" {
+					if line < 0 || line >= min(len(owners), lh) || owners[line] == "" {
 						break
 					}
 					id := owners[line]
@@ -207,7 +207,7 @@ func TestStateMachine(t *testing.T) {
 				ref := before
 				switch {
 				case before.confirm != "" || before.help, before.pick.open && before.screen == sessionsScreen,
-					before.screen == sessionsScreen && y >= before.boxHeight():
+					before.screen == sessionsScreen && y > before.listHeight():
 				case before.screen == digestScreen:
 					ref, _ = press(ref, "j", "j", "j")
 					if !down {

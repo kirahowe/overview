@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -74,12 +75,14 @@ type spawn struct {
 	name    string // what to call it in a note
 	session string
 	dir     string // the project root, for spawnSession and spawnTerminal
+	task    string // the workstream a spawnTerminal is for, "" for none
 	env     []string
 	command []string
 }
 
 // marked is the spawned pane as the listing will show it once the Cmd has
 // set its options: a session's or a terminal's window names its project,
+// a terminal's the workstream it is for, if any,
 // an attach pane names its background session, and the holder is marked
 // as such. It also says which option to set, as a pane or a window option.
 func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
@@ -88,8 +91,14 @@ func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
 		p.Holder = true
 		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.HolderOption, "1") }
 	case spawnSession, spawnTerminal:
-		p.Project = sp.dir
-		return p, func(mux multiplexer) error { return mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir) }
+		p.Project, p.Task = sp.dir, sp.task
+		return p, func(mux multiplexer) error {
+			err := mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir)
+			if err == nil && sp.task != "" {
+				err = mux.SetWindowOption(p.ID, tmux.TaskOption, sp.task)
+			}
+			return err
+		}
 	case spawnAttach:
 		p.Attach = sp.key
 		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.AttachOption, sp.key) }
@@ -427,20 +436,35 @@ func (m model) want() string {
 	if m.alive(m.opened.ID) {
 		return m.opened.ID
 	}
-	if e, _, ok := m.selected(m.ordered()); ok {
-		switch e.kind {
-		case sessionEntry:
-			if id := m.paneOf(e.row); id != "" {
-				return id
-			}
-		case terminalEntry:
-			if m.alive(e.term.Pane) {
-				return e.term.Pane
-			}
+	es := m.ordered()
+	if e, _, ok := m.selected(es); ok {
+		if id := m.entryPane(es, e); id != "" {
+			return id
 		}
 	}
 	if h := m.holder(); h != "" {
 		return h
+	}
+	return ""
+}
+
+// entryPane is the pane that shows an entry, "" when it has none: a
+// session's own pane, a terminal's first pane, or for a workstream the
+// pane of the first entry under it that has one.
+func (m model) entryPane(es []entry, e entry) string {
+	switch e.kind {
+	case sessionEntry:
+		return m.paneOf(e.row)
+	case terminalEntry:
+		if m.alive(e.term.Pane) {
+			return e.term.Pane
+		}
+	case workstreamEntry:
+		for _, c := range children(es, e.task) {
+			if id := m.entryPane(es, c); id != "" {
+				return id
+			}
+		}
 	}
 	return ""
 }
@@ -704,6 +728,8 @@ func (m model) holderText(w, h int) string {
 		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
+	case e.kind == workstreamEntry:
+		lines = m.workstreamLines(e, cw)
 	default:
 		if hint := m.stageHint(e.row); hint != "" {
 			lines = append(wrap(dim.Render(hint), cw), "")
@@ -732,6 +758,28 @@ func (m model) holderText(w, h int) string {
 	// Home, clear, hide the cursor, then the lines. The pane is raw, so
 	// each line ends in its own carriage return.
 	return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(out, "\r\n")
+}
+
+// workstreamLines is what the holder shows for a workstream with no pane
+// to show: its issue, and what starts work on it.
+func (m model) workstreamLines(e entry, w int) []string {
+	ref := issueRef(m.projectID(e.project), e.issue)
+	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(e.issue.Title), w)
+	out = append(out, wrap(dim.Render(e.issue.Status+" · "+e.issue.Priority+" · "+m.name(e.project)), w)...)
+	out = append(out, "")
+	n := 0
+	for _, c := range children(m.ordered(), e.task) {
+		if c.kind == sessionEntry {
+			n++
+		}
+	}
+	switch n {
+	case 0:
+		return append(out, wrap(dim.Render("No session works on this task. c starts a session on this task, t a terminal for it."), w)...)
+	case 1:
+		return append(out, wrap(dim.Render("One session works on this task, and it has no pane here. enter goes to it."), w)...)
+	}
+	return append(out, wrap(dim.Render(fmt.Sprintf("%d sessions work on this task, and none has a pane here. enter goes to the first.", n)), w)...)
 }
 
 // stageHint says why the holder shows a session instead of its terminal.

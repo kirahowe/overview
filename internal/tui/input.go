@@ -232,19 +232,22 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		return nil // the picker is keys only
 	}
 	if m.screen == digestScreen {
+		if step == 0 {
+			return nil
+		}
 		return doN(scrollDigest, step*wheelLines)
 	}
 
-	lh := m.boxHeight()
+	lh := m.listHeight()
 	switch {
-	case msg.Y >= lh:
-		return nil // the status bar
+	case msg.Y > lh:
+		return nil // the footer
 	case step != 0:
 		return doN(move, step)
 	}
 	cur, _, _ := m.selected(m.ordered())
 	_, owners := m.listView(m.sections(), cur.key())
-	if line := msg.Y - 1; line >= 0 && line < min(len(owners), lh-2) && owners[line] != "" {
+	if line := msg.Y - 1; line >= 0 && line < min(len(owners), lh) && owners[line] != "" {
 		return []action{{do: click, id: owners[line], at: at}}
 	}
 	return nil

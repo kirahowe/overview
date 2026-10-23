@@ -215,7 +215,9 @@ func TestSlowSecondClickOnlySelects(t *testing.T) {
 func TestClickOffARowDoesNothing(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	before := m.sel
-	for _, y := range []int{0, 1, 28, 29} { // top edge, a heading, bottom edge, status bar
+	// The header, the rule, the blank lines above the agents list, its
+	// rule, a line past the end, and the footer.
+	for _, y := range []int{0, 1, 4, 20, 26, 29} {
 		m, _ = mouseClick(m, 5, y)
 		if m.sel != before {
 			t.Fatalf("click at line %d moved the cursor to %q", y, m.sel)
@@ -306,7 +308,7 @@ func TestFilterEnterFocusesTheMatchAndClearsTheFilter(t *testing.T) {
 	if want := paneWithTTY(f, "ttys012"); len(f.selects) != 1 || f.selects[0] != want {
 		t.Fatalf("selects %v, want [%s]", f.selects, want)
 	}
-	if got := len(m.ordered()); got != 2 {
+	if got := len(ids(m.sections())); got != 2 {
 		t.Fatalf("full list should be back, got %d rows", got)
 	}
 }
@@ -315,7 +317,7 @@ func TestClickSelectsAndDoubleClickFocuses(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	y := screenY(m, "s2")
-	m, cmd := mouseClick(m, 5, y+1) // the row's second line
+	m, cmd := mouseClick(m, 5, y)
 	m = settle(t, m, cmd)
 	if m.sel != "s2" || len(f.selects) != 0 {
 		t.Fatalf("sel %q selects %v", m.sel, f.selects)

@@ -1,6 +1,7 @@
-// Package tui is the live terminal view: the sessions that need you on top,
-// the one under the cursor live in the tmux pane beside it, and the digests
-// a key away.
+// Package tui is the live terminal view: the sessions by project, and by
+// task where a project tracks its issues, every session again by priority
+// at the bottom, the one under the cursor live in the tmux pane beside it,
+// and the digests a key away.
 package tui
 
 import (
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -431,7 +433,7 @@ func (m model) say(note string) model {
 
 // sections is the list as shown, with the filter applied.
 func (m model) sections() []section {
-	return buildList(m.rows, m.terminals(), m.pinned, m.filter, m.name, m.short, m.hostOf)
+	return buildList(m.rows, m.terminals(), m.pinned, m.tasks(), m.filter, m.name, m.short, m.hostOf)
 }
 
 // terminals are the windows of the view's session that run no session.
@@ -558,11 +560,20 @@ func (m model) keepNear(before model) model {
 	for _, e := range before.ordered() {
 		old = append(old, e.key())
 	}
-	now := map[string]bool{}
+	now, alias := map[string]bool{}, map[string]bool{}
+	for _, e := range before.ordered() {
+		alias[e.key()] = e.alias != ""
+	}
 	for _, e := range m.ordered() {
 		now[e.key()] = true
 	}
-	if key, ok := nearest(old, m.sel, func(k string) bool { return now[k] }); ok {
+	// A cursor on an entry of its own stays among those, out of the
+	// agents list, while there are any.
+	key, ok := nearest(old, m.sel, func(k string) bool { return now[k] && (alias[m.sel] || !alias[k]) })
+	if !ok {
+		key, ok = nearest(old, m.sel, func(k string) bool { return now[k] })
+	}
+	if ok {
 		m.sel, m.confirm = key, ""
 	}
 	return m
@@ -619,22 +630,33 @@ func (m model) unblur() model {
 	return m
 }
 
+// needy says whether n stops at an entry: a session's primary entry when
+// the session needs you, or a workstream in review.
+func needy(e entry) bool {
+	if e.kind == workstreamEntry {
+		return e.issue.Status == issues.Review
+	}
+	r, ok := e.session()
+	return ok && e.alias == "" && r.NeedsYou()
+}
+
 // place is an entry's key and the window its pane is in, "" when it has
-// no pane on this server.
-type place struct{ key, window string }
+// no pane on this server. alias marks an entry that shows another's pane:
+// a session's entry that is not its primary one, or a workstream.
+type place struct {
+	key, window string
+	alias       bool
+}
 
 // placed is where each entry's pane is.
 func (m model) placed(es []entry) []place {
 	out := make([]place, len(es))
 	for i, e := range es {
-		out[i].key = e.key()
-		switch e.kind {
-		case sessionEntry:
-			if p, ok := m.pane(m.paneOf(e.row)); ok {
-				out[i].window = p.Window
-			}
-		case terminalEntry:
+		out[i].key, out[i].alias = e.key(), e.alias != "" || e.kind == workstreamEntry
+		if e.kind == terminalEntry {
 			out[i].window = e.term.Window
+		} else if p, ok := m.pane(m.entryPane(es, e)); ok {
+			out[i].window = p.Window
 		}
 	}
 	return out
@@ -642,22 +664,28 @@ func (m model) placed(es []entry) []place {
 
 // follow is the entry the cursor takes while the keyboard is outside the
 // list: one whose pane is in the list's window, stage, preferring sel when
-// it is one of them. ok is false when none is there.
+// it is one of them, and else the first that is no alias. ok is false
+// when none is there.
 func follow(ps []place, stage, sel string) (string, bool) {
 	if stage == "" {
 		return "", false
 	}
-	found := ""
+	found, alias := "", ""
 	for _, p := range ps {
 		if p.window != stage {
 			continue
 		}
-		if p.key == sel {
+		switch {
+		case p.key == sel:
 			return sel, true
-		}
-		if found == "" {
+		case p.alias && alias == "":
+			alias = p.key
+		case !p.alias && found == "":
 			found = p.key
 		}
+	}
+	if found == "" {
+		found = alias
 	}
 	return found, found != ""
 }
@@ -670,8 +698,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
 		e, _, _ := m.selected(m.ordered())
-		_, owners := m.listLines(m.sections(), e.key(), 1)
-		m.listTop = m.listStart(owners, e.key(), m.boxHeight()-2)
+		_, owners := m.listLines(m.sections(), e.key(), m.listHeight())
+		m.listTop = m.listStart(owners, e.key(), m.listHeight())
 	}
 	m, stage := m.restage()
 	m, turns := m.askTurns()
@@ -858,7 +886,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		// Wraps round the list.
 		for d := 1; d <= len(es); d++ {
 			j := ((i+a.n*d)%len(es) + len(es)) % len(es)
-			if r, ok := es[j].session(); ok && r.NeedsYou() {
+			if needy(es[j]) {
 				return m.moveTo(es, j), nil
 			}
 		}
@@ -867,7 +895,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if a.do == scrollDigest {
 			a.n += m.digestScroll
 		}
-		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.innerHeight()))
+		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.listHeight()))
 	case stepDigest:
 		return m, m.showDigest(m.digestIdx + a.n)
 	case search:
@@ -920,6 +948,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.pins++
 			home, root := m.home, e.project
 			return m, func() tea.Msg { return pinnedMsg{root: root, err: home.UnpinProject(root), unpin: true} }
+		case ok && e.kind == workstreamEntry:
+			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:
 			return m.say("nothing to stop"), nil
 		default:
@@ -932,10 +962,20 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = row.SessionID
 		}
 	case newSession:
+		if root, i, on := e.workstream(); ok && on {
+			return m.startOn(root, i)
+		}
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
-		return m.openTerminal(m.rootOf(e, ok))
+		task := ""
+		if ok {
+			task = e.task
+		}
+		return m.openTerminal(m.rootOf(e, ok), task)
 	case openReview:
+		if ok && e.kind == workstreamEntry {
+			return m.say(m.moveToSay(e, "v reviews a session's changes")), nil
+		}
 		if !isSession {
 			return m.say("v reviews a session's changes: move to a session"), nil
 		}
@@ -968,6 +1008,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case pickCancel:
 		m.pick = picker{}
 	case copyID:
+		if ok && e.kind == workstreamEntry {
+			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil
+		}
 		if !isSession {
 			return m, nil
 		}
@@ -1036,7 +1079,7 @@ func (m model) toProject(root string) model {
 	name := m.name(root)
 	find := func() (string, bool) {
 		for _, s := range m.sections() {
-			if !s.NeedsYou && !s.Away && s.Title == name && len(s.Entries) > 0 {
+			if !s.Away && !s.Agents && s.Title == name && len(s.Entries) > 0 {
 				return s.Entries[0].key(), true
 			}
 		}
@@ -1062,10 +1105,16 @@ func (m model) rootOf(e entry, ok bool) string {
 		return m.root(m.cwd)
 	case e.kind == terminalEntry:
 		return e.term.Project
-	case e.kind == projectEntry:
+	case e.kind == projectEntry, e.task != "":
 		return e.project
 	}
 	return m.root(e.row.Cwd)
+}
+
+// moveToSay is what a key that acts on a session or terminal says on a
+// workstream: what it does, and to move to an entry under it.
+func (m model) moveToSay(e entry, does string) string {
+	return does + ": move to one under #" + strconv.Itoa(e.issue.ID)
 }
 
 // copyText puts text on the clipboard.
@@ -1088,6 +1137,13 @@ func copied(text string, err error) tea.Msg {
 // used. A pinned project with nothing in it only says how to start one.
 func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
+	case workstreamEntry:
+		for _, c := range children(m.ordered(), e.task) {
+			if c.kind == sessionEntry {
+				return m.act(c)
+			}
+		}
+		return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one."), nil
 	case projectEntry:
 		return m.say("Nothing runs in " + m.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
 	case terminalEntry:
@@ -1140,9 +1196,22 @@ func (m model) start(dir string) (model, tea.Cmd) {
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewCmd().Args})
 }
 
+// startOn runs a new claude at root on a workstream's issue: its first
+// prompt names the issue, which links the session to it once the hook
+// reads it.
+func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
+	if m.mux == nil {
+		return m.say("sessions start only inside overview's tmux"), nil
+	}
+	ref := "#" + strconv.Itoa(i.ID)
+	return m.say("starting a session on " + ref + "…").startPane(spawn{kind: spawnSession, name: "a session on " + ref,
+		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewCmdWith(opening(m.projectID(root), i)).Args})
+}
+
 // openTerminal starts tmux's default shell at dir, a project's root, in a
-// window of its own, and the cursor goes to it.
-func (m model) openTerminal(dir string) (model, tea.Cmd) {
+// window of its own, and the cursor goes to it. task is the workstream the
+// terminal is for, "" for none.
+func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
 	if dir == "" {
 		return m.say("there is no directory to open a terminal in"), nil
 	}
@@ -1151,7 +1220,7 @@ func (m model) openTerminal(dir string) (model, tea.Cmd) {
 	}
 	where := m.name(dir)
 	return m.say("opening a terminal in " + where + "…").startPane(spawn{kind: spawnTerminal, name: "a terminal in " + where,
-		session: m.session, dir: dir, env: m.claudeEnv()})
+		session: m.session, dir: dir, env: m.claudeEnv(), task: task})
 }
 
 // awayNote says where a session that runs inside another app is.

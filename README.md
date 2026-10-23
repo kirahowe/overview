@@ -52,20 +52,47 @@ another `--theme` or from the config file, or overview has been rebuilt, the
 view restarts with them in the same pane, and the session beside it keeps
 running.
 
-The list puts the sessions that need you in a section at the top: a session
-needs you when it is blocked, or when it is idle and its last reply ends with
-a question, and the longest wait comes first. Every other session sits in a
-section for its project, which is the nearest parent directory with a `.jj` or
-`.git` in it, or the session's own directory when there is none. Projects are
-in alphabetical order. Inside one, working sessions come before idle ones, and
-the latest activity comes first. The project's terminals come after its
-sessions, marked `$`, and a project you pinned is listed even with nothing
-in it. A session that another app started, such as
-an editor plugin's chat panel, has no terminal. Unless it needs you, it goes
-in a last section, "in other apps", dimmed and named after the app that runs
-it. A session appears once, and each row shows its state. When the entry
-under the cursor goes away, the cursor moves to the one after it, or to the
-one before it when it was last.
+The list starts with a header: the home's name, then how many sessions
+need you (`!`), how many work (`●`) and how many are idle (`○`). Below it
+each project has a section, headed by a rule with its name. A project is
+the nearest parent directory with a `.jj` or `.git` in it, or the session's
+own directory when there is none, and projects are in alphabetical order.
+Every entry takes one line. Inside a project, working sessions come before
+idle ones, and the latest activity comes first. A session's row shows its
+state and for how long: `!` blocked, `?` asking, a spinner while it works,
+and `○` when idle. A session needs you when it is blocked, or when it is
+idle and its last reply ends with a question. The project's terminals come
+after its sessions, marked `$`, and a project you pinned is listed even
+with nothing in it. A session that another app started, such as an editor
+plugin's chat panel, has no terminal. Unless it works on a task, it goes
+in a section of its own, "in other apps", dimmed and named after the app
+that runs it. When the entry under the cursor goes away, the cursor moves
+to the one after it, or to the one before it when it was last.
+
+The agents list comes last. It holds every session in the list once more,
+in order of priority: those that need you first, longest wait first, then
+the working ones, then the idle ones. A session there acts exactly as it
+does in its project, and its row names its project, or the task it works
+on as `#6`. When the whole list fits, the agents list sits at the bottom of
+the pane; otherwise it follows the projects. The footer shows the keys for
+the selected entry, or a note when overview has something to say.
+
+A project that tracks its work with the `issues` tool, in a `.issues`
+directory, groups its sessions by task. A task, or workstream, is an open
+issue that is in progress, in review or blocked, or that a session works
+on. Its row shows the issue's number and title, its status unless it is in
+progress, and its priority. A project's workstreams come before its other
+entries: those in review first, then those in progress, then the blocked
+ones, and by priority within each. The sessions and terminals of a
+workstream follow its row, indented, and a workstream with none says `no
+sessions`. A session works on an issue when its first prompt starts with
+`Work on <project>#<n>`, or when it or one of its subagents runs `issues
+start <n>`. One that has worked on several open issues is listed under
+each. When an issue is done or dropped, its workstream goes, and its
+sessions go back to the project. A workstream in review counts as needing
+you. overview reads a project's issues with the `issues` binary, and reads
+them again only when a file in `.issues` changes. Without the binary or a
+`.issues`, a project's sessions are listed as above.
 
 A terminal is a window in overview's tmux that runs no Claude session: a
 shell for a one-off command, or a dev server. `t` opens one at the root of
@@ -98,30 +125,35 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
-Keys: `j`/`k` move, `n` jumps to the next session that needs you, and `/`
-searches. Search looks at the project, title, last prompt and name, and
-the app's name for a session in another app, ignoring case. Each
-space-separated word has to match one of those fields, and a word never
-matches across two of them. The cursor moves to the first match, `up` and
-`down` step through the matches, and `esc` clears the search. `enter` (or
-`tab`) moves the keyboard into the selected session, and `ctrl+[` brings it
-back to the list from any pane on the right. On a background session,
-`enter` first attaches to it in a window of its own; the attach stays there
-for when you come back to it. On a session in another app, `enter` brings
-that app to the front. While you are searching, `enter` acts on the
-selected match and clears the search. On a
-terminal, `enter` moves the keyboard into the pane right of the list, and of
-several splits there, the one you used last. `x` stops a background session
-or closes a terminal, and asks first; closing a terminal kills what runs in
-it. `y` copies the attach command. To end a session in another app, close
-it in that app. `v` reviews the selected session's changes, as the next
-section describes. `c` starts a new session at the root of the selected entry's
-project, or where overview was started when the list is empty, shows it on
-the right and moves the keyboard into it. `t` does the same with a
-terminal. `d` shows the digests,
-where `[` and `]` step through older ones and `D` writes a new one. `q`
-detaches, leaving the view and its sessions running, and `Q` quits the view.
-`?` lists every key.
+Keys: `j`/`k` move, `n` jumps to the next session that needs you or
+workstream in review, and `/` searches. Search looks at the project,
+title, last prompt and name, and the app's name for a session in another
+app, ignoring case. A workstream matches on its reference, such as
+`overview#6` or `#6`, its title and its project, and when it matches,
+everything under it shows. Each space-separated word has to match one of
+those fields, and a word never matches across two of them. The cursor
+moves to the first match, `up` and `down` step through the matches, and
+`esc` clears the search. `enter` (or `tab`) moves the keyboard into the
+selected session, and `ctrl+[` brings it back to the list from any pane on
+the right. On a background session, `enter` first attaches to it in a
+window of its own; the attach stays there for when you come back to it. On
+a session in another app, `enter` brings that app to the front. On a
+workstream, `enter` does what it does on the workstream's first session.
+While you are searching, `enter` acts on the selected match and clears the
+search. On a terminal, `enter` moves the keyboard into the pane right of
+the list, and of several splits there, the one you used last. `x` stops a
+background session or closes a terminal, and asks first; closing a
+terminal kills what runs in it. `y` copies the attach command. To end a
+session in another app, close it in that app. `v` reviews the selected
+session's changes, as the next section describes. `c` starts a new session
+at the root of the selected entry's project, or where overview was started
+when the list is empty, shows it on the right and moves the keyboard into
+it. On a workstream, or on anything under one, the new session's first
+prompt is `Work on <project>#<n>: <title>`, so it works on that issue. `t`
+does the same with a terminal, and a terminal opened on a workstream is
+listed under it. `d` shows the digests, where `[` and `]` step through
+older ones and `D` writes a new one. `q` detaches, leaving the view and its
+sessions running, and `Q` quits the view. `?` lists every key.
 
 `a` adds a project to the list. A picker takes the list's place and offers
 the folders beside the projects already listed, and typing words narrows
@@ -132,7 +164,7 @@ or the path you typed when nothing matches. A path that ends in `/`, as
 `tab` leaves it, selects nothing until you press `down`, so `enter` pins
 that directory's project. `esc` closes the picker. A
 pinned project stays in the list when nothing runs in it, on a row of its
-own, and `c` or `t` there starts something in it. `x` on that row unpins
+own that offers `c` and `t`, and either starts something in it. `x` on that row unpins
 the project. The pinned projects are kept in `<home>/overview/projects`.
 
 The mouse works too. A click selects a session, a double click moves the
@@ -266,10 +298,11 @@ base   = revdiff
 accent = #c678dd
 ```
 
-The keys are `accent` (focused borders, headings, keys in the help),
-`border`, `text`, `muted`, `cursor-fg` and `cursor-bg` (the selected row
-while the list has the keyboard), `cursor-dim-fg` and `cursor-dim-bg` (the
-selected row otherwise), `status-fg` and `status-bg` (the bottom bar),
+The keys are `accent` (headings, the home's name, keys in the footer and
+the help), `border` (rules, and the cursor's bar while the keyboard is
+elsewhere), `text`, `muted`, `cursor-bg` (the cursor's bar while the list
+has the keyboard), `cursor-dim-bg` (the background of the selected row),
+`status-fg` and `status-bg` (the review's bottom bar),
 `pill-fg` (text on the state badge beside a session's details), `blocked`,
 `asking`, `working`,
 `code`, and for reviews `added` and `removed` (the signs and numbers of

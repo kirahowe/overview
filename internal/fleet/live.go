@@ -166,5 +166,9 @@ func (h Home) AttachCmd(l Live) *exec.Cmd { return h.claude("attach", l.ID) }
 // NewCmd starts a new interactive session, which joins the fleet.
 func (h Home) NewCmd() *exec.Cmd { return h.claude() }
 
+// NewCmdWith starts a new interactive session with prompt as its first
+// message.
+func (h Home) NewCmdWith(prompt string) *exec.Cmd { return h.claude(prompt) }
+
 // Stop stops a background session. Its conversation is kept.
 func (h Home) Stop(l Live) error { return h.stopSession(l) }

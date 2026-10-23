@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"overview/internal/config"
 	"overview/internal/fleet"
+	"overview/internal/issues"
 )
 
 // pal is the palette in use, and the styles below are built from it.
@@ -48,32 +51,38 @@ func pill(text string, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Background(bg).Foreground(pal.PillFg).Bold(true).Padding(0, 1).Render(text)
 }
 
-// Layout. The list is a box with a one-cell border and a one-cell margin
-// inside it, and the status bar takes the last line.
+// Layout. The first line is the header and the last the footer, and the
+// list takes the lines between. Every line is exactly as wide as the pane:
+// column 0 holds the cursor's bar, the content follows, and one blank
+// column ends it.
 
-func (m model) boxHeight() int { return max(m.h-1, 3) }
+func (m model) listHeight() int { return max(m.h-2, 1) }
 
-func (m model) innerHeight() int { return m.boxHeight() - 2 }
+// contentWidth is the width of a line's content, between the bar's column
+// and the blank one at the end.
+func (m model) contentWidth() int { return max(m.w-2, 0) }
 
 func (m model) View() string {
 	if m.w <= 0 || m.h <= 0 {
 		return ""
 	}
-	var screen []string
+	var body []string
 	if m.screen == digestScreen {
-		screen = m.digestView()
+		body = m.digestView()
 	} else {
-		screen = m.sessionsView()
+		body = m.sessionsView()
 	}
-	screen = pad(screen, m.boxHeight())
+	for len(body) < m.listHeight() {
+		body = append(body, m.plain(""))
+	}
+	screen := append([]string{m.header()}, body[:m.listHeight()]...)
 	switch {
 	case m.help:
 		screen = centre(screen, m.helpBox(), m.w)
 	case m.confirm != "":
 		screen = centre(screen, m.confirmBox(), m.w)
 	}
-	// The box is never shorter than 3 rows, which a squeezed pane can be.
-	screen = append(screen, m.statusBar())
+	screen = append(screen, m.footer())
 	return strings.Join(screen[:min(len(screen), m.h)], "\n")
 }
 
@@ -82,57 +91,48 @@ func (m model) sessionsView() []string {
 		return m.pickerView()
 	}
 	secs := m.sections()
-	es := flatten(secs)
-	e, _, _ := m.selected(es)
-	info := ""
-	if m.filter != "" || m.filtering {
-		info = fmt.Sprintf("/%s · %d", m.filter, len(es))
-	}
+	e, _, _ := m.selected(flatten(secs))
 	lines, _ := m.listView(secs, e.key())
-	return box("sessions", info, lines, m.w, m.boxHeight(), !m.blurred)
+	return lines
 }
 
 // pickerView is the add-project picker in the list's place: the query,
 // then the matching directories, scrolled to keep the selected one shown.
 func (m model) pickerView() []string {
-	w, h := m.w-4, m.innerHeight()
+	w, h := m.contentWidth(), m.listHeight()
 	matches := m.pickMatches()
-	lines := []string{heading.Render("› ") + fg(pal.Text).Render(m.pick.query) + dim.Render("▏"), ""}
+	lines := []string{m.plain(heading.Render("› ") + fg(pal.Text).Render(m.pick.query) + dim.Render("▏")), m.plain("")}
+	say := func(s string) {
+		for _, l := range wrap(dim.Render(s), w) {
+			lines = append(lines, m.plain(l))
+		}
+	}
 	switch {
 	case !m.pick.read:
-		lines = append(lines, dim.Render("reading…"))
+		say("reading…")
 	case len(matches) == 0 && isPathQuery(m.pick.query):
-		lines = append(lines, wrap(dim.Render("Nothing here matches. enter adds "+m.short(expandPath(m.pick.query, m.user))+" if it is a directory."), w)...)
+		say("Nothing here matches. enter adds " + m.short(expandPath(m.pick.query, m.user)) + " if it is a directory.")
 	case len(matches) == 0:
-		lines = append(lines, wrap(dim.Render("Nothing matches. A path starting with / or ~ looks anywhere."), w)...)
+		say("Nothing matches. A path starting with / or ~ looks anywhere.")
 	default:
 		if m.pick.sel < 0 {
 			dir, _ := splitPathQuery(m.pick.query, m.user)
-			lines = append(lines, wrap(dim.Render("enter adds "+m.short(dir)+", down picks a folder in it."), w)...)
+			say("enter adds " + m.short(dir) + ", down picks a folder in it.")
 		}
 		room := max(h-len(lines), 1)
 		sel := max(m.pick.sel, 0)
 		start := window(0, sel, sel+1, len(matches), room)
 		for i := start; i < min(start+room, len(matches)); i++ {
-			text := "  " + m.short(matches[i])
-			if i == m.pick.sel {
-				lines = append(lines, m.cursorBar().Render(fit(text, w)))
-			} else {
-				lines = append(lines, fg(pal.Text).Render(text))
-			}
+			lines = append(lines, m.line([]seg{{"  " + m.short(matches[i]), fg(pal.Text)}}, nil, false, i == m.pick.sel))
 		}
 	}
-	info := ""
-	if m.pick.read {
-		info = fmt.Sprintf("%d", len(matches))
-	}
-	return box("add project", info, lines, m.w, m.boxHeight(), !m.blurred)
+	return lines
 }
 
 // box draws a bordered pane with the title set into its top edge and an
-// optional note in its bottom edge. The focused pane gets the accent colour.
-// A pane too narrow for the top edge with a character of title, 6 columns,
-// gets blank lines: tmux can squeeze the list that far.
+// optional note in its bottom edge, for the overlays. The focused pane
+// gets the accent colour. A pane too narrow for the top edge with a
+// character of title, 6 columns, gets blank lines.
 func box(title, info string, body []string, w, h int, focused bool) []string {
 	if w < 6 {
 		return pad(nil, max(h, 0))
@@ -164,10 +164,164 @@ func box(title, info string, body []string, w, h int, focused bool) []string {
 	return append(out, bottom)
 }
 
-// listLines renders the whole list, unscrolled, with the key of the entry
-// each line belongs to ("" for headings, gaps and messages). Clicks read
-// the owners.
-func (m model) listLines(secs []section, sel string, w int) (lines, owners []string) {
+// seg is a run of text in one style. A line is built of segments so the
+// cursor's row can put its background under each without losing their
+// colours.
+type seg struct {
+	text  string
+	style lipgloss.Style
+}
+
+func segsWidth(ss []seg) int {
+	n := 0
+	for _, s := range ss {
+		n += ansi.StringWidth(s.text)
+	}
+	return n
+}
+
+// cutSegs cuts segments to w cells, with an ellipsis where it cut.
+func cutSegs(ss []seg, w int) []seg {
+	if segsWidth(ss) <= w {
+		return ss
+	}
+	var out []seg
+	left := w
+	for _, s := range ss {
+		sw := ansi.StringWidth(s.text)
+		if sw < left {
+			out = append(out, s)
+			left -= sw
+			continue
+		}
+		if left > 0 {
+			out = append(out, seg{ansi.Truncate(s.text, left, "…"), s.style})
+		}
+		break
+	}
+	return out
+}
+
+// line renders one line of the list: left at the left edge and right at
+// the right one, cut to fit. A right side that does not fit beside at
+// least a few cells of the left goes, unless shrink lets it lose its
+// start instead, as a directory can. The selected line gets the cursor's
+// bar and background.
+func (m model) line(left, right []seg, shrink, selected bool) string {
+	cw := m.contentWidth()
+	lw, rw := segsWidth(left), segsWidth(right)
+	if rw > 0 {
+		room := cw - min(lw, 6) - 1
+		switch {
+		case rw <= room:
+		case shrink && room >= 4:
+			text := ""
+			for _, s := range right {
+				text += s.text
+			}
+			right = []seg{{"…" + ansi.TruncateLeft(text, rw-room+1, ""), right[len(right)-1].style}}
+		default:
+			right = nil
+		}
+		rw = segsWidth(right)
+	}
+	if rw > 0 {
+		left = cutSegs(left, cw-rw-1)
+	} else {
+		left = cutSegs(left, cw)
+	}
+	gap := max(cw-segsWidth(left)-rw, 0)
+	bg := func(st lipgloss.Style) lipgloss.Style { return st }
+	bar := " "
+	if selected {
+		bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
+		edge := pal.CursorBg
+		if m.blurred {
+			edge = pal.Border
+		}
+		bar = fg(edge).Render("▌")
+	}
+	var b strings.Builder
+	b.WriteString(bar)
+	for _, s := range left {
+		b.WriteString(bg(s.style).Render(s.text))
+	}
+	b.WriteString(bg(lipgloss.NewStyle()).Render(strings.Repeat(" ", gap)))
+	for _, s := range right {
+		b.WriteString(bg(s.style).Render(s.text))
+	}
+	if m.w >= 2 {
+		b.WriteString(bg(lipgloss.NewStyle()).Render(" "))
+	}
+	return fit(b.String(), m.w)
+}
+
+// plain is a line with no cursor on it: already styled text, cut to fit.
+func (m model) plain(s string) string {
+	if m.w < 2 {
+		return fit("", m.w)
+	}
+	return " " + fit(s, m.contentWidth()) + " "
+}
+
+// rule heads a section: its title, a line to the right edge, and a note,
+// which goes when there is no room for it beside a few cells of title.
+func (m model) rule(title string, style lipgloss.Style, note string) string {
+	cw := m.contentWidth()
+	nw := ansi.StringWidth(note)
+	if note != "" && cw < nw+8 {
+		note, nw = "", 0
+	}
+	// title, a space, at least one ─, and a space and the note.
+	room := cw - 2
+	if note != "" {
+		room -= nw + 1
+	}
+	// A long title keeps its end, where a project's name is.
+	if tw := ansi.StringWidth(title); tw > max(room, 1) {
+		title = "…" + ansi.TruncateLeft(title, tw-max(room, 1)+1, "")
+	}
+	n := max(room-ansi.StringWidth(title)+1, 0)
+	s := style.Render(title) + " " + fg(pal.Border).Render(strings.Repeat("─", n))
+	if note != "" {
+		s += " " + dim.Render(note)
+	}
+	return m.plain(s)
+}
+
+// sectionNote is what a section's rule says on the right: how many tasks
+// a tracked project has, how many entries an untracked one has, and for
+// the agents list its order.
+func sectionNote(sec section) string {
+	if sec.Agents {
+		return "priority"
+	}
+	n, tasks := 0, 0
+	for _, e := range sec.Entries {
+		switch e.kind {
+		case workstreamEntry:
+			tasks++
+		case projectEntry:
+		default:
+			n++
+		}
+	}
+	switch {
+	case !sec.Tracked && n == 0:
+		return ""
+	case !sec.Tracked:
+		return strconv.Itoa(n)
+	case tasks == 1:
+		return "1 task"
+	}
+	return strconv.Itoa(tasks) + " tasks"
+}
+
+// listLines renders the whole list, unscrolled, for a list area h lines
+// high, with the key of the entry each line belongs to ("" for headings,
+// gaps and messages). Clicks read the owners. When everything fits, blank
+// lines push the agents list to the bottom of the area.
+func (m model) listLines(secs []section, sel string, h int) (lines, owners []string) {
 	add := func(owner string, ls ...string) {
 		lines = append(lines, ls...)
 		for range ls {
@@ -175,41 +329,54 @@ func (m model) listLines(secs []section, sel string, w int) (lines, owners []str
 		}
 	}
 	if !m.loaded && m.rowsErr == nil {
-		add("", dim.Render("reading sessions…"))
+		add("", m.plain(dim.Render("reading sessions…")))
 		return lines, owners
 	}
 	if m.rowsErr != nil {
-		add("", red.Render(m.rowsErr.Error()), "")
+		add("", m.plain(red.Render(m.rowsErr.Error())), m.plain(""))
 	}
 	if len(secs) == 0 {
 		msg := "no sessions running"
 		if m.filter != "" {
 			msg = "nothing matches /" + m.filter
 		}
-		add("", dim.Render(msg))
+		add("", m.plain(dim.Render(msg)))
 		return lines, owners
 	}
+	var agents []string
+	var agentOwners []string
 	for i, sec := range secs {
-		if i > 0 {
-			add("", "")
-		}
+		var ls, ows []string
+		put := func(owner, l string) { ls, ows = append(ls, l), append(ows, owner) }
 		style := heading
-		switch {
-		case sec.NeedsYou:
-			style = red
-		case sec.Away:
+		if sec.Away || sec.Agents {
 			style = dim.Bold(true)
 		}
-		n := 0
-		for _, e := range sec.Entries {
-			if e.kind != projectEntry {
-				n++
+		put("", m.rule(sec.Title, style, sectionNote(sec)))
+		for j, e := range sec.Entries {
+			put(e.key(), m.entryLine(e, e.key() == sel))
+			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].task != e.task) {
+				put(e.key(), m.plain(dim.Render("   no sessions")))
 			}
 		}
-		add("", style.Render(sec.Title)+dim.Render(fmt.Sprintf(" %d", n)))
-		for _, e := range sec.Entries {
-			add(e.key(), m.entryLines(e, w, e.key() == sel, sec.NeedsYou)...)
+		if sec.Agents {
+			agents, agentOwners = ls, ows
+			continue
 		}
+		if i > 0 {
+			add("", m.plain(""))
+		}
+		lines, owners = append(lines, ls...), append(owners, ows...)
+	}
+	if agents != nil {
+		gap := 1
+		if n := len(lines) + 1 + len(agents); n < h {
+			gap += h - n
+		}
+		for range gap {
+			add("", m.plain(""))
+		}
+		lines, owners = append(lines, agents...), append(owners, agentOwners...)
 	}
 	return lines, owners
 }
@@ -242,103 +409,101 @@ func window(top, selTop, selBottom, n, h int) int {
 
 // listView is the shown part of the list and its owners.
 func (m model) listView(secs []section, sel string) (lines, owners []string) {
-	lines, owners = m.listLines(secs, sel, m.w-4)
-	start := m.listStart(owners, sel, m.boxHeight()-2)
-	return lines[start:], owners[start:]
+	h := m.listHeight()
+	lines, owners = m.listLines(secs, sel, h)
+	start := m.listStart(owners, sel, h)
+	end := min(start+h, len(lines))
+	return lines[start:end], owners[start:end]
 }
 
-// entryLines renders one entry as two lines. A terminal shows what runs in
-// it and where, and an empty pinned project the keys that fill it.
-func (m model) entryLines(e entry, w int, selected, pinned bool) []string {
-	switch e.kind {
-	case terminalEntry:
-		return m.plainLines("$", e.term.Title, "terminal", m.short(e.term.Path), w, selected)
-	case projectEntry:
-		return m.plainLines("+", "no sessions", "", "c claude · t terminal · x unpin", w, selected)
-	}
-	return m.rowLines(e.row, w, selected, pinned)
-}
-
-// cursorBar is the style of the selected entry: solid while the list has
-// the keyboard, dimmed otherwise.
-func (m model) cursorBar() lipgloss.Style {
-	bar := lipgloss.NewStyle().Background(pal.CursorDimBg).Foreground(pal.CursorDimFg).Bold(true)
-	if !m.blurred {
-		bar = bar.Background(pal.CursorBg).Foreground(pal.CursorFg)
-	}
-	return bar
-}
-
-// plainLines renders an entry that is not a session in rowLines' shape:
-// mark, name and a right-hand note, then a dim second line.
-func (m model) plainLines(mark, name, right, sub string, w int, selected bool) []string {
-	name = ansi.Truncate(name, max(w-ansi.StringWidth(right)-4, 4), "…")
-	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
-	if selected {
-		bar := m.cursorBar()
-		return []string{bar.Render(fit(mark+" "+name+gap+right, w)), bar.Bold(false).Render(fit("  "+sub, w))}
-	}
-	return []string{dim.Render(mark) + " " + fg(pal.Text).Render(name) + gap + dim.Render(right), "  " + dim.Render(sub)}
-}
-
-// rowLines renders one session as two lines: name, place and age, then what
-// it is about. The selected row is a solid bar, which needs plain text
-// underneath, since every inner colour would reset its background.
-func (m model) rowLines(r fleet.Row, w int, selected, pinned bool) []string {
-	mark, when, sub := "○", Ago(r.Since), Subject(r)
-	style := dim
+// stateMark is how a session's state shows: its mark and the mark's
+// style, and the word, age and style on the right.
+func (m model) stateMark(r fleet.Row) (mark string, markStyle lipgloss.Style, word, age string, wordStyle lipgloss.Style) {
 	switch {
 	case r.State == fleet.Blocked:
-		mark, when, style = "!", "waiting "+Ago(r.Since), red
-		if sub == "" {
-			sub = "blocked"
-		}
+		return "!", red, "blocked", Ago(r.Since), red
 	case r.Asking():
-		mark, when, style = "?", "waiting "+Ago(r.LastReplyAt), amber
-		sub = question(r.LastReply)
+		return "?", amber, "asking", Ago(r.LastReplyAt), amber
 	case r.State == fleet.Working:
-		mark, style = spinner[m.frame%len(spinner)], green
+		return spinner[m.frame%len(spinner)], green, "working", Ago(r.Since), dim
 	}
-	// Under a project heading the project is already known, so say the state
-	// instead. In the pinned section the project is what is missing. A
-	// session inside another app is placed by that app, wherever it is, and
-	// is dimmed, since it is not one of the user's own.
-	place, placed := m.name(r.Cwd), ""
-	app, away := m.hostOf(r)
-	switch {
-	case away:
-		place = app
-	case !pinned:
-		place = string(r.State)
-		if place == "" {
-			place = "idle"
-		}
+	word = string(r.State)
+	if word == "" || r.State == fleet.Idle {
+		word = "idle"
 	}
-	placed = place + " · "
-	if b := reviewBadge(m.reviews[r.SessionID]); b != "" {
-		placed = b + " · " + placed
-	}
-	right := placed + when
-	nameStyle := fg(pal.Text)
-	if away && !r.NeedsYou() {
-		nameStyle = dim
-	}
-	name := ansi.Truncate(r.Name, max(w-ansi.StringWidth(right)-4, 4), "…")
-	gap := strings.Repeat(" ", max(w-ansi.StringWidth(name)-ansi.StringWidth(right)-2, 1))
+	return "○", dim, word, Ago(r.Since), dim
+}
 
-	if selected {
-		bar := m.cursorBar()
-		return []string{
-			bar.Render(fit(mark+" "+name+gap+right, w)),
-			bar.Bold(false).Render(fit("  "+sub, w)),
+// entryLine renders one entry as one line.
+func (m model) entryLine(e entry, selected bool) string {
+	text := fg(pal.Text)
+	indent := []seg{}
+	if e.task != "" && e.kind != workstreamEntry {
+		indent = []seg{{"   ", text}}
+	}
+	switch e.kind {
+	case workstreamEntry:
+		var right []seg
+		switch e.issue.Status {
+		case issues.InProgress:
+		case issues.Review:
+			right = append(right, seg{"review ", fg(pal.Blocked)})
+		case issues.Blocked:
+			right = append(right, seg{"blocked ", fg(pal.Asking)})
+		default:
+			right = append(right, seg{e.issue.Status + " ", dim})
 		}
+		right = append(right, seg{e.issue.Priority, dim})
+		left := []seg{{"#" + strconv.Itoa(e.issue.ID) + " ", dim}, {e.issue.Title, text.Bold(true)}}
+		return m.line(left, right, false, selected)
+	case terminalEntry:
+		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
+		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
+	case projectEntry:
+		return m.line([]seg{{"+ ", dim}, {"c claude · t terminal", dim}}, nil, false, selected)
 	}
-	line := style.Render(mark) + " " + nameStyle.Render(name) + gap + dim.Render(placed) + style.Render(when)
-	subStyle := dim
-	if r.NeedsYou() {
-		subStyle = style.Bold(false)
+	r := e.row
+	mark, markStyle, word, age, wordStyle := m.stateMark(r)
+	app, away := m.hostOf(r)
+	name := text
+	if away && !r.NeedsYou() {
+		name = dim
 	}
-	return []string{line, "  " + subStyle.Render(sub)}
+	left := append(indent, seg{mark + " ", markStyle}, seg{r.Name, name})
+	var right []seg
+	switch {
+	case e.alias == agentsPrefix:
+		right = []seg{{m.agentsNote(e, app, away, segsWidth(left)), dim}}
+	case away:
+		right = []seg{{app, dim}}
+	default:
+		if b := reviewBadge(m.reviews[r.SessionID]); b != "" {
+			right = append(right, seg{b + " ", fg(pal.Accent)})
+		}
+		state := word
+		if age != "" {
+			state += " " + age
+		}
+		right = append(right, seg{state, wordStyle})
+	}
+	return m.line(left, right, false, selected)
+}
+
+// agentsNote is what the agents list says of a session: the workstream it
+// works on, with its project's name when that is not the session's own
+// and there is room, or else its project, or the app it runs in.
+func (m model) agentsNote(e entry, app string, away bool, used int) string {
+	switch {
+	case e.issue.ID != 0:
+		ref := "#" + strconv.Itoa(e.issue.ID)
+		if p := m.name(e.project); p != m.name(e.row.Cwd) && used+len(p)+len(ref)+2 <= m.contentWidth() {
+			return p + " " + ref
+		}
+		return ref
+	case away:
+		return app
+	}
+	return m.name(e.row.Cwd)
 }
 
 type detailCache struct {
@@ -470,20 +635,139 @@ func rule(label string, w int) string {
 
 func (m model) digestLines() []string {
 	if m.digest == "" {
-		return []string{dim.Render("No digest yet. Press D to write one, or start the orchestrator.")}
+		return wrap(dim.Render("No digest yet. Press D to write one, or start the orchestrator."), m.contentWidth())
 	}
-	return wrap(styleDigest(m.digest), min(m.w-4, 100))
+	return wrap(styleDigest(m.digest), min(m.contentWidth(), 100))
 }
 
 func (m model) digestView() []string {
 	lines := m.digestLines()
-	h := m.innerHeight()
+	h := m.listHeight()
 	start := max(0, min(m.digestScroll, len(lines)-h))
-	info := "none yet"
-	if len(m.digests) > 0 {
-		info = fmt.Sprintf("%s · %d of %d", m.digestAt.Format("Mon 15:04"), m.digestIdx+1, len(m.digests))
+	var out []string
+	for _, l := range lines[start:min(start+h, len(lines))] {
+		out = append(out, m.plain(l))
 	}
-	return box("digest", info, lines[start:min(start+h, len(lines))], m.w, m.boxHeight(), true)
+	return out
+}
+
+// header is the first line: the home's name, bright while the list has
+// the keyboard, and the counts of what needs you, what works and what is
+// idle, as many as fit.
+func (m model) header() string {
+	name := heading
+	if m.blurred {
+		name = dim
+	}
+	left := []seg{{"◆ " + m.home.Name(), name}}
+	need, working, idle := m.counts()
+	var right []seg
+	if need > 0 {
+		right = append(right, seg{fmt.Sprintf("! %d  ", need), red})
+	}
+	if working > 0 {
+		right = append(right, seg{fmt.Sprintf("● %d  ", working), green})
+	}
+	right = append(right, seg{fmt.Sprintf("○ %d", idle), dim})
+	for len(right) > 1 && segsWidth(left)+segsWidth(right)+1 > m.contentWidth() {
+		right = right[1:]
+	}
+	return m.line(left, right, false, false)
+}
+
+// hint is a key and what it does, as the footer shows it.
+type hint struct{ key, label string }
+
+// entryHints are the keys that act on the selected entry, the most used
+// first, since the footer drops them from the end.
+func (m model) entryHints(e entry, ok bool) []hint {
+	c, t, help := hint{"c", "claude"}, hint{"t", "term"}, hint{"?", "help"}
+	if !ok {
+		return []hint{c, t, {"a", "add"}, help}
+	}
+	switch e.kind {
+	case workstreamEntry:
+		return []hint{{"enter", "type"}, c, t, {"n", "next"}, help}
+	case terminalEntry:
+		return []hint{{"enter", "type"}, c, t, {"x", "close"}, help}
+	case projectEntry:
+		return []hint{c, t, {"x", "unpin"}, {"a", "add"}, help}
+	}
+	enter := hint{"enter", "type"}
+	if _, away := m.hostOf(e.row); away {
+		enter = hint{"enter", "open app"}
+	} else if e.row.Background() && m.paneOf(e.row) == "" {
+		enter = hint{"enter", "attach"}
+	}
+	hs := []hint{enter, c, t, {"v", "review"}}
+	if e.row.Background() {
+		hs = append(hs, hint{"x", "stop"})
+	}
+	return append(hs, help)
+}
+
+// hintLine puts lead, styled already, before as many whole hints as fit
+// in w cells, as "key label • key label".
+func hintLine(lead []string, hints []hint, w int) string {
+	render := func(n int) string {
+		parts := slices.Clone(lead)
+		var hs []string
+		for _, h := range hints[:n] {
+			hs = append(hs, fg(pal.Accent).Render(h.key)+" "+dim.Render(h.label))
+		}
+		if len(hs) > 0 {
+			parts = append(parts, strings.Join(hs, dim.Render(" • ")))
+		}
+		return strings.Join(parts, "  ")
+	}
+	n := len(hints)
+	for n > 0 && ansi.StringWidth(render(n)) > w {
+		n--
+	}
+	return render(n)
+}
+
+// footer is the last line: what the orchestrator is up to when it is in
+// trouble or writing, then the note when there is one, and otherwise the
+// keys for what is selected.
+func (m model) footer() string {
+	var lead []string
+	if m.loaded && m.rowsErr == nil {
+		switch h := m.home.HealthOf(m.rows); {
+		case !h.Running:
+			lead = append(lead, red.Render("orchestrator off"))
+		case h.Stale:
+			lead = append(lead, red.Render("orchestrator silent "+Ago(h.LastCheck)))
+		}
+	}
+	if m.digesting && m.note != "writing a digest…" {
+		lead = append(lead, dim.Render("writing a digest…"))
+	}
+	var hints []hint
+	switch {
+	case m.pick.open:
+		lead = append(lead, heading.Render("add project"))
+		hints = []hint{{"enter", "pin"}, {"tab", "complete"}, {"esc", "cancel"}}
+	case m.filtering:
+		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
+		hints = []hint{{"enter", "open"}, {"↑↓", "move"}, {"esc", "clear"}}
+	case m.note != "":
+		lead = append(lead, fg(pal.Text).Render(m.note))
+	case m.screen == digestScreen:
+		info := "no digest yet"
+		if len(m.digests) > 0 {
+			info = fmt.Sprintf("%s · %d of %d", m.digestAt.Format("Mon 15:04"), m.digestIdx+1, len(m.digests))
+		}
+		lead = append(lead, dim.Render(info))
+		hints = []hint{{"[ ]", "older/newer"}, {"D", "write"}, {"d", "sessions"}, {"?", "help"}}
+	default:
+		if m.filter != "" {
+			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
+		}
+		e, _, ok := m.selected(m.ordered())
+		hints = m.entryHints(e, ok)
+	}
+	return m.plain(hintLine(lead, hints, m.contentWidth()))
 }
 
 // Overlays.
@@ -512,6 +796,11 @@ func (m model) helpBox() []string {
 		entry{"v", "review its changes"},
 		entry{"a", "add a project"},
 	)...)
+	left = append(left, section("on a task",
+		entry{"enter", "its first session"},
+		entry{"c", "new session on the task"},
+		entry{"t", "new terminal for it"},
+	)...)
 	right := section("digest",
 		entry{"d", "show / hide digests"},
 		entry{"[ ]", "older / newer"},
@@ -527,7 +816,7 @@ func (m model) helpBox() []string {
 		entry{"q", "detach, Q quits"},
 	)...)
 	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
-		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle  $ terminal")
+		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle  ") + codeFg.Render("$") + dim.Render(" terminal  #6 task")
 
 	const col = 40
 	// Side by side when the pane is wide enough, one column under the other
@@ -549,7 +838,7 @@ func (m model) helpBox() []string {
 	}
 	body = append(body, legend)
 	w := min(m.w-4, 2*col+6)
-	return box("keys", "esc closes", body, w, min(len(body)+2, m.boxHeight()), true)
+	return box("keys", "esc closes", body, w, min(len(body)+2, m.listHeight()+1), true)
 }
 
 func (m model) confirmBox() []string {
@@ -590,53 +879,6 @@ func centre(screen, over []string, w int) []string {
 		out[y+i] = ansi.Truncate(bg, x, "") + "\x1b[0m" + l + "\x1b[0m" + ansi.TruncateLeft(bg, x+ansi.StringWidth(l), "")
 	}
 	return out
-}
-
-func (m model) statusBar() string {
-	base := lipgloss.NewStyle().Background(pal.StatusBg).Foreground(pal.StatusFg)
-	strong := base.Bold(true)
-
-	var left []string
-	switch {
-	case m.pick.open:
-		left = []string{strong.Render("add project"), base.Render("enter pins · tab completes · esc cancels")}
-	case m.filtering:
-		left = []string{strong.Render("/" + m.filter + "▏"), base.Render("enter opens · esc clears")}
-	case m.note != "":
-		left = []string{strong.Render(m.note)}
-	default:
-		need, working, idle := m.counts()
-		if need > 0 {
-			left = append(left, strong.Render(fmt.Sprintf("%d need you", need)))
-		}
-		if working > 0 {
-			left = append(left, base.Render(fmt.Sprintf("%d working", working)))
-		}
-		left = append(left, base.Render(fmt.Sprintf("%d idle", idle)))
-		if m.loaded && m.rowsErr == nil {
-			switch h := m.home.HealthOf(m.rows); {
-			case !h.Running:
-				left = append(left, strong.Render("orchestrator off"))
-			case h.Stale:
-				left = append(left, strong.Render("orchestrator silent "+Ago(h.LastCheck)))
-			case m.digesting:
-				left = append(left, base.Render("writing a digest…"))
-			}
-		}
-	}
-	sep := base.Render(" │ ")
-	l := strong.Render(" ◆ "+m.home.Name()) + sep + strings.Join(left, sep)
-
-	keys := "↵ type · ^[ back · / search · n next · c new · t term · a add · ? help "
-	if m.screen == digestScreen {
-		keys = "[ ] older/newer · D write · d sessions · ? help "
-	}
-	r := base.Render(keys)
-	gap := m.w - ansi.StringWidth(l) - ansi.StringWidth(r)
-	if gap < 1 {
-		return fit(l, m.w)
-	}
-	return l + base.Render(strings.Repeat(" ", gap)) + r
 }
 
 // Text helpers.

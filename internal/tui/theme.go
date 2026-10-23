@@ -25,11 +25,13 @@ type Theme struct {
 	Name string
 
 	Accent, Border, Text, Muted lipgloss.Color
-	CursorFg, CursorBg          lipgloss.Color
-	CursorDimFg, CursorDimBg    lipgloss.Color
-	StatusFg, StatusBg, PillFg  lipgloss.Color
-	Blocked, Asking, Working    lipgloss.Color
-	Code                        lipgloss.Color
+	// CursorBg is the cursor's bar while the list has the keyboard, and
+	// CursorDimBg the background of the selected row. StatusFg and
+	// StatusBg are the review's bottom bar.
+	CursorBg, CursorDimBg      lipgloss.Color
+	StatusFg, StatusBg, PillFg lipgloss.Color
+	Blocked, Asking, Working   lipgloss.Color
+	Code                       lipgloss.Color
 	// The review's diff: the markers and line numbers of added and
 	// removed lines, their backgrounds, and the stronger backgrounds of
 	// the words that changed within them.
@@ -50,9 +52,7 @@ var themeKeys = []struct {
 	{"border", func(t *Theme) *lipgloss.Color { return &t.Border }},
 	{"text", func(t *Theme) *lipgloss.Color { return &t.Text }},
 	{"muted", func(t *Theme) *lipgloss.Color { return &t.Muted }},
-	{"cursor-fg", func(t *Theme) *lipgloss.Color { return &t.CursorFg }},
 	{"cursor-bg", func(t *Theme) *lipgloss.Color { return &t.CursorBg }},
-	{"cursor-dim-fg", func(t *Theme) *lipgloss.Color { return &t.CursorDimFg }},
 	{"cursor-dim-bg", func(t *Theme) *lipgloss.Color { return &t.CursorDimBg }},
 	{"status-fg", func(t *Theme) *lipgloss.Color { return &t.StatusFg }},
 	{"status-bg", func(t *Theme) *lipgloss.Color { return &t.StatusBg }},

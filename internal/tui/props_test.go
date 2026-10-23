@@ -19,6 +19,7 @@ import (
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
+	"overview/internal/issues"
 	"overview/internal/tmux"
 )
 
@@ -103,13 +104,19 @@ func genQuery(t *rapid.T) string {
 
 // sessionList is buildList with sessions only.
 func sessionList(rows []fleet.Row, query string, project func(string) string, host func(fleet.Row) (string, bool)) []section {
-	return buildList(rows, nil, nil, query, project, fakeShort, host)
+	return buildList(rows, nil, nil, tasks{}, query, project, fakeShort, host)
 }
 
+// ids are the keys of the entries above the agents list that are no alias:
+// each session, terminal, placeholder and workstream once.
 func ids(secs []section) []string {
 	var out []string
-	for _, e := range flatten(secs) {
-		out = append(out, e.key())
+	for _, s := range secs {
+		for _, e := range s.Entries {
+			if !s.Agents && e.alias == "" {
+				out = append(out, e.key())
+			}
+		}
 	}
 	return out
 }
@@ -186,6 +193,10 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 	})
 }
 
+// Without workstreams, every session sits in its project's section, or in
+// the away section when another app runs it, working first and then the
+// newest. The agents list comes last and holds every session shown above
+// once, those that need you first, longest wait first.
 func TestPropSectionsHoldTheRightRows(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		secs := sessionList(genRows(t), genQuery(t), fakeProject, fakeHost)
@@ -196,8 +207,31 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 			if len(s.Entries) == 0 {
 				t.Fatalf("empty section %q", s.Title)
 			}
-			if s.NeedsYou && (i != 0 || s.Title != needsYouTitle) {
-				t.Fatalf("needs-you section at %d titled %q, want first and %q", i, s.Title, needsYouTitle)
+			if s.Agents {
+				if i != len(secs)-1 || s.Title != agentsTitle {
+					t.Fatalf("agents at %d of %d titled %q", i, len(secs), s.Title)
+				}
+				listed := map[string]bool{}
+				for j, e := range s.Entries {
+					r := e.row
+					if e.alias != agentsPrefix || e.key() != "agents/"+r.SessionID || !seen[r.SessionID] || listed[r.SessionID] {
+						t.Fatalf("agents entry %s (shown above %v, twice %v)", e.key(), seen[r.SessionID], listed[r.SessionID])
+					}
+					listed[r.SessionID] = true
+					if j > 0 {
+						p := s.Entries[j-1].row
+						bad := !p.NeedsYou() && r.NeedsYou() ||
+							p.NeedsYou() && r.NeedsYou() && (p.Since.After(r.Since) || p.Since.Equal(r.Since) && p.SessionID >= r.SessionID) ||
+							!p.NeedsYou() && !r.NeedsYou() && !activeLess(p, r)
+						if bad {
+							t.Fatalf("agents order: %s before %s", p.SessionID, r.SessionID)
+						}
+					}
+				}
+				if len(listed) != len(seen) {
+					t.Fatalf("agents list %d of %d sessions", len(listed), len(seen))
+				}
+				continue
 			}
 			for j, e := range s.Entries {
 				r := e.row
@@ -205,39 +239,21 @@ func TestPropSectionsHoldTheRightRows(t *testing.T) {
 					t.Fatalf("%s appears twice", r.SessionID)
 				}
 				seen[r.SessionID] = true
-				if r.NeedsYou() != s.NeedsYou {
-					t.Fatalf("%s: NeedsYou=%v in section needs=%v", r.SessionID, r.NeedsYou(), s.NeedsYou)
-				}
 				_, away := fakeHost(r)
-				if !s.NeedsYou && away != s.Away {
+				if away != s.Away {
 					t.Fatalf("%s: away=%v in section away=%v", r.SessionID, away, s.Away)
 				}
-				if !s.NeedsYou && !s.Away && fakeProject(r.Cwd) != s.Title {
+				if !s.Away && fakeProject(r.Cwd) != s.Title {
 					t.Fatalf("%s (project %q) is under %q", r.SessionID, fakeProject(r.Cwd), s.Title)
 				}
-				if j == 0 {
-					continue
-				}
-				p := s.Entries[j-1].row
-				switch {
-				case s.NeedsYou:
-					if p.Since.After(r.Since) || (p.Since.Equal(r.Since) && p.SessionID >= r.SessionID) {
-						t.Fatalf("needs-you order: %s before %s", p.SessionID, r.SessionID)
-					}
-				default:
-					pw, rw := p.State == fleet.Working, r.State == fleet.Working
-					bad := (!pw && rw) ||
-						(pw == rw && p.Since.Before(r.Since)) ||
-						(pw == rw && p.Since.Equal(r.Since) && p.SessionID >= r.SessionID)
-					if bad {
-						t.Fatalf("project order: %s before %s", p.SessionID, r.SessionID)
-					}
+				if j > 0 && !activeLess(s.Entries[j-1].row, r) {
+					t.Fatalf("order: %s before %s", s.Entries[j-1].row.SessionID, r.SessionID)
 				}
 			}
-			if s.Away && (i != len(secs)-1 || s.Title != awayTitle) {
-				t.Fatalf("away section at %d of %d titled %q, want last and %q", i, len(secs), s.Title, awayTitle)
+			if s.Away && (i != len(secs)-2 || s.Title != awayTitle) {
+				t.Fatalf("away section at %d of %d titled %q, want before the agents and %q", i, len(secs), s.Title, awayTitle)
 			}
-			if !s.NeedsYou && !s.Away {
+			if !s.Away {
 				if prev != nil && !nameLess(prev.Title, s.Title) {
 					t.Fatalf("projects out of order: %q then %q", prev.Title, s.Title)
 				}
@@ -305,14 +321,14 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 			{LastPrompt: a, Name: b},
 		} {
 			r.SessionID = "x"
-			if len(sessionList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost)) != 0 {
+			if len(ids(sessionList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost))) != 0 {
 				t.Fatalf("%q matched across fields %q|%q", term, a, b)
 			}
 		}
 		// Whitespace splits terms, so a "term" with a space is two terms and
 		// each may match a different field.
 		r := fleet.Row{SessionID: "x", Title: a, LastPrompt: b}
-		if len(sessionList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost)) != 1 {
+		if len(ids(sessionList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost))) != 1 {
 			t.Fatalf("%q %q should match as two terms", a, b)
 		}
 	})
@@ -324,7 +340,7 @@ func TestMatchingIsPerFieldAndCaseInsensitive(t *testing.T) {
 		"billing": true, "AUTH": true, "fix auth": true, "auth billing": true,
 		"authrotate": false, "fixauth": false, "keys fix": true, "nope": false,
 	} {
-		got := len(sessionList([]fleet.Row{r}, q, fakeProject, fakeHost)) == 1
+		got := len(ids(sessionList([]fleet.Row{r}, q, fakeProject, fakeHost))) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}
@@ -594,7 +610,7 @@ func genPinned(t *rapid.T) []string {
 func TestPropEveryEntryShowsOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
-		secs := buildList(rows, terms, pinned, "", fakeProject, fakeShort, fakeHost)
+		secs := buildList(rows, terms, pinned, tasks{}, "", fakeProject, fakeShort, fakeHost)
 		count := map[string]int{}
 		for _, s := range secs {
 			sawTerm := false
@@ -602,7 +618,7 @@ func TestPropEveryEntryShowsOnce(t *testing.T) {
 				count[e.key()]++
 				switch e.kind {
 				case terminalEntry:
-					if s.NeedsYou || s.Away || s.Title != fakeProject(e.term.Project) {
+					if s.Away || s.Agents || s.Title != fakeProject(e.term.Project) {
 						t.Fatalf("terminal %s (project %q) in section %q", e.key(), e.term.Project, s.Title)
 					}
 					if sawTerm && !windowLess(s.Entries[j-1].term.Window, e.term.Window) {
@@ -657,9 +673,9 @@ func TestPropEveryEntryShowsOnce(t *testing.T) {
 func TestPropEntriesIndependentOfInputOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
-		a := buildList(rows, terms, pinned, q, fakeProject, fakeShort, fakeHost)
+		a := buildList(rows, terms, pinned, tasks{}, q, fakeProject, fakeShort, fakeHost)
 		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
-			rapid.Permutation(pinned).Draw(t, "pinned"), q, fakeProject, fakeShort, fakeHost)
+			rapid.Permutation(pinned).Draw(t, "pinned"), tasks{}, q, fakeProject, fakeShort, fakeHost)
 		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
 			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
 		}
@@ -672,10 +688,10 @@ func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
 		all := map[string]bool{}
-		for _, id := range ids(buildList(rows, terms, pinned, "", fakeProject, fakeShort, fakeHost)) {
+		for _, id := range ids(buildList(rows, terms, pinned, tasks{}, "", fakeProject, fakeShort, fakeHost)) {
 			all[id] = true
 		}
-		for _, e := range flatten(buildList(rows, terms, pinned, q, fakeProject, fakeShort, fakeHost)) {
+		for _, e := range flatten(buildList(rows, terms, pinned, tasks{}, q, fakeProject, fakeShort, fakeHost)) {
 			if e.kind != projectEntry {
 				continue
 			}
@@ -698,7 +714,7 @@ func TestTerminalSearch(t *testing.T) {
 		"": true, "shop": true, "NODE": true, "web": true, "node web": true, "shop/web": true,
 		"nodeweb": false, "zsh": false, "terminal": false,
 	} {
-		got := len(buildList(nil, []terminal{term}, nil, q, fakeProject, fakeShort, fakeHost)) == 1
+		got := len(buildList(nil, []terminal{term}, nil, tasks{}, q, fakeProject, fakeShort, fakeHost)) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}
@@ -707,7 +723,7 @@ func TestTerminalSearch(t *testing.T) {
 
 func TestCountsSkipTerminalsAndPlaceholders(t *testing.T) {
 	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/a"}, State: fleet.Working}
-	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, "", fakeProject, fakeShort, fakeHost)
+	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, tasks{}, "", fakeProject, fakeShort, fakeHost)
 	if need, working, idle := counts(secs); need != 0 || working != 1 || idle != 0 {
 		t.Fatalf("counts %d %d %d", need, working, idle)
 	}
@@ -830,7 +846,7 @@ func TestTermTitle(t *testing.T) {
 // session has left it and the window is listed as a terminal.
 func TestPropStuck(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), "", fakeProject, fakeShort, fakeHost))
+		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), tasks{}, "", fakeProject, fakeShort, fakeHost))
 		win := rapid.SampledFrom([]string{"", "@1", "@2", "@7"}).Draw(t, "win")
 		still := rapid.Bool().Draw(t, "still")
 		key, ok := stuck(win, still, es)
@@ -893,7 +909,7 @@ func TestPropFollow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var ps []place
 		for i := range rapid.IntRange(0, 8).Draw(t, "n") {
-			ps = append(ps, place{fmt.Sprintf("k%d", i), rapid.SampledFrom([]string{"", "@1", "@2", "@3"}).Draw(t, "window")})
+			ps = append(ps, place{fmt.Sprintf("k%d", i), rapid.SampledFrom([]string{"", "@1", "@2", "@3"}).Draw(t, "window"), rapid.Bool().Draw(t, "alias")})
 		}
 		stage := rapid.SampledFrom([]string{"", "@1", "@2"}).Draw(t, "stage")
 		sel := rapid.SampledFrom([]string{"k0", "k1", "k5", "gone"}).Draw(t, "sel")
@@ -910,12 +926,29 @@ func TestPropFollow(t *testing.T) {
 			t.Fatalf("%s is not in %s", got, stage)
 		case there[sel] && got != sel:
 			t.Fatalf("the cursor's %s is there, yet follow chose %s", sel, got)
+		case !there[sel] && ok:
+			// Else the first there that is no alias, or the first alias.
+			want := ""
+			for _, p := range ps {
+				if there[p.key] && !p.alias {
+					want = p.key
+					break
+				}
+			}
+			for _, p := range ps {
+				if want == "" && there[p.key] {
+					want = p.key
+				}
+			}
+			if got != want {
+				t.Fatalf("follow chose %s, want %s from %+v", got, want, ps)
+			}
 		}
 	})
 }
 
-// The view fits whatever pane tmux gives it, down to none at all: no line
-// is wider than the pane and there are no more lines than it has rows.
+// The view fits whatever pane tmux gives it, down to none at all: every
+// line is as wide as the pane and there are as many as it has rows.
 // tmux can squeeze the list to a column, and a view that panics there
 // takes its pane down with it.
 func TestPropViewFitsAnySize(t *testing.T) {
@@ -925,19 +958,29 @@ func TestPropViewFitsAnySize(t *testing.T) {
 		m := newModel(caseHome(t, root), "")
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
-		m = update(m, rowsMsg{rows: genRows(t)})
+		rows, ttys, ts := workRows(t)
+		m = update(m, rowsMsg{rows: rows, ttys: ttys, trackers: ts})
 		for _, k := range rapid.SliceOfN(rapid.SampledFrom(keys), 0, 4).Draw(t, "keys") {
 			m = update(m, keyMsg(k))
 		}
 		w := rapid.OneOf(rapid.IntRange(0, 12), rapid.IntRange(0, 200)).Draw(t, "w")
 		h := rapid.OneOf(rapid.IntRange(0, 6), rapid.IntRange(0, 60)).Draw(t, "h")
 		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
-		lines := strings.Split(m.View(), "\n")
-		if len(lines) > max(h, 1) {
+		view := m.View()
+		if w == 0 || h == 0 {
+			if view != "" {
+				t.Fatalf("a pane %dx%d got %q", w, h, view)
+			}
+			return
+		}
+		// Every line is exactly as wide as the pane, and there are as many
+		// as it has rows, so nothing of an older frame shows through.
+		lines := strings.Split(view, "\n")
+		if len(lines) != h {
 			t.Fatalf("%d lines in a pane %d high", len(lines), h)
 		}
 		for i, l := range lines {
-			if got := ansi.StringWidth(l); got > w {
+			if got := ansi.StringWidth(l); got != w {
 				t.Fatalf("line %d is %d wide in a pane %d wide: %q", i, got, w, l)
 			}
 		}
@@ -1016,6 +1059,390 @@ func TestPropFitList(t *testing.T) {
 		}
 		if lo := max(min(listMin, max(win-besideMin-1, win/2)), 1); want >= lo && want <= max(win-besideMin-1, lo) && got != want {
 			t.Fatalf("fitList(%d, %d) = %d, though %d fits", want, win, got, want)
+		}
+	})
+}
+
+// Workstreams. Two of the rows' projects track their issues; their issues
+// have numbers 1 to 5 and any status, and sessions and terminals link to
+// them, or to issues that are closed or not there at all.
+
+var (
+	trackedRoots = []string{"/w/alpha", "/w/gamma"}
+	statuses     = []string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked, issues.Done, issues.Dropped}
+)
+
+func genTasks(t *rapid.T, rows []fleet.Row) tasks {
+	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, links: map[string][]string{}}
+	for _, root := range trackedRoots {
+		if rapid.IntRange(0, 4).Draw(t, "untracked") == 0 {
+			continue
+		}
+		tk.ids[root] = path.Base(root)
+		for _, id := range rapid.SliceOfDistinct(rapid.IntRange(1, 5), rapid.ID[int]).Draw(t, "issues") {
+			tk.open[root] = append(tk.open[root], issues.Issue{
+				ID: id, Ref: fmt.Sprintf("%s#%d", path.Base(root), id), Title: phrase(t, "ititle"),
+				Status:   rapid.SampledFrom(statuses).Draw(t, "status"),
+				Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", ""}).Draw(t, "priority"),
+			})
+		}
+	}
+	for _, r := range rows {
+		keys := rapid.SliceOfNDistinct(genKey(), 0, 3, rapid.ID[string]).Draw(t, "links")
+		if len(keys) > 0 {
+			tk.links[r.SessionID] = keys
+		}
+	}
+	return tk
+}
+
+func genKey() *rapid.Generator[string] {
+	return rapid.Custom(func(t *rapid.T) string {
+		return taskKey(rapid.SampledFrom(append(trackedRoots, "/w/Beta")).Draw(t, "kroot"), rapid.IntRange(1, 6).Draw(t, "kid"))
+	})
+}
+
+// genTaskTerms are genTerms, some of them opened for a workstream.
+func genTaskTerms(t *rapid.T) []terminal {
+	ts := genTerms(t)
+	for i := range ts {
+		if rapid.Bool().Draw(t, "termtask") {
+			ts[i].Task = genKey().Draw(t, "ttask")
+		}
+	}
+	return ts
+}
+
+// streamsOf are the workstreams buildList should list, before a query:
+// the open issues that are active or have a session, other than the
+// orchestrator, linked to them.
+func streamsOf(rows []fleet.Row, tk tasks) map[string]issues.Issue {
+	open := map[string]issues.Issue{}
+	for root, list := range tk.open {
+		for _, i := range list {
+			if issues.Open(i.Status) {
+				open[taskKey(root, i.ID)] = i
+			}
+		}
+	}
+	out := map[string]issues.Issue{}
+	for k, i := range open {
+		if active(i.Status) {
+			out[k] = i
+		}
+	}
+	for _, r := range rows {
+		if r.Name == fleet.OrchestratorName {
+			continue
+		}
+		for _, k := range tk.links[r.SessionID] {
+			if i, ok := open[k]; ok {
+				out[k] = i
+			}
+		}
+	}
+	return out
+}
+
+// validLinks are a session's links to listed workstreams, in order.
+func validLinks(r fleet.Row, tk tasks, streams map[string]issues.Issue) []string {
+	var out []string
+	for _, k := range tk.links[r.SessionID] {
+		if _, ok := streams[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func TestPropWorkstreams(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned := genRows(t), genTaskTerms(t), genPinned(t)
+		tk := genTasks(t, rows)
+		secs := buildList(rows, terms, pinned, tk, "", fakeProject, fakeShort, fakeHost)
+		streams := streamsOf(rows, tk)
+		count := map[string]int{}
+		for _, e := range flatten(secs) {
+			if count[e.key()]++; count[e.key()] > 1 {
+				t.Fatalf("key %s twice", e.key())
+			}
+		}
+		// Every workstream, and only those, is listed once.
+		listed := 0
+		for _, e := range flatten(secs) {
+			if e.kind != workstreamEntry {
+				continue
+			}
+			listed++
+			i, ok := streams[e.task]
+			if !ok || i.ID != e.issue.ID || !issues.Open(e.issue.Status) || e.key() != "task:"+e.task {
+				t.Fatalf("workstream %s should not be listed: %+v", e.key(), e.issue)
+			}
+		}
+		if listed != len(streams) {
+			t.Fatalf("%d workstreams listed, want %d: %v", listed, len(streams), streams)
+		}
+		// Each session: a primary entry under the last workstream it is
+		// linked to, or in its project; an alias under each other one; and
+		// one in the agents list.
+		for _, r := range rows {
+			if r.Name == fleet.OrchestratorName {
+				continue
+			}
+			links := validLinks(r, tk, streams)
+			n := 0
+			for _, e := range flatten(secs) {
+				if e.kind == sessionEntry && e.row.SessionID == r.SessionID {
+					n++
+				}
+			}
+			if n != max(len(links), 1)+1 {
+				t.Fatalf("%s is listed %d times with links %v", r.SessionID, n, links)
+			}
+			if count["agents/"+r.SessionID] != 1 || count[r.SessionID] != 1 {
+				t.Fatalf("%s: primary %d, agents %d", r.SessionID, count[r.SessionID], count["agents/"+r.SessionID])
+			}
+			for j, k := range links {
+				key := "task:" + k + "/" + r.SessionID
+				if j == len(links)-1 {
+					key = r.SessionID
+				}
+				if count[key] != 1 {
+					t.Fatalf("%s has no entry %s (links %v)", r.SessionID, key, links)
+				}
+			}
+		}
+		checkOrder(t, secs, terms, fakeProject)
+	})
+}
+
+// checkOrder checks the order of every project section: its workstreams
+// by workstreamLess, each followed by its sessions (working first, then
+// the newest) and its terminals (by window), then the unlinked sessions
+// and terminals in the same order. A terminal sits under a workstream
+// exactly when it was opened for one that is listed in its project.
+func checkOrder(t *rapid.T, secs []section, terms []terminal, project func(string) string) {
+	shownWS := map[string]entry{}
+	for _, e := range flatten(secs) {
+		if e.kind == workstreamEntry {
+			shownWS[e.task] = e
+		}
+	}
+	for _, s := range secs {
+		if s.Agents || s.Away {
+			for _, e := range s.Entries {
+				if e.task != "" {
+					t.Fatalf("%s in %q is under a workstream", e.key(), s.Title)
+				}
+			}
+			continue
+		}
+		var prevWS *entry
+		ws := ""      // the workstream the entries are under, "" once past them
+		phase := 0    // 0 sessions, 1 terminals, within a group
+		past := false // past the workstreams
+		var prev *entry
+		for j := range s.Entries {
+			e := s.Entries[j]
+			switch {
+			case e.kind == workstreamEntry:
+				if past {
+					t.Fatalf("workstream %s after unlinked entries in %q", e.key(), s.Title)
+				}
+				if project(e.project) != s.Title {
+					t.Fatalf("workstream %s in %q", e.key(), s.Title)
+				}
+				if prevWS != nil && !workstreamLess(*prevWS, e) {
+					t.Fatalf("workstreams out of order: %s then %s", prevWS.key(), e.key())
+				}
+				prevWS, ws, phase, prev = &s.Entries[j], e.task, 0, nil
+				continue
+			case e.kind == projectEntry:
+				continue
+			case e.task == "" && ws != "" || !past && ws == "":
+				past, ws, phase, prev = true, "", 0, nil
+			}
+			if e.task != ws {
+				t.Fatalf("%s (task %q) sits under %q in %q", e.key(), e.task, ws, s.Title)
+			}
+			if e.kind == terminalEntry {
+				want := ""
+				if w, ok := shownWS[e.term.Task]; ok && project(w.project) == project(e.term.Project) {
+					want = e.term.Task
+				}
+				if e.task != want {
+					t.Fatalf("terminal %s (opened for %q) under %q", e.key(), e.term.Task, e.task)
+				}
+				if phase == 1 && !windowLess(prev.term.Window, e.term.Window) {
+					t.Fatalf("terminals out of order in %q", s.Title)
+				}
+				phase = 1
+			} else {
+				if phase == 1 {
+					t.Fatalf("session %s after a terminal in %q", e.key(), s.Title)
+				}
+				if prev != nil && !activeLess(prev.row, e.row) {
+					t.Fatalf("sessions out of order: %s then %s", prev.key(), e.key())
+				}
+			}
+			prev = &s.Entries[j]
+		}
+	}
+}
+
+func TestPropWorkstreamsIndependentOfInputOrder(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned, q := genRows(t), genTaskTerms(t), genPinned(t), genQuery(t)
+		tk := genTasks(t, rows)
+		keys := func(secs []section) []string {
+			var out []string
+			for _, e := range flatten(secs) {
+				out = append(out, e.key())
+			}
+			return out
+		}
+		a := buildList(rows, terms, pinned, tk, q, fakeProject, fakeShort, fakeHost)
+		shuffled := tasks{open: map[string][]issues.Issue{}, ids: tk.ids, links: tk.links}
+		for r, l := range tk.open {
+			shuffled.open[r] = rapid.Permutation(l).Draw(t, "issues")
+		}
+		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
+			rapid.Permutation(pinned).Draw(t, "pinned"), shuffled, q, fakeProject, fakeShort, fakeHost)
+		if !reflect.DeepEqual(keys(a), keys(b)) {
+			t.Fatalf("order changed: %v vs %v", keys(a), keys(b))
+		}
+	})
+}
+
+// A search never shows an entry under a workstream without the
+// workstream's row, shows everything under a workstream that matches,
+// and shows a workstream only when it or something under it matches.
+func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms := genRows(t), genTaskTerms(t)
+		tk := genTasks(t, rows)
+		q := rapid.OneOf(rapid.Just(genQuery(t)), rapid.SampledFrom([]string{"#2", "alpha#3", "gamma", "#4 alpha"})).Draw(t, "q")
+		all := buildList(rows, terms, nil, tk, "", fakeProject, fakeShort, fakeHost)
+		got := buildList(rows, terms, nil, tk, q, fakeProject, fakeShort, fakeHost)
+		words := strings.Fields(strings.ToLower(q))
+		shown := map[string]bool{}
+		for _, e := range flatten(got) {
+			shown[e.key()] = true
+		}
+		for _, s := range got {
+			cur := ""
+			for _, e := range s.Entries {
+				if e.kind == workstreamEntry {
+					cur = e.task
+				} else if e.task != "" && e.task != cur {
+					t.Fatalf("%q shows %s without its workstream %s", q, e.key(), e.task)
+				}
+			}
+		}
+		for _, s := range all {
+			for _, e := range s.Entries {
+				if e.kind != workstreamEntry {
+					continue
+				}
+				self := matchFields(words, e.issue.Ref, fmt.Sprintf("#%d", e.issue.ID), e.issue.Title, fakeProject(e.project))
+				kids := children(flatten(all), e.task)
+				any := false
+				for _, c := range kids {
+					any = any || shown[c.key()]
+					if self && !shown[c.key()] {
+						t.Fatalf("%q matches %s but hides %s", q, e.key(), c.key())
+					}
+				}
+				if shown[e.key()] != (self || any) {
+					t.Fatalf("%q: %s shown %v, matches %v, a child shown %v", q, e.key(), shown[e.key()], self, any)
+				}
+			}
+		}
+	})
+}
+
+func TestPropCountsAreEachSessionOnce(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows := genRows(t)
+		tk := genTasks(t, rows)
+		need, working, idle := counts(buildList(rows, nil, nil, tk, "", fakeProject, fakeShort, fakeHost))
+		wantNeed, wantWorking, wantIdle := 0, 0, 0
+		for _, r := range rows {
+			switch {
+			case r.Name == fleet.OrchestratorName:
+			case r.NeedsYou():
+				wantNeed++
+			case r.State == fleet.Working:
+				wantWorking++
+			default:
+				wantIdle++
+			}
+		}
+		for _, i := range streamsOf(rows, tk) {
+			if i.Status == issues.Review {
+				wantNeed++
+			}
+		}
+		if need != wantNeed || working != wantWorking || idle != wantIdle {
+			t.Fatalf("counts %d %d %d, want %d %d %d", need, working, idle, wantNeed, wantWorking, wantIdle)
+		}
+	})
+}
+
+// workRows are rows whose task refs name the tracked projects by id, and
+// trackers for those projects, for a model.
+func workRows(t *rapid.T) ([]fleet.Row, map[int]string, trackers) {
+	rows, ttys := genStateRows(t)
+	for i := range rows {
+		for range rapid.IntRange(0, 2).Draw(t, "refs") {
+			rows[i].Tasks = append(rows[i].Tasks, fleet.TaskRef{
+				Project: rapid.SampledFrom([]string{"alpha", "gamma"}).Draw(t, "rproject"),
+				ID:      rapid.IntRange(1, 5).Draw(t, "rid"),
+			})
+		}
+	}
+	tk := genTasks(t, nil)
+	ts := trackers{}
+	for root, list := range tk.open {
+		ts[root] = tracker{id: tk.ids[root], issues: list}
+	}
+	return rows, ttys, ts
+}
+
+// j from the top visits every entry once, aliases and workstreams too, and
+// n only ever stops at a session's own entry that needs you or at a
+// workstream in review.
+func TestPropTheCursorWalksTheWholeList(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(3, 40).Draw(t, "h")})
+		rows, ttys, ts := workRows(t)
+		m = update(m, rowsMsg{rows: rows, ttys: ttys, trackers: ts})
+		es := m.ordered()
+		m, _ = press(m, "g")
+		var visited []string
+		for range len(es) + 2 {
+			if len(visited) == 0 || visited[len(visited)-1] != m.sel {
+				visited = append(visited, m.sel)
+			}
+			m, _ = press(m, "j")
+		}
+		var want []string
+		for _, e := range es {
+			want = append(want, e.key())
+		}
+		if len(es) > 0 && !slices.Equal(visited, want) {
+			t.Fatalf("j visited %v, want %v", visited, want)
+		}
+		for range 6 {
+			was := m.sel
+			m, _ = press(m, rapid.SampledFrom([]string{"n", "N"}).Draw(t, "n"))
+			e, _, ok := m.selected(m.ordered())
+			if moved := m.sel != was; ok && (moved || m.note != "nothing needs you") && (!needy(e) || e.alias != "") {
+				t.Fatalf("n stopped at %s (%+v)", e.key(), e)
+			}
 		}
 	})
 }
