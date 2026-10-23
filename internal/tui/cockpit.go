@@ -530,3 +530,20 @@ func (m model) startPicked() (model, tea.Cmd) {
 	m, cmd := m.startOn(t.root, i)
 	return m, tea.Batch(out, cmd)
 }
+
+// keepCockpit gives the keyboard back to the list when the cursor has
+// moved to a project with no issues card, and keeps the card's cursor on
+// an issue it lists.
+func (m model) keepCockpit() model {
+	if !m.cockpit.open || !m.cockpit.issues {
+		return m
+	}
+	t := m.target()
+	if _, tracked := m.trackers[t.root]; !tracked {
+		m.cockpit.issues, m.cockpit.pick = false, 0
+		return m
+	}
+	others, _ := m.others(t)
+	m.cockpit.pick = max(0, min(m.cockpit.pick, len(pickable(others))-1))
+	return m
+}

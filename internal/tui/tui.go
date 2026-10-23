@@ -716,6 +716,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, stage := m.restage()
 	m, turns := m.askTurns()
+	m = m.keepCockpit()
 	m, reads := m.cockpitReads()
 	return m, tea.Batch(cmd, stage, turns, reads)
 }
@@ -1033,6 +1034,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case outCockpit:
 		return m.closeCockpit()
 	case cockpitTab:
+		if _, tracked := m.trackers[m.target().root]; !tracked && !m.cockpit.issues {
+			return m.say("this project does not track its issues"), nil
+		}
 		m.cockpit.issues = !m.cockpit.issues
 	case cockpitMove:
 		others, _ := m.others(m.target())

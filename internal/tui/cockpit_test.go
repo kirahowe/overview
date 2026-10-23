@@ -134,3 +134,64 @@ func TestCockpitListWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "s2")
+	m = update(m, tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = pressSettled(t, m, "o", "tab")
+	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
+		t.Fatalf("after tab: issues %v, footer %q", m.cockpit.issues, ansi.Strip(m.footer()))
+	}
+	// j moves the card's cursor, not the list's, and stops at the end.
+	m = pressSettled(t, m, "j", "j", "j")
+	if m.sel != "s2" || m.cockpit.pick != 1 {
+		t.Fatalf("after j: sel %s, pick %d", m.sel, m.cockpit.pick)
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "▸ in progress  #6 keep width") {
+		t.Fatalf("the cursor is not on #6:\n%s", ansi.Strip(m.View()))
+	}
+	m = pressSettled(t, m, "k", "tab")
+	if m.cockpit.issues || m.cockpit.pick != 0 || !strings.Contains(ansi.Strip(m.footer()), "tab issues") {
+		t.Fatalf("after k tab: issues %v pick %d footer %q", m.cockpit.issues, m.cockpit.pick, ansi.Strip(m.footer()))
+	}
+	m = pressSettled(t, m, "j")
+	if m.sel == "s2" {
+		t.Fatal("j with the list focused did not move the cursor")
+	}
+}
+
+func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "s2")
+	m = pressSettled(t, m, "o", "tab", "j", "enter")
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/app" || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#6: keep width"}) {
+		t.Fatalf("spawned %+v", f.spawned)
+	}
+	if m.cockpit.open || f.zoomed("%0") {
+		t.Fatalf("the cockpit is still open (%v) or zoomed (%v)", m.cockpit.open, f.zoomed("%0"))
+	}
+	if m.opened.ID == "" || !f.staged(m.opened.ID) || f.focus != m.opened.ID {
+		t.Fatalf("the new session %s is not shown and focused: list in %s, focus %s", m.opened.ID, f.stage(), f.focus)
+	}
+}
+
+func TestTheProjectCockpitWithoutIssues(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m = update(m, tea.WindowSizeMsg{Width: 140, Height: 30})
+	m = pressSettled(t, m, "o")
+	text := ansi.Strip(m.View())
+	for _, want := range []string{"─ /w/red ", "no issues", "This project doesn't track its tasks.", "Install the issues tool", "Uncommitted", "not in a repository"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("lacks %q:\n%s", want, text)
+		}
+	}
+	if m, _ = press(m, "tab"); m.cockpit.issues {
+		t.Fatal("tab went to an issues card that is not there")
+	}
+	// With the tool, it says how to start.
+	m.issues = func(...string) ([]byte, error) { return nil, nil }
+	if text := ansi.Strip(m.View()); !strings.Contains(text, "Start with issues init in /w/red.") {
+		t.Fatalf("with the tool:\n%s", text)
+	}
+}
