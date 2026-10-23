@@ -76,6 +76,8 @@ type Row struct {
 	// Hooked is false for a session that has not reported through the hook,
 	// which leaves only Claude Code's own busy or idle to go on.
 	Hooked bool
+	// Tasks are the issues the session took on, oldest first.
+	Tasks []TaskRef
 }
 
 // Rows builds the view's rows, ordered by directory and then name.
@@ -91,6 +93,7 @@ func (h Home) Rows() ([]Row, error) {
 		rec, ok := recorded[l.SessionID]
 		r.Hooked = ok
 		r.LastPrompt = rec.LastPrompt
+		r.Tasks = rec.Tasks
 		r.State, r.Since, r.Reason = liveState(l, rec)
 		path := rec.Transcript
 		if path == "" {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -29,6 +30,8 @@ type Session struct {
 	Reason     string    `json:"reason,omitempty"`
 	LastPrompt string    `json:"last_prompt,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
+	// Tasks are the issues the session took on, oldest first.
+	Tasks []TaskRef `json:"tasks,omitempty"`
 }
 
 // HookEvent is the part of a Claude Code hook payload that overview uses.
@@ -41,6 +44,10 @@ type HookEvent struct {
 	NotificationType string `json:"notification_type"`
 	Message          string `json:"message"`
 	AgentID          string `json:"agent_id"`
+	// ToolName and ToolInput describe a tool call. For Bash the input is
+	// {"command": "..."}.
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 // Apply folds one hook event into a session's record and reports whether
@@ -88,7 +95,10 @@ func Apply(s Session, ev HookEvent, now time.Time) (Session, bool) {
 	if next.State != Blocked {
 		next.Reason = ""
 	}
-	return next, next != s
+	next, _ = LinkTasks(next, ev)
+	// Session holds a slice, so == is out; DeepEqual also covers any field
+	// added later.
+	return next, !reflect.DeepEqual(next, s)
 }
 
 // clip flattens whitespace and cuts s to at most n runes.

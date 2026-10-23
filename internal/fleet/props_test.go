@@ -1,9 +1,12 @@
 package fleet
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,8 +91,8 @@ func TestPropApplyInvariants(t *testing.T) {
 		for i, ev := range rapid.SliceOfN(genEvent(), 1, 12).Draw(t, "events") {
 			next, changed := Apply(s, ev, now)
 
-			if changed != (next != s) {
-				t.Fatalf("event %d %q: changed=%v but next==prev is %v", i, ev.Name, changed, next == s)
+			if changed != !reflect.DeepEqual(next, s) {
+				t.Fatalf("event %d %q: changed=%v but next==prev is %v", i, ev.Name, changed, reflect.DeepEqual(next, s))
 			}
 			if !knownEvent(ev.Name) && changed {
 				t.Fatalf("event %d: unknown event %q changed the session", i, ev.Name)
@@ -118,7 +121,7 @@ func TestPropApplyInvariants(t *testing.T) {
 
 			// Replaying the same event later is a no-op.
 			again, changedAgain := Apply(next, ev, now.Add(time.Minute))
-			if changedAgain || again != next {
+			if changedAgain || !reflect.DeepEqual(again, next) {
 				t.Fatalf("event %d %q: second application changed %+v -> %+v", i, ev.Name, next, again)
 			}
 			s = next
@@ -311,6 +314,159 @@ func TestPropSessionIDStaysInsideSessionsDir(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	})
+}
+
+// quote wraps s so splitCommands reads it back as one word.
+func quote(t *rapid.T, s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n\"'\\;&|$`") && rapid.Bool().Draw(t, "bare") {
+		return s
+	}
+	if !strings.Contains(s, "'") && rapid.Bool().Draw(t, "single") {
+		return "'" + s + "'"
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+func genDirWord() *rapid.Generator[string] {
+	return rapid.StringMatching(`[a-z]{1,5}([ ;&|][a-z]{1,4}){0,2}`)
+}
+
+// A well-formed invocation, built from drawn parts, reads back as the ref
+// it was built from.
+func TestPropIssuesStartsRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		cwd := "/" + rapid.StringMatching(`[a-z]{1,6}(/[a-z]{1,6}){0,2}`).Draw(t, "cwd")
+		id := rapid.IntRange(1, 1_000_000).Draw(t, "id")
+		want := TaskRef{Dir: cwd, ID: id}
+		words := []string{"issues"}
+		if rapid.Bool().Draw(t, "bin") {
+			words[0] = "/opt/bin/issues"
+		}
+		if rapid.Bool().Draw(t, "json") {
+			words = append(words, "--json")
+		}
+		if rapid.Bool().Draw(t, "project") {
+			want.Project = rapid.StringMatching(`[a-z][a-z0-9.-]{0,8}`).Draw(t, "p")
+			if rapid.Bool().Draw(t, "eq") {
+				words = append(words, "--project="+want.Project)
+			} else {
+				words = append(words, "--project", quote(t, want.Project))
+			}
+		}
+		if rapid.Bool().Draw(t, "dir") {
+			rel := genDirWord().Draw(t, "dirword")
+			abs := "/" + rel
+			dir, flag := abs, rapid.SampledFrom([]string{"-C", "--dir"}).Draw(t, "flag")
+			want.Dir = abs
+			if rapid.Bool().Draw(t, "relative") {
+				dir, want.Dir = rel, filepath.Join(cwd, rel)
+			}
+			words = append(words, flag, quote(t, dir))
+		}
+		words = append(words, "start", strconv.Itoa(id))
+		prefix := rapid.SampledFrom([]string{"", "FOO=1 ", "A='x y' B=2 ", "echo hi && ", "true;\n", "x | "}).Draw(t, "prefix")
+		suffix := rapid.SampledFrom([]string{"", " && echo done", " | cat", " &", "\necho x"}).Draw(t, "suffix")
+
+		cmd := prefix + strings.Join(words, " ") + suffix
+		got := IssuesStarts(cmd, cwd)
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("IssuesStarts(%q) = %+v, want [%+v]", cmd, got, want)
+		}
+	})
+}
+
+func TestPropParsersNeverPanic(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		s := rapid.OneOf(
+			text(),
+			rapid.StringMatching(`[a-z ='"\;&|\n$~/#.:0-9-]{0,40}`),
+			rapid.SampledFrom([]string{`issues start 3`, `issues -C "`, `Work on a#1`, `\`, `'`, `"\`}),
+		).Draw(t, "s")
+		cwd := text().Draw(t, "cwd")
+		for _, r := range IssuesStarts(s, cwd) {
+			if r.ID <= 0 {
+				t.Fatalf("IssuesStarts(%q) gave id %d", s, r.ID)
+			}
+		}
+		if r, ok := OpeningTask(s, cwd); ok && (r.ID <= 0 || r.Project == "" || r.Dir != cwd) {
+			t.Fatalf("OpeningTask(%q) = %+v", s, r)
+		}
+		_ = splitCommands(s)
+	})
+}
+
+// OpeningTask accepts exactly the form overview writes.
+func TestPropOpeningTaskRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		project := rapid.StringMatching(`[A-Za-z0-9][A-Za-z0-9._-]{0,10}`).Draw(t, "project")
+		id := rapid.IntRange(1, 1_000_000).Draw(t, "id")
+		lead := rapid.StringMatching(`[ \t\n]{0,3}`).Draw(t, "lead")
+		tail := rapid.SampledFrom([]string{"", ": Title", " more", ".", "\nmore"}).Draw(t, "tail")
+		cwd := "/" + rapid.StringMatching(`[a-z]{1,6}`).Draw(t, "cwd")
+		prompt := lead + "Work on " + project + "#" + strconv.Itoa(id) + tail
+		got, ok := OpeningTask(prompt, cwd)
+		if !ok || got != (TaskRef{Project: project, Dir: cwd, ID: id}) {
+			t.Fatalf("OpeningTask(%q) = %+v, %v", prompt, got, ok)
+		}
+	})
+}
+
+func genTaskEvent() *rapid.Generator[HookEvent] {
+	return rapid.Custom(func(t *rapid.T) HookEvent {
+		id := strconv.Itoa(rapid.IntRange(1, 12).Draw(t, "id"))
+		switch rapid.IntRange(0, 2).Draw(t, "kind") {
+		case 0:
+			return HookEvent{Name: "UserPromptSubmit", Cwd: rapid.SampledFrom([]string{"", "/a", "/b"}).Draw(t, "cwd"),
+				Prompt: "Work on " + rapid.SampledFrom([]string{"p", "q"}).Draw(t, "proj") + "#" + id}
+		case 1:
+			cmd := rapid.SampledFrom([]string{"issues start ", "cd /z && issues start ", "issues -C /y start ", "issues --project p start ", "ls "}).Draw(t, "cmd") + id
+			in, _ := json.Marshal(map[string]string{"command": cmd})
+			return HookEvent{Name: "PostToolUse", ToolName: "Bash", ToolInput: in, Cwd: rapid.SampledFrom([]string{"", "/a"}).Draw(t, "cwd")}
+		}
+		return genEvent().Draw(t, "any")
+	})
+}
+
+func TestPropLinkTasks(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		s := Session{}
+		now := time.Unix(1_700_000_000, 0).UTC()
+		for i, ev := range rapid.SliceOfN(genTaskEvent(), 1, 30).Draw(t, "events") {
+			ev.SessionID = "s"
+			next, changed := LinkTasks(s, ev)
+			if changed != !sameTasks(next.Tasks, s.Tasks) {
+				t.Fatalf("event %d: changed=%v with %+v -> %+v", i, changed, s.Tasks, next.Tasks)
+			}
+			if len(next.Tasks) > maxTasks {
+				t.Fatalf("event %d: %d tasks", i, len(next.Tasks))
+			}
+			seen := map[TaskRef]bool{}
+			for _, r := range next.Tasks {
+				if seen[r] {
+					t.Fatalf("event %d: duplicate %+v in %+v", i, r, next.Tasks)
+				}
+				seen[r] = true
+			}
+			if again, changedAgain := LinkTasks(next, ev); changedAgain || !reflect.DeepEqual(again, next) {
+				t.Fatalf("event %d: second application changed %+v -> %+v", i, next.Tasks, again.Tasks)
+			}
+			// Linking never touches the state, and Apply agrees on the tasks.
+			applied, _ := Apply(s, ev, now)
+			if knownEvent(ev.Name) && !reflect.DeepEqual(applied.Tasks, next.Tasks) {
+				t.Fatalf("event %d: Apply tasks %+v, LinkTasks %+v", i, applied.Tasks, next.Tasks)
+			}
+			if next.State != s.State || next.Cwd != s.Cwd {
+				t.Fatalf("event %d: LinkTasks changed more than tasks", i)
+			}
+			if s2 := applied; knownEvent(ev.Name) {
+				_, ch := Apply(s2, ev, now)
+				if ch {
+					t.Fatalf("event %d: Apply is not idempotent", i)
+				}
+			}
+			s = applied
 		}
 	})
 }
