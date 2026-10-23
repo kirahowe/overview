@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -30,8 +29,6 @@ type Session struct {
 	Reason     string    `json:"reason,omitempty"`
 	LastPrompt string    `json:"last_prompt,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
-	// Tasks are the issues the session took on, oldest first.
-	Tasks []TaskRef `json:"tasks,omitempty"`
 }
 
 // HookEvent is the part of a Claude Code hook payload that overview uses.
@@ -95,10 +92,7 @@ func Apply(s Session, ev HookEvent, now time.Time) (Session, bool) {
 	if next.State != Blocked {
 		next.Reason = ""
 	}
-	next, _ = LinkTasks(next, ev)
-	// Session holds a slice, so == is out; DeepEqual also covers any field
-	// added later.
-	return next, !reflect.DeepEqual(next, s)
+	return next, next != s
 }
 
 // clip flattens whitespace and cuts s to at most n runes.
@@ -126,11 +120,16 @@ func (h Home) loadSession(id string) Session {
 // saveSession replaces the record with a rename, so a reader never sees half
 // a file.
 func (h Home) saveSession(s Session) error {
-	if err := os.MkdirAll(h.sessionsDir(), 0o755); err != nil {
-		return err
-	}
 	b, err := json.Marshal(s)
 	if err != nil {
+		return err
+	}
+	return h.writeSessionsFile(h.sessionFile(s.ID), b)
+}
+
+// writeSessionsFile replaces path in the sessions directory with a rename.
+func (h Home) writeSessionsFile(path string, b []byte) error {
+	if err := os.MkdirAll(h.sessionsDir(), 0o755); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(h.sessionsDir(), ".tmp-*")
@@ -143,7 +142,7 @@ func (h Home) saveSession(s Session) error {
 		return err
 	}
 	tmp.Close()
-	if err := os.Rename(tmp.Name(), h.sessionFile(s.ID)); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}

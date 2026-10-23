@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,8 +38,47 @@ func TestIssuesStarts(t *testing.T) {
 		{"cd relative", "cd x && issues start 2", []TaskRef{r("", "/work/app/x", 2)}},
 		{"cd absolute", "cd /elsewhere && issues start 2", []TaskRef{r("", "/elsewhere", 2)}},
 		{"cd then -C relative", "cd /a; issues -C b start 2", []TaskRef{r("", "/a/b", 2)}},
-		{"cd home ignored", "cd ~/x && issues start 2", []TaskRef{r("", cwd, 2)}},
-		{"tilde dir dropped", "issues -C ~/x start 2", []TaskRef{r("", cwd, 2)}},
+		{"cd home makes the directory unknown", "cd ~/x && issues start 2", nil},
+		{"cd home then absolute dir", "cd ~/x && issues --dir /d start 2", []TaskRef{r("", "/d", 2)}},
+		{"cd home then relative dir", "cd ~/x && issues --dir d start 2", nil},
+		{"cd with no argument", "cd && issues start 2", nil},
+		{"cd -", "cd - && issues start 2", nil},
+		{"cd variable", "cd $HOME/x; issues start 2", nil},
+		{"cd unknown stays unknown", "cd ~/x; cd /a; issues start 2", nil},
+		{"cd unknown covers later commands only", "issues start 1; cd ~; issues start 2", []TaskRef{r("", cwd, 1)}},
+		{"tilde dir dropped", "issues -C ~/x start 2", nil},
+		{"tilde dir long flag", "issues --dir ~/code/other start 5", nil},
+		{"variable dir dropped", "issues --dir $HOME/x start 5", nil},
+		{"substitution dir dropped", "issues --dir=$(pwd) start 5", nil},
+		{"backtick dir dropped", "issues --dir `pwd` start 5", nil},
+		{"empty dir dropped", `issues --dir "" start 5`, nil},
+		{"dropped ref does not hide the next", "issues --dir ~/x start 5; issues start 6", []TaskRef{r("", cwd, 6)}},
+		{"help", "issues start --help 5", nil},
+		{"short help", "issues start -h 5", nil},
+		{"help before start", "issues --help start 5", nil},
+		{"help after id", "issues start 5 -h", nil},
+		{"unknown flag after start", "issues start --bogus 5", nil},
+		{"unknown flag after id", "issues start 5 --bogus", nil},
+		{"force", "issues start --force 5", []TaskRef{r("", cwd, 5)}},
+		{"command substitution is opaque", "$(issues start 3)", nil},
+		{"substitution as argument", "echo $(issues start 3)", nil},
+		{"substitution in quotes", `echo "$(issues start 3)"`, nil},
+		{"nested substitution", "echo $(echo $(x) ; issues start 3) && issues start 4", []TaskRef{r("", cwd, 4)}},
+		{"backticks are opaque", "echo `issues start 3`", nil},
+		{"substitution as id", "issues start $(echo 3)", nil},
+		{"quoted echo", `echo "issues start 3"`, nil},
+		{"assignment prefix", "x=1 issues start 3", []TaskRef{r("", cwd, 3)}},
+		{"heredoc body", "cat > notes.md <<'EOF'\nissues start 5\nEOF", nil},
+		{"heredoc body unquoted delimiter", "git commit -F - <<EOF\nsubject\n\nissues start 7 would link\nEOF", nil},
+		{"heredoc double quoted delimiter", "cat <<\"EOF\"\nissues start 5\nEOF", nil},
+		{"heredoc escaped delimiter", "cat <<\\EOF\nissues start 5\nEOF", nil},
+		{"heredoc dash strips tabs", "cat <<-EOF\n\tissues start 5\n\tEOF\nissues start 6", []TaskRef{r("", cwd, 6)}},
+		{"heredoc plain delimiter needs no indent", "cat <<EOF\n\tEOF\nissues start 5\nEOF\nissues start 6", []TaskRef{r("", cwd, 6)}},
+		{"heredoc then next command", "cat <<EOF\nx\nEOF\nissues start 6", []TaskRef{r("", cwd, 6)}},
+		{"same line after heredoc", "cat <<EOF && issues start 3\nissues start 5\nEOF", []TaskRef{r("", cwd, 3)}},
+		{"heredoc never closed", "cat <<EOF\nissues start 5\nissues start 6", nil},
+		{"here-string is not a heredoc", "cat <<< foo\nissues start 5", []TaskRef{r("", cwd, 5)}},
+		{"two heredocs", "cat <<A <<B\nissues start 1\nA\nissues start 2\nB\nissues start 3", []TaskRef{r("", cwd, 3)}},
 		{"env assignment", "FOO=1 BAR='a b' issues start 2", []TaskRef{r("", cwd, 2)}},
 		{"absolute binary", "/usr/local/bin/issues start 2", []TaskRef{r("", cwd, 2)}},
 		{"relative binary", "./bin/issues start 2", []TaskRef{r("", cwd, 2)}},
@@ -71,8 +109,11 @@ func TestIssuesStarts(t *testing.T) {
 	if got := IssuesStarts("issues start 3", ""); !reflect.DeepEqual(got, []TaskRef{{ID: 3}}) {
 		t.Errorf("no cwd: %+v", got)
 	}
-	if got := IssuesStarts("issues -C rel start 3", ""); !reflect.DeepEqual(got, []TaskRef{{ID: 3}}) {
+	if got := IssuesStarts("issues -C rel start 3", ""); got != nil {
 		t.Errorf("relative dir with no cwd: %+v", got)
+	}
+	if got := IssuesStarts("issues -C rel start 3", "rel/cwd"); got != nil {
+		t.Errorf("relative dir with a relative cwd: %+v", got)
 	}
 }
 
@@ -115,25 +156,43 @@ func bashEvent(cmd string) HookEvent {
 	return HookEvent{Name: "PostToolUse", ToolName: "Bash", ToolInput: in}
 }
 
-func TestLinkTasks(t *testing.T) {
-	s := Session{ID: "s", Cwd: "/w"}
-	s, changed := LinkTasks(s, bashEvent("issues start 1; issues start 2"))
-	if !changed || !reflect.DeepEqual(s.Tasks, []TaskRef{{Dir: "/w", ID: 1}, {Dir: "/w", ID: 2}}) {
-		t.Fatalf("got %+v, %v", s.Tasks, changed)
+func TestMergeTasks(t *testing.T) {
+	a, b := TaskRef{Dir: "/w", ID: 1}, TaskRef{Dir: "/w", ID: 2}
+	got, changed := MergeTasks(nil, []TaskRef{a, b})
+	if !changed || !reflect.DeepEqual(got, []TaskRef{a, b}) {
+		t.Fatalf("got %+v, %v", got, changed)
 	}
 	// Linking the first again moves it to the end.
-	s, changed = LinkTasks(s, bashEvent("issues start 1"))
-	if !changed || s.Tasks[1].ID != 1 || len(s.Tasks) != 2 {
-		t.Fatalf("relink: %+v, %v", s.Tasks, changed)
+	got, changed = MergeTasks(got, []TaskRef{a})
+	if !changed || !reflect.DeepEqual(got, []TaskRef{b, a}) {
+		t.Fatalf("relink: %+v, %v", got, changed)
 	}
-	if _, changed = LinkTasks(s, bashEvent("issues start 1")); changed {
-		t.Fatal("relinking the last ref changed the session")
+	if _, changed = MergeTasks(got, []TaskRef{a}); changed {
+		t.Fatal("relinking the last ref changed the list")
+	}
+	if _, changed = MergeTasks(got, nil); changed {
+		t.Fatal("no refs changed the list")
+	}
+	// Eight at most, the newest kept.
+	var cur []TaskRef
+	for i := 1; i <= 12; i++ {
+		cur, _ = MergeTasks(cur, []TaskRef{{ID: i}})
+	}
+	if len(cur) != maxTasks || cur[0].ID != 5 || cur[7].ID != 12 {
+		t.Fatalf("kept %+v", cur)
+	}
+}
+
+func TestEventTasks(t *testing.T) {
+	got := EventTasks(bashEvent("issues start 1; issues start 2"), "/w")
+	if !reflect.DeepEqual(got, []TaskRef{{Dir: "/w", ID: 1}, {Dir: "/w", ID: 2}}) {
+		t.Fatalf("got %+v", got)
 	}
 	// The event's cwd wins over the record's.
 	ev := bashEvent("issues start 5")
 	ev.Cwd = "/ev"
-	if got, _ := LinkTasks(Session{Cwd: "/w"}, ev); got.Tasks[0].Dir != "/ev" {
-		t.Fatalf("dir %q", got.Tasks[0].Dir)
+	if got := EventTasks(ev, "/w"); len(got) != 1 || got[0].Dir != "/ev" {
+		t.Fatalf("dir %+v", got)
 	}
 	// Only Bash, only PostToolUse, only valid input.
 	for _, ev := range []HookEvent{
@@ -143,22 +202,13 @@ func TestLinkTasks(t *testing.T) {
 		{Name: "PostToolUse", ToolName: "Bash"},
 		{Name: "UserPromptSubmit", Prompt: "run issues start 1"},
 	} {
-		if _, changed := LinkTasks(Session{}, ev); changed {
-			t.Errorf("%+v linked a task", ev)
+		if got := EventTasks(ev, "/w"); len(got) != 0 {
+			t.Errorf("%+v linked %+v", ev, got)
 		}
 	}
-	// The prompt path.
-	got, changed := Apply(Session{}, HookEvent{Name: "UserPromptSubmit", Cwd: "/w", Prompt: "Work on p#2: x"}, time.Now())
-	if !changed || !reflect.DeepEqual(got.Tasks, []TaskRef{{Project: "p", Dir: "/w", ID: 2}}) {
-		t.Fatalf("prompt link: %+v", got.Tasks)
-	}
-	// Eight at most, the newest kept.
-	s = Session{}
-	for i := 1; i <= 12; i++ {
-		s, _ = LinkTasks(s, bashEvent("issues start "+strconv.Itoa(i)))
-	}
-	if len(s.Tasks) != maxTasks || s.Tasks[0].ID != 5 || s.Tasks[7].ID != 12 {
-		t.Fatalf("kept %d tasks", len(s.Tasks))
+	got = EventTasks(HookEvent{Name: "UserPromptSubmit", Cwd: "/w", Prompt: "Work on p#2: x"}, "")
+	if !reflect.DeepEqual(got, []TaskRef{{Project: "p", Dir: "/w", ID: 2}}) {
+		t.Fatalf("prompt link: %+v", got)
 	}
 }
 
@@ -204,8 +254,8 @@ func TestHookLinksTasksFromSubagentsAndWritesOnlyOnChange(t *testing.T) {
 
 	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
 	got := h.loadSession("s1")
-	if !reflect.DeepEqual(got.Tasks, []TaskRef{{Dir: "/x", ID: 7}}) {
-		t.Fatalf("subagent start not linked: %+v", got.Tasks)
+	if tasks := h.loadTasks("s1"); !reflect.DeepEqual(tasks, []TaskRef{{Dir: "/x", ID: 7}}) {
+		t.Fatalf("subagent start not linked: %+v", tasks)
 	}
 	if got.State != Working || got.LastPrompt != "go" {
 		t.Fatalf("a subagent event changed the state: %+v", got)
@@ -218,9 +268,65 @@ func TestHookLinksTasksFromSubagentsAndWritesOnlyOnChange(t *testing.T) {
 	Hook(hookPayload(t, path, bash("issues start 7", "")))
 	unchanged("the same start from the main session")
 
+	tasksFile := h.tasksFile("s1")
+	tf, err := os.Stat(tasksFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tasksFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
+	if fi, _ := os.Stat(tasksFile); !fi.ModTime().Equal(old) {
+		t.Fatalf("relinking rewrote the tasks file (%v)", tf.ModTime())
+	}
+
 	// A subagent of a session with no record makes none.
 	Hook(strings.NewReader(`{"hook_event_name":"PostToolUse","session_id":"nobody","agent_id":"a","cwd":"/x","tool_name":"Bash","tool_input":{"command":"issues start 1"},"transcript_path":"` + filepath.Join(h.Dir, "projects", "-x", "nobody.jsonl") + `"}`))
 	if _, ok := h.Sessions()["nobody"]; ok {
 		t.Fatal("a subagent created a session record")
+	}
+	if _, err := os.Stat(h.tasksFile("nobody")); err == nil {
+		t.Fatal("a subagent created a tasks file for an unknown session")
+	}
+}
+
+func TestHookSubagentLinkNeverRewritesTheSessionRecord(t *testing.T) {
+	h := Home{Dir: t.TempDir()}
+	path := filepath.Join(h.Dir, "projects", "-x", "s1.jsonl")
+	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "UserPromptSubmit", "cwd": "/x", "prompt": "go"}))
+	before, err := os.ReadFile(h.sessionFile("s1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Hook(hookPayload(t, path, map[string]any{
+		"hook_event_name": "PostToolUse", "cwd": "/x", "agent_id": "sub",
+		"tool_name": "Bash", "tool_input": map[string]string{"command": "issues start 7"},
+	}))
+	after, err := os.ReadFile(h.sessionFile("s1"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("record changed:\n%s\n%s", before, after)
+	}
+	if got := h.loadTasks("s1"); !reflect.DeepEqual(got, []TaskRef{{Dir: "/x", ID: 7}}) {
+		t.Fatalf("tasks %+v", got)
+	}
+	// Sessions ignores the tasks file, and the rows carry its tasks.
+	if len(h.Sessions()) != 1 {
+		t.Fatalf("sessions: %+v", h.Sessions())
+	}
+	// A main-session link goes to the same file, and the session's end
+	// removes both files.
+	Hook(hookPayload(t, path, map[string]any{
+		"hook_event_name": "PostToolUse", "cwd": "/x",
+		"tool_name": "Bash", "tool_input": map[string]string{"command": "issues start 8"},
+	}))
+	if got := h.loadTasks("s1"); len(got) != 2 || got[1].ID != 8 {
+		t.Fatalf("tasks %+v", got)
+	}
+	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "SessionEnd", "cwd": "/x"}))
+	for _, f := range []string{h.sessionFile("s1"), h.tasksFile("s1")} {
+		if _, err := os.Stat(f); err == nil {
+			t.Fatalf("%s survived SessionEnd", f)
+		}
 	}
 }

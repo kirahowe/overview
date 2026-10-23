@@ -93,7 +93,7 @@ func (h Home) Rows() ([]Row, error) {
 		rec, ok := recorded[l.SessionID]
 		r.Hooked = ok
 		r.LastPrompt = rec.LastPrompt
-		r.Tasks = rec.Tasks
+		r.Tasks = h.loadTasks(l.SessionID)
 		r.State, r.Since, r.Reason = liveState(l, rec)
 		path := rec.Transcript
 		if path == "" {

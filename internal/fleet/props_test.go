@@ -429,42 +429,57 @@ func genTaskEvent() *rapid.Generator[HookEvent] {
 	})
 }
 
-func TestPropLinkTasks(t *testing.T) {
+func TestPropMergeTasks(t *testing.T) {
+	ref := rapid.Custom(func(t *rapid.T) TaskRef {
+		return TaskRef{Project: rapid.SampledFrom([]string{"", "p"}).Draw(t, "project"),
+			Dir: rapid.SampledFrom([]string{"/a", "/b"}).Draw(t, "dir"), ID: rapid.IntRange(1, 12).Draw(t, "id")}
+	})
+	rapid.Check(t, func(t *rapid.T) {
+		var cur []TaskRef
+		for i, refs := range rapid.SliceOfN(rapid.SliceOfN(ref, 0, 4), 1, 20).Draw(t, "batches") {
+			next, changed := MergeTasks(cur, refs)
+			if changed != !sameTasks(next, cur) {
+				t.Fatalf("batch %d: changed=%v with %+v -> %+v", i, changed, cur, next)
+			}
+			if len(next) > maxTasks {
+				t.Fatalf("batch %d: %d tasks", i, len(next))
+			}
+			seen := map[TaskRef]bool{}
+			for _, r := range next {
+				if seen[r] {
+					t.Fatalf("batch %d: duplicate %+v in %+v", i, r, next)
+				}
+				seen[r] = true
+			}
+			if len(refs) > 0 && next[len(next)-1] != refs[len(refs)-1] {
+				t.Fatalf("batch %d: last ref %+v is not last in %+v", i, refs[len(refs)-1], next)
+			}
+			if again, changedAgain := MergeTasks(next, refs); changedAgain || !reflect.DeepEqual(again, next) {
+				t.Fatalf("batch %d: second merge changed %+v -> %+v", i, next, again)
+			}
+			cur = next
+		}
+	})
+}
+
+// Events never change the state through linking: Apply does not know about
+// tasks at all, and EventTasks is pure.
+func TestPropEventTasksAndApply(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		s := Session{}
 		now := time.Unix(1_700_000_000, 0).UTC()
 		for i, ev := range rapid.SliceOfN(genTaskEvent(), 1, 30).Draw(t, "events") {
 			ev.SessionID = "s"
-			next, changed := LinkTasks(s, ev)
-			if changed != !sameTasks(next.Tasks, s.Tasks) {
-				t.Fatalf("event %d: changed=%v with %+v -> %+v", i, changed, s.Tasks, next.Tasks)
+			a, b := EventTasks(ev, s.Cwd), EventTasks(ev, s.Cwd)
+			if !reflect.DeepEqual(a, b) {
+				t.Fatalf("event %d: EventTasks is not deterministic", i)
 			}
-			if len(next.Tasks) > maxTasks {
-				t.Fatalf("event %d: %d tasks", i, len(next.Tasks))
+			applied, changed := Apply(s, ev, now)
+			if changed != (applied != s) {
+				t.Fatalf("event %d: changed=%v for %+v -> %+v", i, changed, s, applied)
 			}
-			seen := map[TaskRef]bool{}
-			for _, r := range next.Tasks {
-				if seen[r] {
-					t.Fatalf("event %d: duplicate %+v in %+v", i, r, next.Tasks)
-				}
-				seen[r] = true
-			}
-			if again, changedAgain := LinkTasks(next, ev); changedAgain || !reflect.DeepEqual(again, next) {
-				t.Fatalf("event %d: second application changed %+v -> %+v", i, next.Tasks, again.Tasks)
-			}
-			// Linking never touches the state, and Apply agrees on the tasks.
-			applied, _ := Apply(s, ev, now)
-			if knownEvent(ev.Name) && !reflect.DeepEqual(applied.Tasks, next.Tasks) {
-				t.Fatalf("event %d: Apply tasks %+v, LinkTasks %+v", i, applied.Tasks, next.Tasks)
-			}
-			if next.State != s.State || next.Cwd != s.Cwd {
-				t.Fatalf("event %d: LinkTasks changed more than tasks", i)
-			}
-			if s2 := applied; knownEvent(ev.Name) {
-				_, ch := Apply(s2, ev, now)
-				if ch {
-					t.Fatalf("event %d: Apply is not idempotent", i)
-				}
+			if _, again := Apply(applied, ev, now); again && knownEvent(ev.Name) {
+				t.Fatalf("event %d: Apply is not idempotent", i)
 			}
 			s = applied
 		}

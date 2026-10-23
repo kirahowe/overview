@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,37 +21,41 @@ type TaskRef struct {
 	ID      int    `json:"id"`
 }
 
-// LinkTasks records the issues an event shows the session taking on. It is
-// separate from Apply because subagents link tasks to their parent session
-// without changing its state. Linking a ref the session already has moves it
-// to the end, and the result only differs from s when the list does.
-func LinkTasks(s Session, ev HookEvent) (Session, bool) {
+// EventTasks returns the issues an event shows the session taking on. The
+// event's own cwd wins over fallbackCwd, the one the session record holds.
+func EventTasks(ev HookEvent, fallbackCwd string) []TaskRef {
 	cwd := ev.Cwd
 	if cwd == "" {
-		cwd = s.Cwd
+		cwd = fallbackCwd
 	}
-	var refs []TaskRef
 	switch ev.Name {
 	case "UserPromptSubmit":
 		if r, ok := OpeningTask(ev.Prompt, cwd); ok {
-			refs = []TaskRef{r}
+			return []TaskRef{r}
 		}
 	case "PostToolUse":
 		if ev.ToolName != "Bash" {
-			return s, false
+			return nil
 		}
 		var in struct {
 			Command string `json:"command"`
 		}
 		if json.Unmarshal(ev.ToolInput, &in) != nil {
-			return s, false
+			return nil
 		}
-		refs = IssuesStarts(in.Command, cwd)
+		return IssuesStarts(in.Command, cwd)
 	}
+	return nil
+}
+
+// MergeTasks adds refs to a session's task list. Linking a ref the list
+// already has moves it to the end, the list keeps the newest maxTasks, and
+// changed is true only when the result differs from cur.
+func MergeTasks(cur, refs []TaskRef) (merged []TaskRef, changed bool) {
 	if len(refs) == 0 {
-		return s, false
+		return cur, false
 	}
-	tasks := append([]TaskRef(nil), s.Tasks...)
+	tasks := append([]TaskRef(nil), cur...)
 	for _, r := range refs {
 		for i, t := range tasks {
 			if t == r {
@@ -63,11 +68,38 @@ func LinkTasks(s Session, ev HookEvent) (Session, bool) {
 	if len(tasks) > maxTasks {
 		tasks = tasks[len(tasks)-maxTasks:]
 	}
-	if sameTasks(tasks, s.Tasks) {
-		return s, false
+	if sameTasks(tasks, cur) {
+		return cur, false
 	}
-	s.Tasks = tasks
-	return s, true
+	return tasks, true
+}
+
+func (h Home) tasksFile(id string) string {
+	return filepath.Join(h.sessionsDir(), filepath.Base(id)+".tasks")
+}
+
+func (h Home) loadTasks(id string) []TaskRef {
+	var tasks []TaskRef
+	if b, err := os.ReadFile(h.tasksFile(id)); err == nil {
+		_ = json.Unmarshal(b, &tasks)
+	}
+	return tasks
+}
+
+// linkTasks links what ev shows to its session. It reads and writes only the
+// session's tasks file, and writes only when the list changed.
+func (h Home) linkTasks(ev HookEvent, fallbackCwd string) {
+	refs := EventTasks(ev, fallbackCwd)
+	if len(refs) == 0 {
+		return
+	}
+	merged, changed := MergeTasks(h.loadTasks(ev.SessionID), refs)
+	if !changed {
+		return
+	}
+	if b, err := json.Marshal(merged); err == nil {
+		_ = h.writeSessionsFile(h.tasksFile(ev.SessionID), b)
+	}
 }
 
 func sameTasks(a, b []TaskRef) bool {
@@ -129,10 +161,15 @@ func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 }
 
 // IssuesStarts finds every `issues start <n>` in a shell command. It is a
-// reader for the common shapes, not a shell: no expansion, no subshells. A
-// `cd <dir>` earlier in the string moves the directory later commands use.
+// reader for the common shapes, not a shell: no expansion, and command
+// substitutions and heredoc bodies are opaque. A `cd <dir>` earlier in the
+// string moves the directory later commands use. A `cd` the hook cannot
+// follow (home, `-`, a variable) leaves the directory unknown, and a start
+// after it links only when it names an absolute directory itself. A false
+// link is worse than a missed one, so anything unclear links nothing.
 func IssuesStarts(command, cwd string) []TaskRef {
 	var out []TaskRef
+	known := true
 	for _, argv := range splitCommands(command) {
 		for len(argv) > 0 && isAssignment(argv[0]) {
 			argv = argv[1:]
@@ -141,12 +178,14 @@ func IssuesStarts(command, cwd string) []TaskRef {
 			continue
 		}
 		if argv[0] == "cd" {
-			if len(argv) == 2 {
-				cwd = resolveDir(cwd, argv[1], cwd)
+			if len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") {
+				cwd, known = resolveDir(cwd, argv[1])
+			} else {
+				known = false
 			}
 			continue
 		}
-		if ref, ok := parseStart(argv, cwd); ok {
+		if ref, ok := parseStart(argv, cwd, known); ok {
 			out = append(out, ref)
 		}
 	}
@@ -167,18 +206,24 @@ func isAssignment(w string) bool {
 	return true
 }
 
-// resolveDir makes dir absolute against cwd. A home-relative or empty dir
-// gives fallback, since the hook cannot expand ~ and must not guess.
-func resolveDir(cwd, dir, fallback string) string {
+// opaqueWord reports whether the hook cannot know what a word expands to.
+func opaqueWord(w string) bool {
+	return strings.HasPrefix(w, "~") || strings.ContainsAny(w, "$`")
+}
+
+// resolveDir makes dir absolute against cwd. It reports false for a dir the
+// hook cannot expand (~, $VAR, substitutions, empty) and for a relative dir
+// when cwd is not an absolute path to resolve it against.
+func resolveDir(cwd, dir string) (string, bool) {
 	switch {
-	case dir == "" || dir == "~" || strings.HasPrefix(dir, "~/"):
-		return fallback
+	case dir == "" || opaqueWord(dir):
+		return "", false
 	case filepath.IsAbs(dir):
-		return filepath.Clean(dir)
+		return filepath.Clean(dir), true
 	case cwd == "" || !filepath.IsAbs(cwd):
-		return fallback
+		return "", false
 	}
-	return filepath.Join(cwd, dir)
+	return filepath.Join(cwd, dir), true
 }
 
 // flagValue reports whether a flag takes a value, and if it is written
@@ -198,17 +243,23 @@ func flagValue(w string) (takes bool, inline string, hasInline bool) {
 	return false, "", false
 }
 
-func parseStart(argv []string, cwd string) (TaskRef, bool) {
+func parseStart(argv []string, cwd string, cwdKnown bool) (TaskRef, bool) {
 	if argv[0] != "issues" && !strings.HasSuffix(argv[0], "/issues") {
 		return TaskRef{}, false
 	}
+	for _, a := range argv[1:] {
+		if a == "-h" || a == "--help" {
+			return TaskRef{}, false
+		}
+	}
 	var project, dir string
+	var dirSet bool
 	// apply consumes a flag at args[i] and returns the next index, or -1
 	// when the word is not a known flag.
 	apply := func(args []string, i int) int {
 		w := args[i]
 		switch w {
-		case "--json", "--edn", "--all":
+		case "--json", "--edn", "--all", "--force":
 			return i + 1
 		}
 		takes, val, inline := flagValue(w)
@@ -225,7 +276,7 @@ func parseStart(argv []string, cwd string) (TaskRef, bool) {
 		}
 		switch strings.SplitN(w, "=", 2)[0] {
 		case "-C", "--dir":
-			dir = val
+			dir, dirSet = val, true
 		case "--project":
 			project = val
 		}
@@ -248,8 +299,12 @@ func parseStart(argv []string, cwd string) (TaskRef, bool) {
 			i = next
 			continue
 		}
-		if id != 0 || strings.HasPrefix(args[i], "-") {
-			// Anything unknown after the id is the command's own business.
+		if strings.HasPrefix(args[i], "-") {
+			// An unknown flag may change what the command does.
+			return TaskRef{}, false
+		}
+		if id != 0 {
+			// Anything extra after the id is the command's own business.
 			i++
 			continue
 		}
@@ -260,10 +315,23 @@ func parseStart(argv []string, cwd string) (TaskRef, bool) {
 		id = n
 		i++
 	}
-	if id == 0 {
+	if id == 0 || strings.ContainsAny(project, "$`") {
 		return TaskRef{}, false
 	}
-	return TaskRef{Project: project, Dir: resolveDir(cwd, dir, cwd), ID: id}, true
+	ref := TaskRef{Project: project, ID: id}
+	switch {
+	case dirSet:
+		d, ok := resolveDir(cwd, dir)
+		if !ok || !cwdKnown && !filepath.IsAbs(dir) {
+			return TaskRef{}, false
+		}
+		ref.Dir = d
+	case cwdKnown:
+		ref.Dir = cwd
+	default:
+		return TaskRef{}, false
+	}
+	return ref, true
 }
 
 func positiveInt(s string) (int, bool) {
@@ -280,7 +348,9 @@ func positiveInt(s string) (int, bool) {
 }
 
 // splitCommands cuts a shell string into simple commands at && || ; | & and
-// newlines outside quotes, and each into words with basic quoting.
+// newlines outside quotes, and each into words with basic quoting. Command
+// substitutions become an opaque `$()` or backtick word, and heredoc bodies
+// are skipped.
 func splitCommands(s string) [][]string {
 	var cmds [][]string
 	var words []string
@@ -300,6 +370,11 @@ func splitCommands(s string) [][]string {
 			words = nil
 		}
 	}
+	type heredoc struct {
+		delim string
+		strip bool
+	}
+	var pending []heredoc
 	r := []rune(s)
 	for i := 0; i < len(r); i++ {
 		c := r[i]
@@ -312,11 +387,28 @@ func splitCommands(s string) [][]string {
 		case c == '"':
 			inWord = true
 			for i++; i < len(r) && r[i] != '"'; i++ {
-				if r[i] == '\\' && i+1 < len(r) && (r[i+1] == '"' || r[i+1] == '\\') {
+				switch {
+				case r[i] == '\\' && i+1 < len(r) && (r[i+1] == '"' || r[i+1] == '\\'):
 					i++
+					word.WriteRune(r[i])
+				case r[i] == '$' && i+1 < len(r) && r[i+1] == '(':
+					i = skipSubst(r, i)
+					word.WriteString("$()")
+				case r[i] == '`':
+					i = skipBackticks(r, i)
+					word.WriteString("`")
+				default:
+					word.WriteRune(r[i])
 				}
-				word.WriteRune(r[i])
 			}
+		case c == '$' && i+1 < len(r) && r[i+1] == '(':
+			inWord = true
+			i = skipSubst(r, i)
+			word.WriteString("$()")
+		case c == '`':
+			inWord = true
+			i = skipBackticks(r, i)
+			word.WriteString("`")
 		case c == '\\':
 			if i+1 < len(r) {
 				i++
@@ -325,7 +417,40 @@ func splitCommands(s string) [][]string {
 					word.WriteRune(r[i])
 				}
 			}
-		case c == '&' || c == '|' || c == ';' || c == '\n':
+		case c == '<' && i+2 < len(r) && r[i+1] == '<' && r[i+2] == '<':
+			// A here-string: its word is an ordinary argument.
+			inWord = true
+			word.WriteString("<<<")
+			i += 2
+		case c == '<' && i+1 < len(r) && r[i+1] == '<':
+			j := i + 2
+			strip := j < len(r) && r[j] == '-'
+			if strip {
+				j++
+			}
+			for j < len(r) && (r[j] == ' ' || r[j] == '\t') {
+				j++
+			}
+			delim, end := heredocDelim(r, j)
+			if delim == "" {
+				endWord()
+				i = j - 1
+				break
+			}
+			endWord()
+			pending = append(pending, heredoc{delim, strip})
+			i = end - 1
+		case c == '\n':
+			endCmd()
+			pos := i + 1
+			for _, h := range pending {
+				pos = skipHeredocBody(r, pos, h.delim, h.strip)
+			}
+			if len(pending) > 0 {
+				i = pos - 1
+				pending = nil
+			}
+		case c == '&' || c == '|' || c == ';':
 			endCmd()
 		case unicode.IsSpace(c):
 			endWord()
@@ -336,4 +461,84 @@ func splitCommands(s string) [][]string {
 	}
 	endCmd()
 	return cmds
+}
+
+// skipSubst returns the index of the ) closing the $( at r[i].
+func skipSubst(r []rune, i int) int {
+	depth := 0
+	for ; i < len(r); i++ {
+		switch r[i] {
+		case '\\':
+			i++
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return len(r) - 1
+}
+
+// skipBackticks returns the index of the backtick closing the one at r[i].
+func skipBackticks(r []rune, i int) int {
+	for i++; i < len(r); i++ {
+		if r[i] == '\\' {
+			i++
+		} else if r[i] == '`' {
+			return i
+		}
+	}
+	return len(r) - 1
+}
+
+// heredocDelim reads a heredoc delimiter word starting at r[j], unquoted, and
+// returns it with the index after it.
+func heredocDelim(r []rune, j int) (string, int) {
+	var d strings.Builder
+	for j < len(r) {
+		c := r[j]
+		switch {
+		case c == '\'' || c == '"':
+			k := j + 1
+			for k < len(r) && r[k] != c {
+				d.WriteRune(r[k])
+				k++
+			}
+			j = k + 1
+		case c == '\\' && j+1 < len(r):
+			d.WriteRune(r[j+1])
+			j += 2
+		case unicode.IsSpace(c) || strings.ContainsRune("&|;<>()", c):
+			return d.String(), j
+		default:
+			d.WriteRune(c)
+			j++
+		}
+	}
+	return d.String(), len(r)
+}
+
+// skipHeredocBody returns the index after the line that ends a heredoc body
+// starting at pos, or len(r) when no line does.
+func skipHeredocBody(r []rune, pos int, delim string, strip bool) int {
+	for pos < len(r) {
+		end := pos
+		for end < len(r) && r[end] != '\n' {
+			end++
+		}
+		line := string(r[pos:end])
+		if strip {
+			line = strings.TrimLeft(line, "\t")
+		}
+		pos = end
+		if pos < len(r) {
+			pos++
+		}
+		if line == delim {
+			return pos
+		}
+	}
+	return len(r)
 }
