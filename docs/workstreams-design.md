@@ -52,14 +52,15 @@ every Bash command on `PostToolUse`. A prompt links its session when it
 starts with `Work on <project>#<n>`, whether it is the first prompt or a
 later one, and a command links it when it runs `issues start <n>`. The
 hook records the reference in `<id>.tasks`, beside the session's record,
-so the record itself is never rewritten for a link. The file is a log:
-each link appends one JSON line, with the time the issue was first
-linked, in a single append, so a session and its parallel subagents
-linking at once never drop each other's links. The reader keeps each
-reference once, where it was last linked, with its first time, and the
-newest eight. Linking the reference that is already the last one
-appends nothing, and past 64 lines the hook rewrites the file to what
-it reads as. That is string
+so the record itself is never rewritten for a link. The file is a log the hook only appends to: each link is one JSON line,
+with the time the issue was first linked, written in a single append, so a
+session and its parallel subagents linking at once never drop each other's
+links. The hook never rewrites the file, because a read-then-rewrite would
+lose appends made in between. The reader keeps each reference once, where
+it was last linked, with its first time, and the newest eight. The hook
+appends a link only when it changes which references the file reads as or
+their order, so replaying `issues start 3 && issues start 4` adds
+nothing. The session's end removes the file. That is string
 matching on input the hook already receives, with no subprocess, so it
 keeps to the hook rules. `issues start` can name its project with `-C`,
 `--dir` or `--project`, so the hook records what the command gave and

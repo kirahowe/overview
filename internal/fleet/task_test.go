@@ -228,9 +228,9 @@ func TestParseTasksSkipsBadLines(t *testing.T) {
 }
 
 // Links that arrive together, from a session and its subagents, each
-// append a line, and none drops another. Past compactAt lines the file is
-// rewritten to what it folds to.
-func TestLinkTasksAppendsAndCompacts(t *testing.T) {
+// append a line, and none drops another. The file only grows: the hook
+// never rewrites it, and a link that changes nothing appends nothing.
+func TestLinkTasksOnlyAppends(t *testing.T) {
 	h := Home{Dir: t.TempDir()}
 	now := time.Unix(1_700_000_000, 0).UTC()
 	ev := func(id int) HookEvent { return withID(bashEvent(fmt.Sprint("issues start ", id))) }
@@ -240,16 +240,29 @@ func TestLinkTasksAppendsAndCompacts(t *testing.T) {
 	if lines := h.readTasks("s1"); len(lines) != 2 {
 		t.Fatalf("lines %+v", lines)
 	}
-	for i := 0; i < compactAt; i++ {
-		h.linkTasks(ev(1+i%2), "/w", now.Add(time.Duration(i)*time.Hour))
+	for i := 0; i < 100; i++ {
+		h.linkTasks(ev(1+i%2), "/w", now.Add(time.Duration(i+3)*time.Hour))
 	}
-	lines := h.readTasks("s1")
-	if len(lines) > compactAt || len(lines) < 2 {
-		t.Fatalf("%d lines after compacting", len(lines))
+	if lines := h.readTasks("s1"); len(lines) != 102 {
+		t.Fatalf("%d lines, want every alternation appended", len(lines))
 	}
 	got := h.loadTasks("s1")
-	if len(got) != 2 || !got[0].Linked.Equal(now) || !got[1].Linked.Equal(now.Add(time.Minute)) {
+	if len(got) != 2 || !got[0].Linked.Equal(now.Add(time.Minute)) && !got[0].Linked.Equal(now) {
 		t.Fatalf("tasks %+v", got)
+	}
+}
+
+// A replayed `issues start 3 && issues start 4` changes nothing the second
+// time, though the last ref is not the one it starts with.
+func TestTasksToAppendReplayedPair(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	pair := []TaskRef{{Dir: "/w", ID: 3}, {Dir: "/w", ID: 4}}
+	first := TasksToAppend(nil, pair, now)
+	if len(first) != 2 {
+		t.Fatalf("first %+v", first)
+	}
+	if again := TasksToAppend(FoldTasks(first), pair, now.Add(time.Hour)); len(again) != 0 {
+		t.Fatalf("replay appends %+v", again)
 	}
 }
 

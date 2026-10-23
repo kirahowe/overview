@@ -12,12 +12,8 @@ import (
 	"unicode"
 )
 
-// maxTasks is how many linked issues a session's tasks file keeps, and
-// compactAt how many lines it may grow to before the hook rewrites it.
-const (
-	maxTasks  = 8
-	compactAt = 64
-)
+// maxTasks is how many linked issues a session's tasks file reads as.
+const maxTasks = 8
 
 // TaskRef names an issue a session took on, as the hook saw it. Project is
 // the issues project id when the reference gave one; Dir is the directory the
@@ -89,23 +85,33 @@ func FoldTasks(lines []TaskRef) []TaskRef {
 }
 
 // TasksToAppend is the lines the hook appends to link refs, at now, to a
-// session whose tasks file folds to cur. A ref already the last linked
-// adds nothing, so an event seen twice writes nothing the second time. A
-// ref linked before keeps its first time.
+// session whose tasks file folds to cur. It appends the fewest, a suffix
+// of refs in the order they would be linked, that leave the file folding
+// to the same refs in the same order as appending all of them would. So
+// an event seen twice writes nothing the second time, and neither does a
+// replayed `issues start 3 && issues start 4`. A ref linked before keeps
+// its first time.
 func TasksToAppend(cur, refs []TaskRef, now time.Time) []TaskRef {
-	var out []TaskRef
-	for _, r := range refs {
-		if len(cur) > 0 && cur[len(cur)-1].Same(r) {
+	// Linking a ref twice in one batch is the same as linking it at its
+	// last place.
+	var b []TaskRef
+	for i, r := range refs {
+		if slices.IndexFunc(refs[i+1:], r.Same) >= 0 {
 			continue
 		}
 		r.Linked = now
-		if i := slices.IndexFunc(cur, r.Same); i >= 0 && !cur[i].Linked.IsZero() {
-			r.Linked = cur[i].Linked
+		if k := slices.IndexFunc(cur, r.Same); k >= 0 && !cur[k].Linked.IsZero() {
+			r.Linked = cur[k].Linked
 		}
-		out = append(out, r)
-		cur = FoldTasks(append(slices.Clone(cur), r))
+		b = append(b, r)
 	}
-	return out
+	target := FoldTasks(append(slices.Clone(cur), b...))
+	for k := len(b); k > 0; k-- {
+		if slices.EqualFunc(FoldTasks(append(slices.Clone(cur), b[k:]...)), target, TaskRef.Same) {
+			return b[k:]
+		}
+	}
+	return b
 }
 
 // ParseTasks reads a tasks file's lines. A line that does not parse, such
@@ -138,15 +144,14 @@ func (h Home) readTasks(id string) []TaskRef {
 func (h Home) loadTasks(id string) []TaskRef { return FoldTasks(h.readTasks(id)) }
 
 // linkTasks links what ev shows to its session. It appends to the
-// session's tasks file, one write per line, only when a link is new, and
-// rewrites the file folded once it has grown past compactAt lines.
+// session's tasks file, one write per line, only when a link changes what
+// the file folds to. It never rewrites the file, so no append is lost.
 func (h Home) linkTasks(ev HookEvent, fallbackCwd string, now time.Time) {
 	refs := EventTasks(ev, fallbackCwd)
 	if len(refs) == 0 {
 		return
 	}
-	lines := h.readTasks(ev.SessionID)
-	add := TasksToAppend(FoldTasks(lines), refs, now)
+	add := TasksToAppend(h.loadTasks(ev.SessionID), refs, now)
 	if len(add) == 0 || os.MkdirAll(h.sessionsDir(), 0o755) != nil {
 		return
 	}
@@ -160,14 +165,6 @@ func (h Home) linkTasks(ev HookEvent, fallbackCwd string, now time.Time) {
 		}
 	}
 	f.Close()
-	if len(lines)+len(add) > compactAt {
-		var b []byte
-		for _, r := range FoldTasks(h.readTasks(ev.SessionID)) {
-			line, _ := json.Marshal(r)
-			b = append(append(b, line...), '\n')
-		}
-		_ = h.writeSessionsFile(h.tasksFile(ev.SessionID), b)
-	}
 }
 
 // OpeningTask reports the issue named by the opening line overview writes

@@ -505,11 +505,31 @@ func TestPropTasksLog(t *testing.T) {
 					t.Fatalf("batch %d: linking the last ref again appends %+v", i, again)
 				}
 			}
-			// Folding what it folded to changes nothing, so a compacted
-			// file reads as the log did.
+			// Folding what it folded to changes nothing.
 			if !reflect.DeepEqual(FoldTasks(cur), cur) {
 				t.Fatalf("batch %d: folding is not idempotent: %+v", i, cur)
 			}
+		}
+	})
+}
+
+// Appending what TasksToAppend returns, then asking again with the same
+// refs, returns nothing, and the file folds to what appending every ref
+// would have folded to, ignoring times.
+func TestPropTasksToAppendMinimal(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base := rapid.SliceOfN(genRef(), 0, 12).Draw(t, "base")
+		batch := rapid.SliceOfN(genRef(), 0, 12).Draw(t, "batch")
+		now := time.Unix(1_800_000_000, 0).UTC()
+		cur := FoldTasks(base)
+		add := TasksToAppend(cur, batch, now)
+		lines := append(slices.Clone(base), add...)
+		if again := TasksToAppend(FoldTasks(lines), batch, now.Add(time.Hour)); len(again) != 0 {
+			t.Fatalf("second call appends %+v", again)
+		}
+		all := FoldTasks(append(slices.Clone(base), batch...))
+		if got := FoldTasks(lines); !reflect.DeepEqual(refs(got), refs(all)) {
+			t.Fatalf("folds to %+v, appending every ref gives %+v", got, all)
 		}
 	})
 }

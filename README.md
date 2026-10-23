@@ -89,13 +89,15 @@ workstream follow its row, indented, and a workstream with none says `no
 sessions`. A session works on an issue when a prompt, the first or any
 later one, starts with `Work on <project>#<n>`, or when it or one of its
 subagents runs `issues start <n>`. The hook keeps these links in
-`<id>.tasks`, beside the session's record. One linked to several open
+`<id>.tasks`, beside the session's record. The file is append-only, the
+hook never rewrites it, and the session's end removes it. One linked to several open
 issues, as an orchestrating session running several tasks may be, is
 listed under each, and its primary entry is under the one it was linked
 to last. When an issue is done or dropped, its workstream goes, and its
 sessions go back to the project. A workstream in review counts as needing
 you. overview reads a project's issues with the `issues` binary, and reads
-them again only when a file in `.issues` changes. The list never waits
+them again when a file in `.issues` changes, and retries a failed read
+after a few seconds. The list never waits
 for a read, and a run that takes more than three seconds is stopped.
 When the last read of a project's issues failed, its heading says
 `issues failed` where it would count the tasks, and its cockpit's issues
