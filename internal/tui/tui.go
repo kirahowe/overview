@@ -899,6 +899,14 @@ func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 // apply carries out one action. It is the only place input changes the
 // model, and it runs nothing itself: any work comes back as a Cmd.
 func (m model) apply(a action) (model, tea.Cmd) {
+	// An o waiting for the list's move is cancelled by what would close
+	// an open cockpit, by esc, and by another o.
+	if m.cockpitSoon && (closesCockpit(a.do) || a.do == clearFilter || a.do == toCockpit || a.do == outCockpit) {
+		m.cockpitSoon = false
+		if a.do == toCockpit {
+			return m, nil
+		}
+	}
 	if m.cockpit.open && closesCockpit(a.do) {
 		m, out := m.closeCockpit()
 		m, cmd := m.apply(a)

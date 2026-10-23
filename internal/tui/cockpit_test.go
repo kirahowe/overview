@@ -442,3 +442,46 @@ func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 		t.Fatalf("hints %v, want enter attach for a background session with no pane", hs)
 	}
 }
+
+// An o that waits for the list's move is cancelled by whatever would close
+// an open cockpit, so it cannot open one afterwards. Pressing o again, or
+// esc, cancels it too.
+func TestAPendingOIsCancelled(t *testing.T) {
+	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.ttys[m.ordered()[1].row.PID]) }
+	for _, c := range []struct {
+		name  string
+		keys  []string
+		focus bool // enter moves the focus into the pane
+	}{
+		{"enter", []string{"enter"}, true},
+		{"o again", []string{"o"}, false},
+		{"esc", []string{"esc"}, false},
+		{"new terminal", []string{"t"}, false},
+		{"digest screen", []string{"d"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeMux()
+			m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+			m, move := press(m, "j")
+			if !m.staging {
+				t.Fatal("j started no move")
+			}
+			m, _ = press(m, "o")
+			if !m.cockpitSoon {
+				t.Fatal("o during the move is not pending")
+			}
+			m, cmd := press(m, c.keys...)
+			if m.cockpitSoon {
+				t.Fatalf("%v left the o pending", c.keys)
+			}
+			m = settle(t, m, cmd)
+			m = feed(t, m, cmdMsgs(move))
+			if m.cockpit.open || f.zoomed("%0") || m.zooming || len(f.zooms) != 0 {
+				t.Fatalf("open %v zoomed %v zooms %v", m.cockpit.open, f.zoomed("%0"), f.zooms)
+			}
+			if want := second(f, m); c.focus && (len(f.selects) == 0 || f.focus != want) {
+				t.Fatalf("selects %v, focus %s, want %s", f.selects, f.focus, want)
+			}
+		})
+	}
+}
