@@ -191,3 +191,18 @@ func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 		t.Fatalf("after G:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// The agents list names a workstream's project when its width fits, which
+// for wide characters is less than its length in bytes.
+func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
+	m := newTestModel(t)
+	m.w, m.user = 22, "/u" // 20 columns of content
+	e := entry{kind: sessionEntry, row: row("s", "x", "", 1), project: "/u/code/projects/日本語日本", issue: issues.Issue{ID: 6}}
+	// 6 used, 10 columns of name (15 bytes), 2 of ref and 2 of spaces.
+	if got := m.agentsNote(e, "", false, 6); got != "日本語日本 #6" {
+		t.Fatalf("note %q, want the project's name too", got)
+	}
+	if got := m.agentsNote(e, "", false, 7); got != "#6" {
+		t.Fatalf("note %q with no room, want only the ref", got)
+	}
+}

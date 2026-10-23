@@ -499,7 +499,7 @@ func (m model) agentsNote(e entry, app string, away bool, used int) string {
 	switch {
 	case e.issue.ID != 0:
 		ref := "#" + strconv.Itoa(e.issue.ID)
-		if p := m.name(e.project); p != m.name(e.row.Cwd) && used+len(p)+len(ref)+2 <= m.contentWidth() {
+		if p := m.name(e.project); p != m.name(e.row.Cwd) && used+ansi.StringWidth(p)+len(ref)+2 <= m.contentWidth() {
 			return p + " " + ref
 		}
 		return ref
