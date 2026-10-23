@@ -286,13 +286,24 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 		rows[i].StartedAt = started.UnixMilli()
 	}
 	m = update(m, rowsMsg{rows: rows, ttys: m.ttys})
+	// The project tracks its issues and is a git repository. The issues
+	// CLI lists the tracker's issues, as each refresh reads them, and
+	// shows #6's details.
 	shows := 0
 	m.issues = func(args ...string) ([]byte, error) {
+		if slices.Contains(args, "list") {
+			return []byte(`{"issues": [{"id": 6, "ref": "app#6", "project": "app", "title": "keep width", "status": "in-progress", "priority": "p1"},` +
+				`{"id": 4, "ref": "app#4", "project": "app", "title": "show cost", "status": "review", "priority": "p2"}]}`), nil
+		}
 		shows++
 		return []byte(`{"id": 6, "title": "keep width", "details-text": "# keep width\n\nKeep it.\n\n## Acceptance criteria\n\n- [x] kept\n- [ ] tested\n"}`), nil
 	}
 	var asked [][]string
-	m.deps.exists = func(p string) bool { return p == "/code/app/.git" }
+	m.deps.exists = func(p string) bool { return p == "/code/app/.git" || p == "/code/app/.issues" }
+	// The tracker was read from the .issues there is.
+	tr := m.trackers["/code/app"]
+	tr.stamp = issueStamp(m.deps.glob, m.deps.modTime, "/code/app")
+	m.trackers = trackers{"/code/app": tr}
 	m.deps.vcs = func(dir string, args ...string) ([]byte, error) {
 		asked = append(asked, args)
 		switch {
@@ -331,7 +342,10 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	}
 	rows[0].State = fleet.Working
 	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
-	settle(t, m, cmd)
+	m = settle(t, m, cmd)
+	if m.target().task != "/code/app#6" || len(m.trackers["/code/app"].issues) != 2 {
+		t.Fatalf("the refresh lost the workstream: target %+v, tracker %+v", m.target(), m.trackers["/code/app"])
+	}
 	if len(asked) == n || slices.ContainsFunc(asked[n:], func(a []string) bool { return slices.Contains(a, "reflog") }) {
 		t.Fatalf("after a state change: %v", asked[n:])
 	}
