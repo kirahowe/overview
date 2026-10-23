@@ -664,6 +664,9 @@ func (m model) header() string {
 	}
 	left := []seg{{"◆ " + m.home.Name(), name}}
 	need, working, idle := m.counts()
+	if m.cockpit.open && m.screen == sessionsScreen {
+		return m.cockpitHeader(left, need, working, idle)
+	}
 	var right []seg
 	if need > 0 {
 		right = append(right, seg{fmt.Sprintf("! %d  ", need), red})
@@ -676,6 +679,49 @@ func (m model) header() string {
 		right = right[1:]
 	}
 	return m.line(left, right, false, false)
+}
+
+// cockpitHeader is the header across the cockpit: the counts in full
+// after the home's name, and on the right how old the digest is and how
+// the orchestrator is, as much as fits.
+func (m model) cockpitHeader(left []seg, need, working, idle int) string {
+	left = append(left, seg{"   ", dim})
+	if need > 0 {
+		left = append(left, seg{fmt.Sprintf("! %d need you  ", need), red})
+	}
+	if working > 0 {
+		left = append(left, seg{fmt.Sprintf("● %d working  ", working), green})
+	}
+	left = append(left, seg{fmt.Sprintf("○ %d idle", idle), dim})
+	if n := len(m.terminals()); n > 0 {
+		left = append(left, seg{fmt.Sprintf("  $ %d terminals", n), codeFg})
+	}
+	var right []seg
+	if !m.digestAt.IsZero() {
+		right = append(right, seg{"digest " + Ago(m.digestAt) + " ago · ", dim})
+	}
+	switch h := m.home.HealthOf(m.rows); {
+	case !m.loaded:
+	case !h.Running:
+		right = append(right, seg{"orchestrator off", red})
+	case h.Stale:
+		right = append(right, seg{"orchestrator silent " + Ago(h.LastCheck), red})
+	default:
+		right = append(right, seg{"orchestrator ok", dim})
+	}
+	if segsWidth(left)+segsWidth(right)+1 > m.contentWidth() {
+		right = nil
+	}
+	return m.line(left, right, false, false)
+}
+
+// cockpitHints are the footer's keys in the cockpit, for where the
+// keyboard is.
+func (m model) cockpitHints() []hint {
+	if m.cockpit.issues {
+		return []hint{{"enter", "start"}, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, {"?", "help"}}
+	}
+	return []hint{{"o", "close"}, {"tab", "issues"}, {"enter", "type"}, {"c", "claude"}, {"t", "term"}, {"v", "review"}, {"?", "help"}}
 }
 
 // hint is a key and what it does, as the footer shows it.
@@ -769,6 +815,9 @@ func (m model) footer() string {
 		}
 		e, _, ok := m.selected(m.ordered())
 		hints = m.entryHints(e, ok)
+		if m.cockpit.open {
+			hints = m.cockpitHints()
+		}
 	}
 	return m.plain(hintLine(lead, hints, m.contentWidth()))
 }
@@ -803,6 +852,11 @@ func (m model) helpBox() []string {
 		entry{"enter", "its first session"},
 		entry{"c", "new session on the task"},
 		entry{"t", "new terminal for it"},
+	)...)
+	left = append(left, section("cockpit",
+		entry{"o", "open / close the cockpit"},
+		entry{"tab", "list or issues card"},
+		entry{"enter", "on an issue, start it"},
 	)...)
 	right := section("digest",
 		entry{"d", "show / hide digests"},

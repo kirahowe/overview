@@ -162,6 +162,8 @@ func TestStateMachine(t *testing.T) {
 					ref, _ = press(before, "esc")
 				case before.screen == digestScreen, y > lh, before.pick.open:
 					ref = before
+				case before.cockpit.open && !before.inCockpitList(x):
+					ref = before // a click on the cockpit's cards
 				default:
 					// A click on a row is the cursor moved there, and a second
 					// one on it is enter.

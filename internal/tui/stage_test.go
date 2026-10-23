@@ -19,6 +19,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/tmux"
+	"overview/internal/vcs"
 )
 
 // fakeMux is a tmux small enough to reason about: panes sit in windows of
@@ -350,6 +351,8 @@ func fakeDeps(f *fakeMux) deps {
 	d.recentTurns = func(string, int) []fleet.Turn { return nil }
 	d.glob = func(string) []string { return nil }
 	d.readFile = func(p string) ([]byte, error) { return nil, errors.New(p + ": no files in tests") }
+	d.vcs = func(dir string, args ...string) ([]byte, error) { return nil, errors.New("no git or jj in tests") }
+	d.untracked = func(p string) (vcs.Untracked, error) { return vcs.Untracked{}, errors.New(p + ": no files in tests") }
 	if f != nil {
 		d.writeTTY = f.draw
 	} else {

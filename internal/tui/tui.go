@@ -21,6 +21,7 @@ import (
 	"overview/internal/issues"
 	"overview/internal/review"
 	"overview/internal/tmux"
+	"overview/internal/vcs"
 )
 
 const (
@@ -169,6 +170,9 @@ type model struct {
 	// a Cmd that zooms the list or puts it back is out.
 	cockpit cockpit
 	zooming bool
+	// issueReads and changeReads are the cockpit's reads, by cockpitKey.
+	issueReads  map[string]issueRead
+	changeReads map[string]changesRead
 
 	// reviews sums up each session's review, by session ID, as the latest
 	// refresh read them. reviewArgs are the flags every review is started
@@ -268,6 +272,10 @@ type deps struct {
 	glob    func(pattern string) []string // the paths that match pattern
 	// readFile reads a file whole.
 	readFile func(path string) ([]byte, error)
+	// vcs runs git and jj, and untracked reads a file git does not track,
+	// for the cockpit's changes.
+	vcs       vcs.Runner
+	untracked func(path string) (vcs.Untracked, error)
 }
 
 // roots finds the project roots of dirs.
@@ -276,7 +284,7 @@ func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve
 func systemDeps() deps {
 	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
 		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns, reviews: readReviews,
-		glob: glob, readFile: os.ReadFile}
+		glob: glob, readFile: os.ReadFile, vcs: vcs.Exec, untracked: vcs.ReadUntracked}
 }
 
 func glob(pattern string) []string {
@@ -708,7 +716,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, stage := m.restage()
 	m, turns := m.askTurns()
-	return m, tea.Batch(cmd, stage, turns)
+	m, reads := m.cockpitReads()
+	return m, tea.Batch(cmd, stage, turns, reads)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -756,6 +765,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case turnsMsg:
 		m.turns = msg.recent
+	case issueReadMsg, changesReadMsg:
+		m = m.landRead(msg)
 	case rowsMsg:
 		// A refresh that failed keeps what the last one found.
 		if m.rowsErr = msg.err; msg.err != nil {
@@ -1024,9 +1035,10 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case cockpitTab:
 		m.cockpit.issues = !m.cockpit.issues
 	case cockpitMove:
-		m.cockpit.pick += a.n
+		others, _ := m.others(m.target())
+		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(others))-1))
 	case cockpitPick:
-		return m, nil
+		return m.startPicked()
 	case copyID:
 		if ok && e.kind == workstreamEntry {
 			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil

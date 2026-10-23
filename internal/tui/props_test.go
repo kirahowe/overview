@@ -20,6 +20,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/review"
 	"overview/internal/tmux"
 )
 
@@ -1442,6 +1443,143 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 			e, _, ok := m.selected(m.ordered())
 			if moved := m.sel != was; ok && (moved || m.note != "nothing needs you") && (!needy(e) || e.alias != "") {
 				t.Fatalf("n stopped at %s (%+v)", e.key(), e)
+			}
+		}
+	})
+}
+
+// The cockpit's target for an entry under a workstream is that
+// workstream, and for any other entry its project.
+func TestPropCockpitTargetIsTheWorkstreamAbove(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned := genRows(t), genTaskTerms(t), genPinned(t)
+		tk := genTasks(t, rows)
+		es := flatten(buildList(rows, terms, pinned, tk, "", fakeProject, fakeShort, fakeHost))
+		rootOf := func(e entry, ok bool) string { return "root of " + e.key() }
+		streams := map[string]entry{}
+		for _, e := range es {
+			if e.kind == workstreamEntry {
+				streams[e.task] = e
+			}
+		}
+		for _, e := range es {
+			got := cockpitTarget(e, true, rootOf)
+			ws, under := streams[e.task]
+			switch {
+			case e.task != "" && !under:
+				t.Fatalf("%s sits under %s, which is not listed", e.key(), e.task)
+			case under && (got.task != ws.task || got.root != ws.project || got.issue.ID != ws.issue.ID):
+				t.Fatalf("%s under %s has target %+v", e.key(), e.task, got)
+			case !under && (got.task != "" || got.root != rootOf(e, true)):
+				t.Fatalf("%s under no workstream has target %+v", e.key(), got)
+			}
+		}
+		if got := cockpitTarget(entry{}, false, rootOf); got.task != "" || got.root != rootOf(entry{}, false) {
+			t.Fatalf("with nothing selected: %+v", got)
+		}
+	})
+}
+
+// genCards are rows of the cockpit's cards from arbitrary data, each with
+// a title of its own.
+func genCards(t *rapid.T) [][]card {
+	text := rapid.SampledFrom([]string{"", "x", "keep the list's width", strings.Repeat("long words ", 30), "wide 漢字 text"})
+	var ms []member
+	for range rapid.IntRange(0, 4).Draw(t, "members") {
+		ms = append(ms, member{name: text.Draw(t, "mname"), word: "idle", age: "3m", style: dim, term: rapid.Bool().Draw(t, "term")})
+	}
+	var files []fileStat
+	for range rapid.IntRange(0, 9).Draw(t, "files") {
+		files = append(files, fileStat{path: text.Draw(t, "path"), add: rapid.IntRange(0, 5000).Draw(t, "add"), del: rapid.IntRange(0, 50).Draw(t, "del"),
+			binary: rapid.Bool().Draw(t, "binary")})
+	}
+	var crit []issues.Criterion
+	for range rapid.IntRange(0, 5).Draw(t, "crit") {
+		crit = append(crit, issues.Criterion{Text: text.Draw(t, "ctext"), Done: rapid.Bool().Draw(t, "done")})
+	}
+	statuses := []string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked}
+	var others []issues.Issue
+	for i := range rapid.IntRange(0, 8).Draw(t, "others") {
+		others = append(others, issues.Issue{ID: i + 1, Title: text.Draw(t, "otitle"), Status: rapid.SampledFrom(statuses).Draw(t, "ostatus"),
+			Priority: rapid.SampledFrom([]string{"p0", "p2", ""}).Draw(t, "oprio")})
+	}
+	cards := []card{
+		streamHeader(text.Draw(t, "ref"), "review", "p1", text.Draw(t, "title"), text.Draw(t, "since"), ms),
+		projectHeader(text.Draw(t, "name"), text.Draw(t, "root"), "jj", rapid.IntRange(-1, 9).Draw(t, "open"), ms),
+		issueCard(6, issueInfo{summary: text.Draw(t, "summary"), criteria: crit, loading: rapid.Bool().Draw(t, "loading")}),
+		changesCard("Changes", text.Draw(t, "csince"), changeInfo{files: files, uncommitted: rapid.IntRange(-1, 9).Draw(t, "unc"),
+			noRepo: rapid.Bool().Draw(t, "norepo")}),
+		reviewCard(review.Summary{Open: rapid.IntRange(0, 9).Draw(t, "ropen"), Waiting: rapid.IntRange(0, 3).Draw(t, "rwait")}),
+		issuesCard(others, map[int]int{1: 2}, rapid.Bool().Draw(t, "focused"), rapid.IntRange(0, 8).Draw(t, "pick")),
+		tasksCard(text.Draw(t, "troot"), rapid.Bool().Draw(t, "tool")),
+	}
+	var rows [][]card
+	for len(cards) > 0 {
+		n := min(rapid.IntRange(1, 2).Draw(t, "pair"), len(cards))
+		row := slices.Clone(cards[:n])
+		for i := range row {
+			row[i].title = fmt.Sprintf("card%d", len(rows)*2+i)
+		}
+		rows, cards = append(rows, row), cards[n:]
+	}
+	return rows
+}
+
+// The cockpit's cards fill exactly the space they are given, whatever it
+// is and whatever they hold, and those that do not fit are the last ones,
+// dropped whole.
+func TestPropCockpitCardsFitAndDropTheLast(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows := genCards(t)
+		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
+		lines, shown := layoutCards(rows, w, h)
+		if len(lines) != h {
+			t.Fatalf("%d lines, want %d", len(lines), h)
+		}
+		for i, l := range lines {
+			if lw := ansi.StringWidth(l); lw != w {
+				t.Fatalf("line %d is %d wide, want %d: %q", i, lw, w, ansi.Strip(l))
+			}
+		}
+		var order []string
+		for _, r := range rows {
+			for _, c := range r {
+				order = append(order, c.title)
+			}
+		}
+		var seen []string
+		text := ansi.Strip(strings.Join(lines, "\n"))
+		for _, title := range order {
+			if strings.Contains(text, "─ "+title+" ") {
+				seen = append(seen, title)
+			}
+		}
+		if w >= 20 && !slices.Equal(seen, order[:shown]) {
+			t.Fatalf("shown %d, the titles drawn are %v of %v", shown, seen, order)
+		}
+	})
+}
+
+// The whole view fits any size with the cockpit open, on a workstream and
+// on a project.
+func TestPropCockpitFitsAnySize(t *testing.T) {
+	base := workModel(t, 150, 40)
+	base.cockpit = cockpit{open: true}
+	rapid.Check(t, func(t *rapid.T) {
+		m := base
+		es := m.ordered()
+		m = m.moveTo(es, rapid.IntRange(0, len(es)-1).Draw(t, "sel"))
+		m.cockpit.issues = rapid.Bool().Draw(t, "issues")
+		m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
+		w, h := rapid.IntRange(1, 220).Draw(t, "w"), rapid.IntRange(1, 70).Draw(t, "h")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
+		lines := strings.Split(m.View(), "\n")
+		if len(lines) != h {
+			t.Fatalf("%d lines at %dx%d", len(lines), w, h)
+		}
+		for i, l := range lines {
+			if lw := ansi.StringWidth(l); lw != w {
+				t.Fatalf("line %d is %d wide at %dx%d: %q", i, lw, w, h, ansi.Strip(l))
 			}
 		}
 	})

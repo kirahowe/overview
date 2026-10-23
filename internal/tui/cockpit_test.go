@@ -84,9 +84,9 @@ func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
 func TestTheCockpitOutsideTmuxOnlyDraws(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m = update(m, tea.WindowSizeMsg{Width: 140, Height: 20})
-	m, cmd := press(m, "o")
-	if !m.cockpit.open || cmd != nil {
-		t.Fatalf("open %v cmd %v", m.cockpit.open, cmd != nil)
+	m = pressSettled(t, m, "o")
+	if !m.cockpit.open || m.zooming {
+		t.Fatalf("open %v zooming %v", m.cockpit.open, m.zooming)
 	}
 	lines := strings.Split(m.View(), "\n")
 	if len(lines) != 20 {
