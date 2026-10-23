@@ -1,0 +1,21 @@
+{
+  "issues" : [ {
+    "tags" : [ ],
+    "dir" : "/Users/kira/code/projects/overview/.issues",
+    "problems" : [ ],
+    "ref" : "overview#1",
+    "updated" : "2026-10-19",
+    "file" : "/Users/kira/code/projects/overview/.issues/1-resume-a-session-from-overview.edn",
+    "type" : "feature",
+    "created" : "2026-10-19",
+    "related" : [ ],
+    "title" : "Resume a session from overview",
+    "details" : "1-resume-a-session-from-overview.md",
+    "priority" : "p2",
+    "project" : "overview",
+    "status" : "inbox",
+    "id" : 1,
+    "blocked-by" : [ ]
+  } ],
+  "all?" : false
+}

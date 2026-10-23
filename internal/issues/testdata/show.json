@@ -1,0 +1,19 @@
+{
+  "tags" : [ ],
+  "dir" : "/Users/kira/code/projects/overview/.issues",
+  "problems" : [ ],
+  "ref" : "overview#1",
+  "updated" : "2026-10-19",
+  "file" : "/Users/kira/code/projects/overview/.issues/1-resume-a-session-from-overview.edn",
+  "type" : "feature",
+  "created" : "2026-10-19",
+  "related" : [ ],
+  "title" : "Resume a session from overview",
+  "details" : "1-resume-a-session-from-overview.md",
+  "priority" : "p2",
+  "project" : "overview",
+  "status" : "inbox",
+  "id" : 1,
+  "details-text" : "# Resume a session from overview\n\n## Context\n\nSince 2026-10-18 overview's sessions run in its own tmux server (socket\n`overview`). They survive quitting the view, closing Ghostty and detaching,\nbut not a reboot, a logout or `tmux -L overview kill-server`. When the server\ngoes, the conversations stay on disk under the config directory, and\n`claude --resume` (or `-c`) can pick them up. Overview has no way to do that\nyet: `c` only starts a fresh `claude`.\n\nA resumed session should behave like one started with `c`. It runs in a\nparked pane with `CLAUDE_CONFIG_DIR` set, shows on the stage, gets the\nkeyboard, and the cursor moves onto it once `claude agents` lists it\n(`start` and `adopt` in `internal/tui`).\n\n## Acceptance criteria\n\n- [ ] From the view, a key resumes a past session of this config directory in\n      overview's tmux, in that session's own directory.\n- [ ] The resumed session is shown and focused, as `c` does now.\n- [ ] A session that is already running is not resumed a second time.\n- [ ] Tested through the `multiplexer` fake, like the `c` path.\n\n## Open questions\n\n- How to pick the session: let `claude --resume` show its own picker in the\n  new pane, or list recent transcripts in overview (they are already read for\n  titles and the digest) and resume by id.\n- Which key to use. `r` is refresh now.\n- Whether to offer a one-off \"resume everything that was running\" after a\n  reboot, which would need a record of what was running.\n\n## Log\n",
+  "blocked-by" : [ ]
+}
