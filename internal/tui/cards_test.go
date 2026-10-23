@@ -185,7 +185,8 @@ func TestIssuesCard(t *testing.T) {
 		"┌─ Issues ────────────────────────────── 9 open ─┐",
 		"│   in review    #4 show cost                    │",
 		"│   in progress  #7 tidy · 2 sessions            │",
-		"│ ▸ up next      #9 urgent                       │",
+		"│ ▸ blocked      #14 stuck                       │",
+		"│   up next      #9 urgent                       │",
 		"│                #5 threads                      │",
 		"│                #10 later                       │",
 		"│   inbox 2                                      │",
@@ -195,7 +196,7 @@ func TestIssuesCard(t *testing.T) {
 	for _, i := range pickable(others) {
 		ids = append(ids, i.ID)
 	}
-	if !slices.Equal(ids, []int{4, 7, 9, 5, 10}) {
+	if !slices.Equal(ids, []int{4, 7, 14, 9, 5, 10}) {
 		t.Fatalf("pickable %v", ids)
 	}
 	if got := drawn(issuesCard(nil, nil, false, 0, nil), 40); !strings.Contains(got[1], "no other open issues") {

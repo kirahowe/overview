@@ -118,7 +118,8 @@ files changed since the first session started, most changed first, and
 how many of them are still uncommitted. The review counts the open notes
 across the workstream's sessions and the replies waiting on you. Last
 are the project's other open issues: those in review, those in progress,
-the next three ready ones by priority, and how many sit in the inbox. A
+the blocked ones, the next three ready ones by priority, and how many sit
+in the inbox. A
 project's cockpit shows its root and the kind of repository, its
 sessions and terminals, its issues, and its uncommitted changes. A card
 the window has no room for is left out, from the bottom up.

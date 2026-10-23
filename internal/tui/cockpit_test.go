@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"overview/internal/issues"
 )
 
 func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
@@ -193,5 +195,24 @@ func TestTheProjectCockpitWithoutIssues(t *testing.T) {
 	m.issues = func(...string) ([]byte, error) { return nil, nil }
 	if text := ansi.Strip(m.View()); !strings.Contains(text, "Start with issues init in /w/red.") {
 		t.Fatalf("with the tool:\n%s", text)
+	}
+}
+
+// A blocked issue is listed after those in progress, and enter starts a
+// session on it as on the others.
+func TestEnterOnABlockedIssueStartsAWorkstream(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "s2")
+	tr := m.trackers["/code/app"]
+	tr.issues = append(slices.Clone(tr.issues), issues.Issue{ID: 8, Ref: "app#8", Title: "wait on tmux", Status: issues.Blocked, Priority: "p2"})
+	m.trackers = trackers{"/code/app": tr}
+	m = update(m, tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = pressSettled(t, m, "o", "tab", "j", "j")
+	if text := ansi.Strip(m.View()); !strings.Contains(text, "▸ blocked      #8 wait on tmux") {
+		t.Fatalf("the cursor is not on #8:\n%s", text)
+	}
+	pressSettled(t, m, "enter")
+	if len(f.spawned) != 1 || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#8: wait on tmux"}) {
+		t.Fatalf("spawned %+v", f.spawned)
 	}
 }

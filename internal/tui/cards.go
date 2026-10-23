@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -445,9 +446,9 @@ func reviewCard(s review.Summary) card {
 const upNext = 3
 
 // issueGroups is what the issues card lists of a project's other open
-// issues: those in review, those in progress, the first ready ones by
-// priority, and how many are in the inbox.
-func issueGroups(others []issues.Issue) (review, progress, next []issues.Issue, inbox int) {
+// issues: those in review, those in progress, the blocked ones, the first
+// ready ones by priority, and how many are in the inbox.
+func issueGroups(others []issues.Issue) (review, progress, blocked, next []issues.Issue, inbox int) {
 	sorted := append([]issues.Issue(nil), others...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if a, b := issues.PriorityRank(sorted[i].Priority), issues.PriorityRank(sorted[j].Priority); a != b {
@@ -461,6 +462,8 @@ func issueGroups(others []issues.Issue) (review, progress, next []issues.Issue, 
 			review = append(review, i)
 		case issues.InProgress:
 			progress = append(progress, i)
+		case issues.Blocked:
+			blocked = append(blocked, i)
 		case issues.Ready:
 			if len(next) < upNext {
 				next = append(next, i)
@@ -474,8 +477,8 @@ func issueGroups(others []issues.Issue) (review, progress, next []issues.Issue, 
 
 // pickable is the issues the issues card's cursor walks, in its order.
 func pickable(others []issues.Issue) []issues.Issue {
-	r, p, n, _ := issueGroups(others)
-	return append(append(r, p...), n...)
+	r, p, b, n, _ := issueGroups(others)
+	return slices.Concat(r, p, b, n)
 }
 
 // issuesCard lists the project's other open issues. linked counts the
@@ -488,8 +491,8 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 		if err != nil {
 			out = wrap(fg(pal.Asking).Render("issues failed: "+issues.OneLine(err.Error())), w)
 		}
-		rev, prog, next, inbox := issueGroups(others)
-		if len(rev)+len(prog)+len(next) == 0 && inbox == 0 {
+		rev, prog, blocked, next, inbox := issueGroups(others)
+		if len(rev)+len(prog)+len(blocked)+len(next) == 0 && inbox == 0 {
 			return append(out, dim.Render("no other open issues"))
 		}
 		const label = 13
@@ -518,6 +521,7 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 		}
 		group("in review", fg(pal.Blocked), rev)
 		group("in progress", fg(pal.Working), prog)
+		group("blocked", fg(pal.Asking), blocked)
 		group("up next", fg(pal.Accent), next)
 		if inbox > 0 {
 			out = append(out, "  "+dim.Render(fmt.Sprintf("inbox %d", inbox)))
