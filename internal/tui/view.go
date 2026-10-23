@@ -56,7 +56,7 @@ func (m model) boxHeight() int { return max(m.h-1, 3) }
 func (m model) innerHeight() int { return m.boxHeight() - 2 }
 
 func (m model) View() string {
-	if m.w == 0 {
+	if m.w <= 0 || m.h <= 0 {
 		return ""
 	}
 	var screen []string
@@ -72,7 +72,9 @@ func (m model) View() string {
 	case m.confirm != "":
 		screen = centre(screen, m.confirmBox(), m.w)
 	}
-	return strings.Join(append(screen, m.statusBar()), "\n")
+	// The box is never shorter than 3 rows, which a squeezed pane can be.
+	screen = append(screen, m.statusBar())
+	return strings.Join(screen[:min(len(screen), m.h)], "\n")
 }
 
 func (m model) sessionsView() []string {
@@ -129,7 +131,12 @@ func (m model) pickerView() []string {
 
 // box draws a bordered pane with the title set into its top edge and an
 // optional note in its bottom edge. The focused pane gets the accent colour.
+// A pane too narrow for the top edge with a character of title, 6 columns,
+// gets blank lines: tmux can squeeze the list that far.
 func box(title, info string, body []string, w, h int, focused bool) []string {
+	if w < 6 {
+		return pad(nil, max(h, 0))
+	}
 	edge, name := fg(pal.Border), lipgloss.NewStyle().Foreground(pal.Text)
 	if focused {
 		edge, name = fg(pal.Accent), heading

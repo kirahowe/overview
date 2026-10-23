@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/alecthomas/chroma/v2/styles"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
@@ -890,6 +892,36 @@ func TestPropFollow(t *testing.T) {
 			t.Fatalf("%s is not in %s", got, stage)
 		case there[sel] && got != sel:
 			t.Fatalf("the cursor's %s is there, yet follow chose %s", sel, got)
+		}
+	})
+}
+
+// The view fits whatever pane tmux gives it, down to none at all: no line
+// is wider than the pane and there are no more lines than it has rows.
+// tmux can squeeze the list to a column, and a view that panics there
+// takes its pane down with it.
+func TestPropViewFitsAnySize(t *testing.T) {
+	root := t.TempDir()
+	keys := []string{"?", "/", "a", "x", "j", "k", "g", "G", "esc", "tab", "enter", "s"}
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = update(m, rowsMsg{rows: genRows(t)})
+		for _, k := range rapid.SliceOfN(rapid.SampledFrom(keys), 0, 4).Draw(t, "keys") {
+			m = update(m, keyMsg(k))
+		}
+		w := rapid.OneOf(rapid.IntRange(0, 12), rapid.IntRange(0, 200)).Draw(t, "w")
+		h := rapid.OneOf(rapid.IntRange(0, 6), rapid.IntRange(0, 60)).Draw(t, "h")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
+		lines := strings.Split(m.View(), "\n")
+		if len(lines) > max(h, 1) {
+			t.Fatalf("%d lines in a pane %d high", len(lines), h)
+		}
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got > w {
+				t.Fatalf("line %d is %d wide in a pane %d wide: %q", i, got, w, l)
+			}
 		}
 	})
 }
