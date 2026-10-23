@@ -300,3 +300,17 @@ func TestBuildOfIsTheContents(t *testing.T) {
 		t.Fatal("other bytes gave the same build")
 	}
 }
+
+// A view started with another issues path is another view, so a launch
+// restarts it.
+func TestViewKeyTellsIssuesApart(t *testing.T) {
+	a := []string{"--issues", "/bin/issues"}
+	if viewKey(a, "b") != viewKey([]string{"--issues", "/bin/issues"}, "b") {
+		t.Error("the same settings should give the same key")
+	}
+	for _, other := range [][]string{{"--issues", ""}, {"--issues", "/opt/issues"}} {
+		if viewKey(a, "b") == viewKey(other, "b") {
+			t.Errorf("%q should differ from %q", other, a)
+		}
+	}
+}

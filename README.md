@@ -202,7 +202,7 @@ overview takes its settings from flags and from one file,
 `~/.config/overview/config`, and reads them once when it starts. `--config
 <dir>` uses another directory in place of `~/.config/overview`, for the
 file, the themes and `tmux.conf` alike. The file holds `key = value` lines
-for `home`, `theme`, `socket` and `claude`, each taking what its flag takes.
+for `home`, `theme`, `socket`, `claude` and `issues`, each taking what its flag takes.
 Lines starting with `#` are comments, and a comment cannot follow a value on
 the same line:
 
@@ -212,15 +212,18 @@ home   = work
 theme  = revdiff
 socket = overview
 claude = /opt/bin/claude
+issues = ~/.local/bin/issues
 ```
 
 A flag wins over the file, and the file over the default. An unknown key is
-an error. A theme or claude given as a path, with a `/` in it, may start
+an error. A theme, claude or issues given as a path, with a `/` in it, may start
 with `~/`. A relative one is from the current directory in a flag and from
 the config directory in the file. `--claude` and `claude =` pick the claude
 that overview runs, by default `claude` on your PATH, which overview looks
 up as it starts so the view and its panes run that one whatever PATH its
-tmux has. `--orchestrator-dir` runs the orchestrator
+tmux has. `--issues` and `issues =` pick the `issues` CLI the same way, by
+default `issues` on your PATH. It is optional: if overview finds no such
+binary, nothing is wrong and it works as before. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
 

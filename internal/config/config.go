@@ -22,6 +22,9 @@ const (
 	DefaultTheme = "one-dark"
 	// DefaultClaude is the claude binary, found on PATH.
 	DefaultClaude = "claude"
+	// DefaultIssues is the issues binary, found on PATH. Without one the
+	// workstreams feature is off.
+	DefaultIssues = "issues"
 )
 
 // Values is what one source says about each setting, "" where it says
@@ -31,6 +34,7 @@ type Values struct {
 	Theme  string // a theme name or path
 	Socket string // the name of overview's tmux socket
 	Claude string // the claude binary
+	Issues string // the issues binary; "" once resolved means none
 }
 
 // Config is the settings a process runs with. Home stays "" when nothing
@@ -47,6 +51,7 @@ var keys = map[string]func(*Values) *string{
 	"theme":  func(v *Values) *string { return &v.Theme },
 	"socket": func(v *Values) *string { return &v.Socket },
 	"claude": func(v *Values) *string { return &v.Claude },
+	"issues": func(v *Values) *string { return &v.Issues },
 }
 
 // Settings reads "key = value" lines. Blank lines and lines starting with #
@@ -89,7 +94,7 @@ func Parse(src string) (Values, error) {
 }
 
 // Resolve settles each setting: the flag, then the file, then the default.
-// A theme or claude that is a path, rather than a name, is made absolute,
+// A theme, claude or issues that is a path, rather than a name, is made absolute,
 // so it means the same to every process overview starts: ~/ is user, the
 // user's home directory, and a relative path is from cwd for a flag and
 // from dir for the file.
@@ -115,6 +120,7 @@ func Resolve(dir string, flags, file Values, user, cwd string) (Config, error) {
 		Theme:  path(flags.Theme, file.Theme, DefaultTheme),
 		Socket: pick(flags.Socket, file.Socket, DefaultSocket),
 		Claude: path(flags.Claude, file.Claude, DefaultClaude),
+		Issues: path(flags.Issues, file.Issues, DefaultIssues),
 	}}
 	// tmux -L takes a name; a path would put the socket somewhere else.
 	if strings.ContainsRune(c.Socket, '/') {
@@ -134,6 +140,19 @@ func (c Config) FindClaude(look func(string) (string, error)) Config {
 	if p, err := look(c.Claude); err == nil {
 		c.Claude = absolute(p, c.User, c.Dir)
 	}
+	return c
+}
+
+// FindIssues gives c the full path of the issues binary, as look finds it.
+// Unlike claude, one that cannot be found is not an error: Issues becomes
+// "" and the feature is off.
+func (c Config) FindIssues(look func(string) (string, error)) Config {
+	p, err := look(c.Issues)
+	if err != nil {
+		c.Issues = ""
+		return c
+	}
+	c.Issues = absolute(p, c.User, c.Dir)
 	return c
 }
 

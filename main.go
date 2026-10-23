@@ -57,6 +57,9 @@ Flags:
                        file's theme line, then one-dark.
   --claude <path>      the claude to run. Defaults to the config file's
                        claude line, then claude on PATH.
+  --issues <path>      the issues CLI, which adds each project's issues to
+                       the view. Defaults to the config file's issues line,
+                       then issues on PATH; without one the view is as before.
   --socket <name>      the name of overview's tmux socket. Defaults to the
                        config file's socket line, then overview.
   --config <dir>       overview's own directory, holding the config file,
@@ -66,7 +69,7 @@ Flags:
                        beside the bin/ that holds overview)
 
 The config file is <config dir>/config, with key = value lines for home,
-theme, socket and claude. A flag wins over the file.
+theme, socket, claude and issues. A flag wins over the file.
 `
 
 func main() {
@@ -95,6 +98,7 @@ func main() {
 	fs.StringVar(&flags.Home, "home", "", "")
 	fs.StringVar(&flags.Theme, "theme", "", "")
 	fs.StringVar(&flags.Claude, "claude", "", "")
+	fs.StringVar(&flags.Issues, "issues", "", "")
 	fs.StringVar(&flags.Socket, "socket", "", "")
 	// The view is given the socket's path, the session it runs in and
 	// where overview was started.
@@ -129,7 +133,7 @@ func main() {
 	} else if cfg, err = config.Load(*configDir, flags, user, cwd); err != nil {
 		fail(err)
 	} else {
-		cfg = cfg.FindClaude(exec.LookPath)
+		cfg = cfg.FindClaude(exec.LookPath).FindIssues(exec.LookPath)
 	}
 	if cmd == "themes" {
 		if err := themes(cfg, rest); err != nil {
@@ -147,7 +151,7 @@ func main() {
 		// The view gets every setting as a flag, resolved, so it runs with
 		// exactly what this launch settled on.
 		view := []string{"--config", cfg.Dir, "--home", home.Dir, "--theme", cfg.Theme,
-			"--claude", cfg.Claude, "--orchestrator-dir", home.OrchestratorDir, "--model", *model}
+			"--claude", cfg.Claude, "--issues", cfg.Issues, "--orchestrator-dir", home.OrchestratorDir, "--model", *model}
 		if _, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
 			err = tui.Launch(home, cfg.Socket, cfg.Dir, view, cwd)
 		}
@@ -155,7 +159,7 @@ func main() {
 		var theme tui.Theme
 		if theme, err = tui.LoadTheme(cfg.Theme, cfg.Dir); err == nil {
 			err = tui.Run(tui.View{Home: home, Model: *model, Theme: theme,
-				Socket: *socketPath, Session: *session, User: user, Cwd: *viewCwd, ThemeArg: cfg.Theme, ConfigDir: cfg.Dir})
+				Socket: *socketPath, Session: *session, User: user, Cwd: *viewCwd, ThemeArg: cfg.Theme, ConfigDir: cfg.Dir, Issues: cfg.Issues})
 		}
 	case "sessions":
 		err = printSessions(home, cfg.User)

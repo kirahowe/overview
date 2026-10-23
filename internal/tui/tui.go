@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
+	"overview/internal/issues"
 	"overview/internal/review"
 	"overview/internal/tmux"
 )
@@ -71,6 +72,8 @@ type (
 type model struct {
 	home fleet.Home
 	llm  string
+	// issues runs the issues CLI, nil when overview was started without one.
+	issues issues.Runner
 
 	rows    []fleet.Row
 	ttys    map[int]string
@@ -182,6 +185,8 @@ type View struct {
 	// ThemeArg and ConfigDir are the --theme and --config the view was
 	// started with, which a review is started with too.
 	ThemeArg, ConfigDir string
+	// Issues is the path of the issues binary, "" when there is none.
+	Issues string
 }
 
 // Run opens the view and blocks until the user quits. It runs in the pane
@@ -191,6 +196,9 @@ func Run(v View) error {
 	useTheme(v.Theme)
 	m := newModel(v.Home, v.Model)
 	m.user, m.cwd = resolvePath(v.User), v.Cwd
+	if v.Issues != "" {
+		m.issues = issues.Exec(v.Issues)
+	}
 	m.reviewArgs = []string{"--theme", v.ThemeArg, "--config", v.ConfigDir, "--socket-path", v.Socket}
 	socket, session := v.Socket, v.Session
 	exe, err := os.Executable()

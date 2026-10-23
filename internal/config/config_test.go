@@ -8,8 +8,8 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	got, err := Parse("# mine\n\ntheme = revdiff\nhome = ~/.claude-work\nsocket = ov2\nclaude = /opt/claude\n")
-	want := Values{Home: "~/.claude-work", Theme: "revdiff", Socket: "ov2", Claude: "/opt/claude"}
+	got, err := Parse("# mine\n\ntheme = revdiff\nhome = ~/.claude-work\nsocket = ov2\nclaude = /opt/claude\nissues = ~/bin/issues\n")
+	want := Values{Home: "~/.claude-work", Theme: "revdiff", Socket: "ov2", Claude: "/opt/claude", Issues: "~/bin/issues"}
 	if err != nil || got != want {
 		t.Fatalf("got %+v, %v; want %+v", got, err, want)
 	}
@@ -18,6 +18,7 @@ func TestParse(t *testing.T) {
 		"no equals":    "theme one-dark",
 		"empty value":  "theme =",
 		"orchestrator": "orchestrator-dir = /x",
+		"issue":        "issue = /x",
 	} {
 		if _, err := Parse(src); err == nil {
 			t.Errorf("%s: no error for %q", name, src)
@@ -31,14 +32,14 @@ func TestResolvePrecedence(t *testing.T) {
 		flags, file Values
 		want        Values
 	}{
-		{"defaults", Values{}, Values{}, Values{Theme: DefaultTheme, Socket: DefaultSocket, Claude: DefaultClaude}},
-		{"file", Values{}, Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c"},
-			Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c"}},
-		{"flags beat the file", Values{Home: "kira", Theme: "one-light", Socket: "f", Claude: "fc"},
-			Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c"},
-			Values{Home: "kira", Theme: "one-light", Socket: "f", Claude: "fc"}},
+		{"defaults", Values{}, Values{}, Values{Theme: DefaultTheme, Socket: DefaultSocket, Claude: DefaultClaude, Issues: DefaultIssues}},
+		{"file", Values{}, Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c", Issues: "i"},
+			Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c", Issues: "i"}},
+		{"flags beat the file", Values{Home: "kira", Theme: "one-light", Socket: "f", Claude: "fc", Issues: "fi"},
+			Values{Home: "work", Theme: "revdiff", Socket: "s", Claude: "c", Issues: "i"},
+			Values{Home: "kira", Theme: "one-light", Socket: "f", Claude: "fc", Issues: "fi"}},
 		{"mixed", Values{Theme: "one-light"}, Values{Home: "work"},
-			Values{Home: "work", Theme: "one-light", Socket: DefaultSocket, Claude: DefaultClaude}},
+			Values{Home: "work", Theme: "one-light", Socket: DefaultSocket, Claude: DefaultClaude, Issues: DefaultIssues}},
 	} {
 		got, err := Resolve("/d", c.flags, c.file, "/u", "/w")
 		if err != nil || got.Values != c.want || got.Dir != "/d" {
@@ -104,6 +105,37 @@ func TestFindClaude(t *testing.T) {
 	for in, want := range map[string]string{"claude": "/opt/bin/claude", "nope": "nope", "/x/claude": "/x/claude"} {
 		c := Config{Dir: "/d", User: "/u", Values: Values{Claude: in}}
 		if got := c.FindClaude(look).Claude; got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An issues path is made absolute like claude's, and a missing binary is
+// not an error: it resolves to "" and the feature is off.
+func TestIssuesPathAndFind(t *testing.T) {
+	for _, c := range []struct {
+		flags, file Values
+		want        string
+	}{
+		{Values{Issues: "~/bin/issues"}, Values{}, "/u/bin/issues"},
+		{Values{}, Values{Issues: "bin/issues"}, "/d/bin/issues"},
+		{Values{Issues: "/x/issues"}, Values{Issues: "/y/issues"}, "/x/issues"},
+		{Values{}, Values{}, DefaultIssues},
+	} {
+		got, err := Resolve("/d", c.flags, c.file, "/u", "/w")
+		if err != nil || got.Issues != c.want {
+			t.Errorf("%+v over %+v: %q, %v; want %q", c.flags, c.file, got.Issues, err, c.want)
+		}
+	}
+	look := func(name string) (string, error) {
+		if name == "issues" || name == "/x/issues" {
+			return "/opt/bin/" + filepath.Base(name), nil
+		}
+		return "", errors.New(name + ": not found")
+	}
+	for in, want := range map[string]string{"issues": "/opt/bin/issues", "nope": "", "/x/issues": "/opt/bin/issues", "/gone/issues": ""} {
+		c := Config{Dir: "/d", User: "/u", Values: Values{Issues: in}}
+		if got := c.FindIssues(look).Issues; got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)
 		}
 	}

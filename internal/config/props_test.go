@@ -18,7 +18,7 @@ func drawValues(t *rapid.T, label string) Values {
 		}
 		return ""
 	}
-	return Values{Home: maybe("home"), Theme: maybe("theme"), Socket: maybe("socket"), Claude: maybe("claude")}
+	return Values{Home: maybe("home"), Theme: maybe("theme"), Socket: maybe("socket"), Claude: maybe("claude"), Issues: maybe("issues")}
 }
 
 // Whatever order, spacing and comments a file uses, Parse reads back the
@@ -50,6 +50,7 @@ var fields = map[string]func(Config) string{
 	"theme":  func(c Config) string { return c.Theme },
 	"socket": func(c Config) string { return c.Socket },
 	"claude": func(c Config) string { return c.Claude },
+	"issues": func(c Config) string { return c.Issues },
 }
 
 // resolve is Resolve with a socket never given as a path, which it refuses.
@@ -85,7 +86,7 @@ func TestPropAFlagFixesItsSetting(t *testing.T) {
 func TestPropEachSettingStandsAlone(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		flags, file := drawConfigValues(t, "flag"), drawConfigValues(t, "file")
-		name := rapid.SampledFrom([]string{"home", "theme", "socket", "claude"}).Draw(t, "changed")
+		name := rapid.SampledFrom([]string{"home", "theme", "socket", "claude", "issues"}).Draw(t, "changed")
 		flags2, file2 := flags, file
 		otherFlags, otherFile := drawConfigValues(t, "other flag"), drawConfigValues(t, "other file")
 		*keys[name](&flags2), *keys[name](&file2) = *keys[name](&otherFlags), *keys[name](&otherFile)
