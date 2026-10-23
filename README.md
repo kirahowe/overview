@@ -107,8 +107,8 @@ is one or sits under one, and otherwise for its project. The list's pane
 zooms to fill its window, so the session beside it keeps running out of
 sight and comes back as it was. The list stays down the left at its
 usual width, and cards about the workstream or project take the rest.
-When the window is too narrow for both, only the cards show. `o` or
-`esc` closes the cockpit. So does going to another pane, since tmux ends
+When the window is too narrow for both, only the cards show. `o` closes the cockpit, and so does `esc`, once it has cleared any
+filter on the list. So does going to another pane, since tmux ends
 the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
 fills it without a zoom. While the cockpit is open the list stays in its window,

@@ -204,12 +204,14 @@ func TestStateMachine(t *testing.T) {
 				before := m
 				m = mouseAt(m, b, x, y, t0)
 
-				// The wheel over the list is up or down there, and over the
-				// digests it is three lines of scrolling.
+				// The wheel over the list is up or down there, over the
+				// cockpit's cards it is nothing, and over the digests it
+				// is three lines of scrolling.
 				ref := before
 				switch {
 				case before.confirm != "" || before.help, before.pick.open && before.screen == sessionsScreen,
-					before.screen == sessionsScreen && y > before.listHeight():
+					before.screen == sessionsScreen && y > before.listHeight(),
+					before.screen == sessionsScreen && before.cockpit.open && !before.inCockpitList(x):
 				case before.screen == digestScreen:
 					ref, _ = press(ref, "j", "j", "j")
 					if !down {

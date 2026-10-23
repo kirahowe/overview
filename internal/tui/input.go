@@ -219,12 +219,18 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 }
 
 // cockpitKeys translates the keys that mean something else while the
-// cockpit is open, nil for the others: o and esc close it, tab moves the
-// keyboard between the list and the issues card, and in that card the
-// arrows move its cursor and enter starts work on its issue.
+// cockpit is open, nil for the others: o closes it, and so does esc once
+// no filter is applied to the list, tab moves the keyboard between the
+// list and the issues card, and in that card the arrows move its cursor
+// and enter acts on its issue.
 func (m model) cockpitKeys(k string) []action {
 	switch k {
-	case "o", "esc":
+	case "esc":
+		if m.filter != "" {
+			return do(clearFilter)
+		}
+		return do(outCockpit)
+	case "o":
 		return do(outCockpit)
 	case "tab":
 		return do(cockpitTab)
@@ -279,10 +285,10 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 	switch {
 	case msg.Y > lh:
 		return nil // the footer
-	case step != 0:
-		return doN(move, step)
 	case m.cockpit.open && !m.inCockpitList(msg.X):
 		return nil // the cards
+	case step != 0:
+		return doN(move, step)
 	}
 	cur, _, _ := m.selected(m.ordered())
 	_, owners := m.listView(m.sections(), cur.key())

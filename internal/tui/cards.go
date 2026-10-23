@@ -448,7 +448,7 @@ func reviewCard(s review.Summary) card {
 		}
 		return []string{
 			spread(fg(pal.Text).Render(fmt.Sprintf("%d open", s.Open)), wait, w),
-			chips(hint{"v", "open"}, hint{"s", "send"}),
+			chips(hint{"v", "open"}),
 		}
 	}}
 }

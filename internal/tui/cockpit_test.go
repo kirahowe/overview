@@ -213,7 +213,7 @@ func TestAListingFromBeforeTheZoomDoesNotCloseTheCockpit(t *testing.T) {
 }
 
 func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
-	for _, k := range []string{"enter", "c", "t", "d"} {
+	for _, k := range []string{"enter", "c", "t", "d", "v"} {
 		f := newFakeMux()
 		m := stagedModel(t, f, row("s1", "red", "auth", 11))
 		m = pressSettled(t, m, "o")
@@ -221,6 +221,43 @@ func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
 		if m.cockpit.open || f.zoomed("%0") {
 			t.Errorf("%s: open %v zoomed %v", k, m.cockpit.open, f.zoomed("%0"))
 		}
+	}
+}
+
+// esc in the cockpit clears a filter applied to the list first, and
+// closes the cockpit on the next press.
+func TestEscClearsTheFilterBeforeClosingTheCockpit(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m = pressSettled(t, m, "o")
+	// A filter left applied to the list, as a search that matched
+	// nothing leaves it.
+	m.filter = "b"
+	m = pressSettled(t, m, "esc")
+	if m.filter != "" || !m.cockpit.open {
+		t.Fatalf("after esc: filter %q open %v", m.filter, m.cockpit.open)
+	}
+	m = pressSettled(t, m, "esc")
+	if m.cockpit.open {
+		t.Fatal("the second esc left the cockpit open")
+	}
+}
+
+// The wheel over the cards scrolls nothing and leaves the list's cursor
+// where it was; over the list it moves the cursor as ever.
+func TestTheWheelOverTheCardsDoesNothing(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m = update(m, tea.WindowSizeMsg{Width: 140, Height: 20})
+	m = pressSettled(t, m, "o")
+	sel := m.sel
+	wheel := func(x int) tea.MouseMsg {
+		return tea.MouseMsg{X: x, Y: 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}
+	}
+	if m = update(m, wheel(cockpitList+10)); m.sel != sel {
+		t.Fatalf("the wheel over the cards moved the cursor to %s", m.sel)
+	}
+	if m = update(m, wheel(5)); m.sel == sel {
+		t.Fatal("the wheel over the list did not move the cursor")
 	}
 }
 

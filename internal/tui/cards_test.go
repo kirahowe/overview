@@ -161,7 +161,7 @@ func TestReviewCard(t *testing.T) {
 	wantLines(t, "review", got, []string{
 		"┌─ Review ─────────────────────────────┐",
 		"│ 3 open                1 replies wait │",
-		"│  v  open   s  send                   │",
+		"│  v  open                             │",
 		"└──────────────────────────────────────┘",
 	})
 	if got := drawn(reviewCard(review.Summary{}), 40); !strings.Contains(got[1], "no notes") || len(got) != 3 {
