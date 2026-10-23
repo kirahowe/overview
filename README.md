@@ -25,7 +25,8 @@ Three sources feed the view. None of them needs a model.
   busy or idle.
 - A hook records what that listing cannot show, mainly that a session is
   blocked on a permission prompt. Each session has one small file in
-  `<home>/overview/sessions/`.
+  `<home>/overview/sessions/`, and a second, `<id>.tasks`, once it is
+  linked to an issue.
 - The session's transcript supplies its title and last prompt.
 
 A session that has not loaded the hook still appears. It shows busy or idle
@@ -85,10 +86,13 @@ progress, and its priority. A project's workstreams come before its other
 entries: those in review first, then those in progress, then the blocked
 ones, and by priority within each. The sessions and terminals of a
 workstream follow its row, indented, and a workstream with none says `no
-sessions`. A session works on an issue when its first prompt starts with
-`Work on <project>#<n>`, or when it or one of its subagents runs `issues
-start <n>`. One that has worked on several open issues is listed under
-each. When an issue is done or dropped, its workstream goes, and its
+sessions`. A session works on an issue when a prompt, the first or any
+later one, starts with `Work on <project>#<n>`, or when it or one of its
+subagents runs `issues start <n>`. The hook keeps these links in
+`<id>.tasks`, beside the session's record. One linked to several open
+issues, as an orchestrating session running several tasks may be, is
+listed under each, and its primary entry is under the one it was linked
+to last. When an issue is done or dropped, its workstream goes, and its
 sessions go back to the project. A workstream in review counts as needing
 you. overview reads a project's issues with the `issues` binary, and reads
 them again only when a file in `.issues` changes. The list never waits

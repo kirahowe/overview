@@ -2,7 +2,8 @@
 
 Written 2026-10-23. This is the design for grouping a project's sessions
 by the task they work on, and for a dashboard of one task, called the
-cockpit. Nothing here is built yet.
+cockpit. Phases 1 and 2 are built: the workstreams in the list, and the
+cockpit.
 
 ## What it is for
 
@@ -25,9 +26,10 @@ and the second for the cockpit, and keeps its own keys.
 ## Workstreams are issues
 
 A project that tracks its tasks with the `issues` tool already has the
-unit: an issue. A workstream is an issue that is in progress or in
-review, together with the sessions and terminals linked to it. Several
-sessions can work on one issue, or one session can.
+unit: an issue. A workstream is an open issue that is in progress, in
+review or blocked, or that has a session linked to it, together with the
+sessions and terminals linked to it. Several sessions can work on one
+issue, and one session can work on several.
 
 A project without `.issues/` has no workstreams. Its sessions and
 terminals sit under the project as they do today, and nothing about it
@@ -45,15 +47,22 @@ agent to do anything new:
 - An agent picks up an issue itself with `issues start 6`, as the issues
   skill already tells it to.
 
-The hook sees both. It reads the first prompt on `UserPromptSubmit` and
-every Bash command on `PostToolUse`, and when either has one of those
-two forms it records the reference in the session's file. That is
-string matching on input the hook already receives, with no subprocess,
-so it keeps to the hook rules. `issues start` can name its project with
-`-C`, `--dir` or `--project`, so the hook records what the command gave
-and the view resolves it to a project. A session that starts another
-issue later moves to that one. Mentioning an issue anywhere else, in a
-prompt or a command, links nothing.
+The hook sees both. It reads every prompt on `UserPromptSubmit` and
+every Bash command on `PostToolUse`. A prompt links its session when it
+starts with `Work on <project>#<n>`, whether it is the first prompt or a
+later one, and a command links it when it runs `issues start <n>`. The
+hook records the reference in `<id>.tasks`, beside the session's record,
+so the record itself is never rewritten for a link. That is string
+matching on input the hook already receives, with no subprocess, so it
+keeps to the hook rules. `issues start` can name its project with `-C`,
+`--dir` or `--project`, so the hook records what the command gave and
+the view resolves it to a project. Mentioning an issue anywhere else, in
+a prompt or a command, links nothing.
+
+A session linked to several open issues appears under each of them,
+since an orchestrating session can run several tasks at once. Its
+primary entry is under the issue it was linked to last, and the agents
+list names that issue beside it.
 
 A terminal opened with `t` on a workstream belongs to that workstream.
 Any other terminal belongs to its project, as now.
@@ -61,10 +70,10 @@ Any other terminal belongs to its project, as now.
 ### When a workstream ends
 
 A workstream ends when its issue is `done` or `dropped`. Its sessions
-that are still running go back under the project, unlinked. A
-workstream whose sessions have all exited stays in the list while its
-issue is open, with no sessions under it, so a paused task is still
-visible.
+that are still running go back under the project, unless another open
+issue they are linked to still holds them. A workstream whose sessions
+have all exited stays in the list while its issue is open, with no
+sessions under it, so a paused task is still visible.
 
 An issue in `review` puts its workstream in front of you: it sorts
 first in its project and counts as needing you.
@@ -88,14 +97,14 @@ are useful day to day, but it does not block building them.
 
 The list keeps its place on the left and is split in two.
 
-The top holds the projects in alphabetical order. Inside a project,
-its workstreams come first: those in review, then those in progress,
-and by priority within each. A workstream takes one line for its issue
-number, title and priority, and its sessions and terminals follow it,
-one line each. Sessions are marked by state and terminals with a `$`
-and no state. Then come the project's unlinked sessions and terminals,
-as today. A terminal outside any project goes under `~`. Pinned
-projects work as they do now.
+The top holds the projects in alphabetical order. Inside a project, its
+workstreams come first: those in review, then those in progress, then
+the blocked ones, and by priority within each. A workstream takes one
+line for its issue number, title and priority, and its sessions and
+terminals follow it, one line each. Sessions are marked by state and
+terminals with a `$` and no state. Then come the project's unlinked
+sessions and terminals, as today. A terminal outside any project goes
+under `~`. Pinned projects work as they do now.
 
 The bottom holds every session in every project, ordered by priority,
 after herdr's agent list. Sessions that need you come first, longest
@@ -140,8 +149,8 @@ For a workstream, in this order:
 - Review: the open notes across the workstream's sessions, the replies
   waiting on you, and when notes were last sent.
 - The project's other issues: those in review, those in progress with
-  their workstreams, the next ready ones, and the inbox count. `enter`
-  on a ready one starts a workstream for it.
+  their workstreams, the blocked ones, the next ready ones, and the
+  inbox count. `enter` on a ready one starts a workstream for it.
 
 For a project, the issues card is the cockpit, with the project's
 uncommitted changes under it. A project without `.issues/` gets a card
