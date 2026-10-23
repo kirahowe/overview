@@ -107,6 +107,24 @@ func children(es []entry, task string) []entry {
 	return out
 }
 
+// lead is the entry under a workstream that stands for it, of its
+// children cs: the first with a pane, as hasPane says, which the stage
+// shows beside the workstream and enter goes to, or else the first
+// session, which enter attaches to. ok is false when there is neither.
+func lead(cs []entry, hasPane func(entry) bool) (entry, bool) {
+	for _, c := range cs {
+		if hasPane(c) {
+			return c, true
+		}
+	}
+	for _, c := range cs {
+		if c.kind == sessionEntry {
+			return c, true
+		}
+	}
+	return entry{}, false
+}
+
 func sessionEntries(rows []fleet.Row) []entry {
 	out := make([]entry, len(rows))
 	for i, r := range rows {

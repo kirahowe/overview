@@ -1168,16 +1168,16 @@ func copied(text string, err error) tea.Msg {
 }
 
 // act does what enter means for an entry: it moves the focus beside the
-// list. A background session gets an attach pane first. One that runs
+// list. On a workstream it acts on the workstream's lead, the entry the
+// stage shows beside it. A background session gets an attach pane first. One that runs
 // inside another app brings that app forward, since that is where it is
 // used. A pinned project with nothing in it only says how to start one.
 func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
 	case workstreamEntry:
-		for _, c := range children(m.ordered(), e.task) {
-			if c.kind == sessionEntry {
-				return m.act(c)
-			}
+		es := m.ordered()
+		if c, ok := lead(children(es, e.task), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
+			return m.act(c)
 		}
 		return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one."), nil
 	case projectEntry:

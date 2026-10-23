@@ -452,8 +452,8 @@ func (m model) want() string {
 }
 
 // entryPane is the pane that shows an entry, "" when it has none: a
-// session's own pane, a terminal's first pane, or for a workstream the
-// pane of the first entry under it that has one.
+// session's own pane, a terminal's first pane, or for a workstream its
+// lead's.
 func (m model) entryPane(es []entry, e entry) string {
 	switch e.kind {
 	case sessionEntry:
@@ -463,10 +463,8 @@ func (m model) entryPane(es []entry, e entry) string {
 			return e.term.Pane
 		}
 	case workstreamEntry:
-		for _, c := range children(es, e.task) {
-			if id := m.entryPane(es, c); id != "" {
-				return id
-			}
+		if c, ok := lead(children(es, e.task), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
+			return m.entryPane(es, c)
 		}
 	}
 	return ""

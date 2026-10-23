@@ -411,3 +411,57 @@ func TestAnAliasActsAsItsSession(t *testing.T) {
 		t.Fatalf("selects %v", f.selects)
 	}
 }
+
+func TestLeadIsTheFirstWithAPaneElseTheFirstSession(t *testing.T) {
+	bg := entry{kind: sessionEntry, row: row("b", "bg", "", 0)}
+	s := entry{kind: sessionEntry, row: row("s", "s", "", 1)}
+	term := entry{kind: terminalEntry, term: terminal{Window: "@4", Pane: "%4"}}
+	has := func(ids ...string) func(entry) bool {
+		return func(e entry) bool { return slices.Contains(ids, e.key()) }
+	}
+	for _, c := range []struct {
+		name string
+		cs   []entry
+		has  func(entry) bool
+		want string
+	}{
+		{"a paneless first session", []entry{bg, s, term}, has("s", "@4"), "s"},
+		{"only a terminal has a pane", []entry{bg, s, term}, has("@4"), "@4"},
+		{"nothing has a pane", []entry{term, bg, s}, has(), "b"},
+		{"only a paneless terminal", []entry{term}, has(), ""},
+	} {
+		got, ok := lead(c.cs, c.has)
+		if (c.want == "") == ok || ok && got.key() != c.want {
+			t.Errorf("%s: %s %v, want %q", c.name, got.key(), ok, c.want)
+		}
+	}
+}
+
+// enter on a workstream goes where the stage shows: to the first session
+// under it with a pane, not to a background one listed above it.
+func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
+	f := newFakeMux()
+	s1, bg := row("s1", "red", "", 11), row("b1", "bgwork", "", 0)
+	bg.Kind, bg.ID, bg.State = "background", "abc123", fleet.Working
+	s1.Cwd, bg.Cwd = "/code/app", "/code/app"
+	s1.Tasks = []fleet.TaskRef{{Project: "app", ID: 6}}
+	bg.Tasks = s1.Tasks
+	m := stagedModel(t, f, s1, bg)
+	ts := trackers{"/code/app": tracked("app", issues.Issue{ID: 6, Ref: "app#6", Title: "w", Status: issues.InProgress})}
+	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys, trackers: ts})
+	m = settle(t, m, cmd)
+	if got := ids(m.sections())[:3]; !slices.Equal(got, []string{"task:/code/app#6", "b1", "s1"}) {
+		t.Fatalf("listed %v, want the background session first", got)
+	}
+	m = selectKey(t, m, "task:/code/app#6")
+	m, cmd = step(m, keyMsg("r"))
+	m = settle(t, m, cmd)
+	pane := paneWithTTY(f, "ttys011")
+	if !f.staged(pane) {
+		t.Fatalf("list in %s, want beside s1's %s", f.stage(), pane)
+	}
+	pressSettled(t, m, "enter")
+	if len(f.spawned) != 0 || !slices.Equal(f.selects, []string{pane}) {
+		t.Fatalf("spawned %+v selects %v, want s1's pane", f.spawned, f.selects)
+	}
+}

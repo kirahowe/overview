@@ -177,7 +177,9 @@ selected session, and `ctrl+[` brings it back to the list from any pane on
 the right. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
-workstream, `enter` does what it does on the workstream's first session.
+workstream, `enter` does what it does on the entry shown beside it: the
+first session or terminal under it with a pane, or else its first
+session.
 While you are searching, `enter` acts on the selected match and clears the
 search. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a
