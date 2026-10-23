@@ -728,7 +728,14 @@ func (m model) cockpitHints() []hint {
 		}
 		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, {"?", "help"}}
 	}
-	return []hint{{"o", "close"}, {"tab", "issues"}, {"enter", "type"}, {"c", "claude"}, {"t", "term"}, {"v", "review"}, {"?", "help"}}
+	// enter does what it does in the list, so it says the same.
+	enter := hint{"enter", "type"}
+	if e, _, ok := m.selected(m.ordered()); ok {
+		if hs := m.entryHints(e, ok); hs[0].key == "enter" {
+			enter = hs[0]
+		}
+	}
+	return []hint{{"o", "close"}, {"tab", "issues"}, enter, {"c", "claude"}, {"t", "term"}, {"v", "review"}, {"?", "help"}}
 }
 
 // hint is a key and what it does, as the footer shows it.

@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"overview/internal/fleet"
 	"overview/internal/issues"
 )
 
@@ -430,4 +431,14 @@ func resized(t *testing.T, m model, w, h int) model {
 	t.Helper()
 	m, cmd := step(m, tea.WindowSizeMsg{Width: w, Height: h})
 	return settle(t, m, cmd)
+}
+
+func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
+	m := newTestModel(t, bg)
+	m.cockpit.open = true
+	hs := m.cockpitHints()
+	if i := slices.IndexFunc(hs, func(h hint) bool { return h.key == "enter" }); i < 0 || hs[i].label != "attach" {
+		t.Fatalf("hints %v, want enter attach for a background session with no pane", hs)
+	}
 }
