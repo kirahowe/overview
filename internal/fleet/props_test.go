@@ -437,7 +437,9 @@ func TestPropParsersNeverPanic(t *testing.T) {
 // OpeningTask accepts exactly the form overview writes.
 func TestPropOpeningTaskRoundTrip(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		project := rapid.StringMatching(`[A-Za-z0-9][A-Za-z0-9._-]{0,10}`).Draw(t, "project")
+		project := rapid.StringMatching(`[^\s#]{1,12}`).Filter(func(p string) bool {
+			return !strings.ContainsFunc(p, unicode.IsSpace)
+		}).Draw(t, "project")
 		id := rapid.IntRange(1, 1_000_000).Draw(t, "id")
 		lead := rapid.StringMatching(`[ \t\n]{0,3}`).Draw(t, "lead")
 		tail := rapid.SampledFrom([]string{"", ": Title", " more", ".", "\nmore"}).Draw(t, "tail")

@@ -300,3 +300,10 @@ func (m model) projectID(root string) string {
 func opening(projectID string, i issues.Issue) string {
 	return fmt.Sprintf("Work on %s#%d: %s", projectID, i.ID, i.Title)
 }
+
+// opens says whether the hook reads prompt back as the opening of a
+// session on project id's issue i, so it links the session by itself.
+func opens(prompt, id string, i issues.Issue) bool {
+	r, ok := fleet.OpeningTask(prompt, "")
+	return ok && r.Project == id && r.ID == i.ID
+}

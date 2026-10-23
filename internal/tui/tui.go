@@ -1304,8 +1304,13 @@ func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	ref := "#" + strconv.Itoa(i.ID)
-	return m.say("starting a session on " + ref + "…").startPane(spawn{kind: spawnSession, name: "a session on " + ref,
-		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewCmdWith(opening(m.projectID(root), i)).Args})
+	prompt := opening(m.projectID(root), i)
+	note := "starting a session on " + ref + "…"
+	if !opens(prompt, m.projectID(root), i) {
+		note = "starting a session on " + ref + ", which won't link by itself: the project id has a space or a #"
+	}
+	return m.say(note).startPane(spawn{kind: spawnSession, name: "a session on " + ref,
+		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewCmdWith(prompt).Args})
 }
 
 // openTerminal starts tmux's default shell at dir, a project's root, in a

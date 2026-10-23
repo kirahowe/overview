@@ -171,21 +171,18 @@ func (h Home) linkTasks(ev HookEvent, fallbackCwd string, now time.Time) {
 }
 
 // OpeningTask reports the issue named by the opening line overview writes
-// when it starts a workstream, "Work on <project>#<n>". Any other mention of
-// an issue links nothing, so a prompt that merely talks about one is safe.
+// when it starts a workstream, "Work on <project>#<n>". The project id is
+// any run of characters other than spaces and #, so any id overview can
+// write without them reads back. Any other mention of an issue links
+// nothing, so a prompt that merely talks about one is safe.
 func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 	rest, ok := strings.CutPrefix(strings.TrimLeftFunc(prompt, unicode.IsSpace), "Work on ")
 	if !ok {
 		return TaskRef{}, false
 	}
-	end := 0
-	for i, c := range rest {
-		alnum := c < 128 && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9')
-		if alnum || i > 0 && (c == '.' || c == '_' || c == '-') {
-			end = i + 1
-			continue
-		}
-		break
+	end := strings.IndexFunc(rest, func(c rune) bool { return c == '#' || unicode.IsSpace(c) })
+	if end < 0 {
+		return TaskRef{}, false
 	}
 	project := rest[:end]
 	rest, ok = strings.CutPrefix(rest[end:], "#")

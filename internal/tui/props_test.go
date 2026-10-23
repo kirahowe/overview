@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1699,6 +1700,21 @@ func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 		})
 		if still && (!ok || now[at].kind != sessionEntry || now[at].row.SessionID != was.row.SessionID) {
 			t.Fatalf("on %s, moved to %s (%v), though %s is listed", sel, got, ok, was.row.SessionID)
+		}
+	})
+}
+
+// Every opening prompt overview writes for a project id without spaces or
+// a #, whatever the issue's title, is one the hook reads back as that
+// issue, so the session it starts links itself. An id with them is the
+// one case it cannot, and startOn says so.
+func TestPropOpeningRoundTrips(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		id := rapid.String().Draw(t, "id")
+		i := issues.Issue{ID: rapid.IntRange(1, 1_000_000).Draw(t, "n"), Title: rapid.String().Draw(t, "title")}
+		plain := id != "" && !strings.ContainsFunc(id, func(c rune) bool { return c == '#' || unicode.IsSpace(c) })
+		if got := opens(opening(id, i), id, i); got != plain {
+			t.Fatalf("opening(%q, #%d %q) reads back %v", id, i.ID, i.Title, got)
 		}
 	})
 }
