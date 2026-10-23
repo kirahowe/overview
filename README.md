@@ -93,7 +93,9 @@ sessions go back to the project. A workstream in review counts as needing
 you. overview reads a project's issues with the `issues` binary, and reads
 them again only when a file in `.issues` changes. The list never waits
 for a read, and a run that takes more than three seconds is stopped.
-Without the binary or a `.issues`, a project's sessions are listed as
+When the last read of a project's issues failed, its heading says
+`issues failed` where it would count the tasks, and its cockpit's issues
+card says why. Without the binary or a `.issues`, a project's sessions are listed as
 above.
 
 `o` opens the cockpit for the selected entry: for its workstream, if it
@@ -298,8 +300,10 @@ the config directory in the file. `--claude` and `claude =` pick the claude
 that overview runs, by default `claude` on your PATH, which overview looks
 up as it starts so the view and its panes run that one whatever PATH its
 tmux has. `--issues` and `issues =` pick the `issues` CLI the same way, by
-default `issues` on your PATH. It is optional: if overview finds no such
-binary, nothing is wrong and it works as before. `--orchestrator-dir` runs the orchestrator
+default `issues` on your PATH. It is optional: if there is no `issues` on
+your PATH, nothing is wrong and overview works as before. One you name
+with `--issues` or `issues =` that cannot be run stops overview as it
+starts. `--orchestrator-dir` runs the orchestrator
 somewhere other than the `orchestrator/` directory beside the `bin/` that
 holds overview.
 

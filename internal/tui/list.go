@@ -27,6 +27,7 @@ type section struct {
 	Away    bool
 	Agents  bool
 	Tracked bool // the project tracks its work with issues
+	Failed  bool // and the last read of its issues failed
 	Entries []entry
 }
 
@@ -211,8 +212,10 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, tk tasks, qu
 	// The workstreams, by key, before the query.
 	streams := map[string]entry{}
 	tracked := map[string]bool{} // project names
+	failed := map[string]bool{}  // project names
 	for root, list := range tk.open {
 		tracked[project(root)] = true
+		failed[project(root)] = failed[project(root)] || tk.failed[root]
 		for _, i := range list {
 			if issues.Open(i.Status) {
 				k := taskKey(root, i.ID)
@@ -336,7 +339,7 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, tk tasks, qu
 	var out []section
 	for _, p := range order {
 		if root, ok := placeholder[p]; ok {
-			out = append(out, section{Title: p, Tracked: tracked[p], Entries: []entry{{kind: projectEntry, project: root}}})
+			out = append(out, section{Title: p, Tracked: tracked[p], Failed: failed[p], Entries: []entry{{kind: projectEntry, project: root}}})
 			continue
 		}
 		var es []entry
@@ -368,7 +371,7 @@ func buildList(rows []fleet.Row, terms []terminal, pinned []string, tk tasks, qu
 		for _, t := range ts {
 			es = append(es, entry{kind: terminalEntry, term: t})
 		}
-		out = append(out, section{Title: p, Tracked: tracked[p], Entries: es})
+		out = append(out, section{Title: p, Tracked: tracked[p], Failed: failed[p], Entries: es})
 	}
 	if len(away) > 0 {
 		sortActive(away)

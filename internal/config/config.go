@@ -144,16 +144,20 @@ func (c Config) FindClaude(look func(string) (string, error)) Config {
 }
 
 // FindIssues gives c the full path of the issues binary, as look finds it.
-// Unlike claude, one that cannot be found is not an error: Issues becomes
-// "" and the feature is off.
-func (c Config) FindIssues(look func(string) (string, error)) Config {
+// Not finding the default, issues on PATH, is not an error: Issues becomes
+// "" and the feature is off. Not finding one the user named, by a flag or
+// in the config file, is.
+func (c Config) FindIssues(look func(string) (string, error)) (Config, error) {
 	p, err := look(c.Issues)
-	if err != nil {
+	switch {
+	case err != nil && c.Issues == DefaultIssues:
 		c.Issues = ""
-		return c
+		return c, nil
+	case err != nil:
+		return Config{}, fmt.Errorf("issues %q: %w", c.Issues, err)
 	}
 	c.Issues = absolute(p, c.User, c.Dir)
-	return c
+	return c, nil
 }
 
 // absolute makes v absolute when it is a path, one with a slash in it: a

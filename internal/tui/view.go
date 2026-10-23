@@ -293,11 +293,14 @@ func (m model) rule(title string, style lipgloss.Style, note string) string {
 }
 
 // sectionNote is what a section's rule says on the right: how many tasks
-// a tracked project has, how many entries an untracked one has, and for
-// the agents list its order.
+// a tracked project has, or that reading them failed, how many entries an
+// untracked one has, and for the agents list its order.
 func sectionNote(sec section) string {
-	if sec.Agents {
+	switch {
+	case sec.Agents:
 		return "priority"
+	case sec.Failed:
+		return "issues failed"
 	}
 	n, tasks := 0, 0
 	for _, e := range sec.Entries {

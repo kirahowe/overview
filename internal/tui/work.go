@@ -237,12 +237,13 @@ func resolveLinks(rows []fleet.Row, ts trackers, known map[string]bool, root fun
 }
 
 // tasks is what buildList knows of the projects' issues: the open ones of
-// each tracked project by root, its project id, and the workstreams each
-// session is linked to.
+// each tracked project by root, its project id, whether its last read
+// failed, and the workstreams each session is linked to.
 type tasks struct {
-	open  map[string][]issues.Issue
-	ids   map[string]string
-	links map[string][]string
+	open   map[string][]issues.Issue
+	ids    map[string]string
+	failed map[string]bool
+	links  map[string][]string
 }
 
 // tasksOf is tasks for the trackers of the known roots, and of the roots
@@ -252,10 +253,10 @@ func tasksOf(ts trackers, known []string, rows []fleet.Row, root func(string) st
 	for _, r := range known {
 		isKnown[r] = true
 	}
-	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, links: resolveLinks(rows, ts, isKnown, root)}
+	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, failed: map[string]bool{}, links: resolveLinks(rows, ts, isKnown, root)}
 	use := func(r string) {
 		if t, ok := ts[r]; ok {
-			tk.open[r], tk.ids[r] = t.issues, t.id
+			tk.open[r], tk.ids[r], tk.failed[r] = t.issues, t.id, t.err != nil
 		}
 	}
 	for _, r := range known {

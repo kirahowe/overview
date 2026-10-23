@@ -635,3 +635,20 @@ func TestTheCursorFollowsItsSessionWhenAnAliasGoes(t *testing.T) {
 		}
 	}
 }
+
+// A project whose last issues read failed says so on its rule, in place
+// of its task count.
+func TestARuleSaysTheIssuesFailed(t *testing.T) {
+	m := taskModel(t, newFakeMux())
+	m.w = 60
+	tr := m.trackers["/code/app"]
+	tr.err = errors.New("boom")
+	m.trackers = trackers{"/code/app": tr}
+	text := ansi.Strip(m.View())
+	if !strings.Contains(text, "issues failed") || strings.Contains(text, "2 tasks") {
+		t.Fatalf("rule:\n%s", text)
+	}
+	if secs := m.sections(); !secs[0].Failed || len(flatten(secs[:1])) != 4 {
+		t.Fatalf("sections %+v: want the failed project with its workstreams", secs)
+	}
+}

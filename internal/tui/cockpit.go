@@ -474,7 +474,7 @@ func (m model) cockpitRows(t target) [][]card {
 	_, tracked := m.trackers[t.root]
 	others, linked := m.others(t)
 	pick := max(0, min(m.cockpit.pick, len(pickable(others))-1))
-	issuesRow := []card{issuesCard(others, linked, m.cockpit.issues, pick)}
+	issuesRow := []card{issuesCard(others, linked, m.cockpit.issues, pick, m.trackers[t.root].err)}
 	if !tracked {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}

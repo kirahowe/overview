@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -1541,7 +1542,8 @@ func genCards(t *rapid.T) [][]card {
 		changesCard("Changes", text.Draw(t, "csince"), changeInfo{files: files, uncommitted: rapid.IntRange(-1, 9).Draw(t, "unc"),
 			noRepo: rapid.Bool().Draw(t, "norepo")}),
 		reviewCard(review.Summary{Open: rapid.IntRange(0, 9).Draw(t, "ropen"), Waiting: rapid.IntRange(0, 3).Draw(t, "rwait")}),
-		issuesCard(others, map[int]int{1: 2}, rapid.Bool().Draw(t, "focused"), rapid.IntRange(0, 8).Draw(t, "pick")),
+		issuesCard(others, map[int]int{1: 2}, rapid.Bool().Draw(t, "focused"), rapid.IntRange(0, 8).Draw(t, "pick"),
+			rapid.SampledFrom([]error{nil, errors.New("issues list: exit status 1: " + strings.Repeat("bad ", 30))}).Draw(t, "err")),
 		tasksCard(text.Draw(t, "troot"), rapid.Bool().Draw(t, "tool")),
 	}
 	var rows [][]card

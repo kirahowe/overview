@@ -132,8 +132,8 @@ func main() {
 		cfg = config.Config{Dir: *configDir, User: user, Values: flags}
 	} else if cfg, err = config.Load(*configDir, flags, user, cwd); err != nil {
 		fail(err)
-	} else {
-		cfg = cfg.FindClaude(exec.LookPath).FindIssues(exec.LookPath)
+	} else if cfg, err = cfg.FindClaude(exec.LookPath).FindIssues(exec.LookPath); err != nil {
+		fail(err)
 	}
 	if cmd == "themes" {
 		if err := themes(cfg, rest); err != nil {

@@ -180,7 +180,7 @@ func TestIssuesCard(t *testing.T) {
 		{ID: 13, Title: "another", Status: issues.Inbox},
 		{ID: 14, Title: "stuck", Status: issues.Blocked},
 	}
-	got := drawn(issuesCard(others, map[int]int{7: 2}, true, 2), 50)
+	got := drawn(issuesCard(others, map[int]int{7: 2}, true, 2, nil), 50)
 	wantLines(t, "issues", got, []string{
 		"┌─ Issues ────────────────────────────── 9 open ─┐",
 		"│   in review    #4 show cost                    │",
@@ -198,7 +198,7 @@ func TestIssuesCard(t *testing.T) {
 	if !slices.Equal(ids, []int{4, 7, 9, 5, 10}) {
 		t.Fatalf("pickable %v", ids)
 	}
-	if got := drawn(issuesCard(nil, nil, false, 0), 40); !strings.Contains(got[1], "no other open issues") {
+	if got := drawn(issuesCard(nil, nil, false, 0, nil), 40); !strings.Contains(got[1], "no other open issues") {
 		t.Fatalf("empty: %q", got)
 	}
 }
@@ -301,5 +301,23 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	}
 	if shows != 1 {
 		t.Fatalf("issues show ran %d times with .issues unchanged", shows)
+	}
+}
+
+// A failed read says why at the top of the card, on lines that fit, and
+// the card still lists what the last good read found.
+func TestIssuesCardSaysWhyTheReadFailed(t *testing.T) {
+	others := []issues.Issue{{ID: 4, Title: "show cost", Status: issues.Review}}
+	got := drawn(issuesCard(others, nil, false, 0, errors.New("issues --dir /w/app list --json: exit status 2:\nno such\tthing")), 40)
+	text := strings.Join(got, "\n")
+	for _, want := range []string{"issues failed: issues --dir", "exit status 2: no such thing", "#4 show cost"} {
+		if !strings.Contains(strings.Join(strings.Fields(strings.ReplaceAll(text, "│", " ")), " "), want) {
+			t.Errorf("card lacks %q:\n%s", want, text)
+		}
+	}
+	for _, l := range got {
+		if w := ansi.StringWidth(l); w != 40 {
+			t.Fatalf("line %q is %d wide", l, w)
+		}
 	}
 }
