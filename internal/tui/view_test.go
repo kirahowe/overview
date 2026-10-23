@@ -61,7 +61,8 @@ func workModel(t *testing.T, w, h int) model {
 		issues.Issue{ID: 9, Ref: "overview#9", Title: "not started", Status: issues.Ready, Priority: "p0"},
 	)}
 	m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
-	return update(m, rowsMsg{rows: rows, ttys: ttys, trackers: ts})
+	m.trackers = ts
+	return update(m, rowsMsg{rows: rows, ttys: ttys})
 }
 
 func screenText(m model) []string {

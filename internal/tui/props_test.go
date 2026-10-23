@@ -961,7 +961,8 @@ func TestPropViewFitsAnySize(t *testing.T) {
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys, ts := workRows(t)
-		m = update(m, rowsMsg{rows: rows, ttys: ttys, trackers: ts})
+		m.trackers = ts
+		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		for _, k := range rapid.SliceOfN(rapid.SampledFrom(keys), 0, 4).Draw(t, "keys") {
 			m = update(m, keyMsg(k))
 		}
@@ -1449,7 +1450,8 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(3, 40).Draw(t, "h")})
 		rows, ttys, ts := workRows(t)
-		m = update(m, rowsMsg{rows: rows, ttys: ttys, trackers: ts})
+		m.trackers = ts
+		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		es := m.ordered()
 		m, _ = press(m, "g")
 		var visited []string

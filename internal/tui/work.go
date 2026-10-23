@@ -2,11 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
@@ -51,26 +54,18 @@ func issueStamp(glob func(string) []string, modTime func(string) time.Time, root
 	return fmt.Sprintf("%d@%d", len(files), newest.UnixNano())
 }
 
-// readTrackers reads the trackers of roots, the projects that have a
-// .issues directory among them, starting from old. A tracker whose stamp
-// is unchanged is kept as it is, unless its last run failed more than
-// retryAfter ago. Only the others run the issues CLI. With no runner there
-// is nothing to read. It runs in a Cmd, and never changes old.
-func readTrackers(old trackers, roots []string, run issues.Runner, d deps, now time.Time) trackers {
-	out := trackers{}
-	if run == nil {
-		return out
+// readTracker reads the tracker of the project at root, given what the
+// last read found, old, if anything. ok is false when the project has no
+// .issues directory. A tracker whose stamp is unchanged is kept as it is,
+// unless its last run failed more than retryAfter ago. Only the others
+// run the issues CLI. It runs in a Cmd.
+func readTracker(old tracker, root string, run issues.Runner, d deps, now time.Time) (tracker, bool) {
+	if !issues.HasTracker(d.exists, root) {
+		return tracker{}, false
 	}
-	for _, root := range roots {
-		if _, done := out[root]; done || root == "" || !issues.HasTracker(d.exists, root) {
-			continue
-		}
-		stamp := issueStamp(d.glob, d.modTime, root)
-		t, ok := old[root]
-		if ok && t.stamp == stamp && (t.err == nil || now.Sub(t.ran) < retryAfter) {
-			out[root] = t
-			continue
-		}
+	stamp := issueStamp(d.glob, d.modTime, root)
+	t := old
+	if t.ran.IsZero() || t.stamp != stamp || t.err != nil && now.Sub(t.ran) >= retryAfter {
 		t.stamp, t.ran = stamp, now
 		list, err := issues.List(run, root)
 		if t.err = err; err == nil {
@@ -80,9 +75,62 @@ func readTrackers(old trackers, roots []string, run issues.Runner, d deps, now t
 		if t.id == "" {
 			t.id = fallbackID(d.readFile, root)
 		}
-		out[root] = t
 	}
-	return out
+	return t, true
+}
+
+// trackerMsg is what readTracker found at root.
+type trackerMsg struct {
+	root string
+	t    tracker
+	ok   bool
+}
+
+// readTrackers asks for the trackers of the projects in the list, and
+// drops those of projects that have left it. A read is asked for a root
+// only when none is out for it, so however long the issues CLI takes,
+// at most one runs per project, and the rows refresh never waits on one.
+// Without a runner there is nothing to read.
+func (m model) readTrackers() (model, tea.Cmd) {
+	if m.issues == nil {
+		return m, nil
+	}
+	roots := trackerRoots(m.knownRoots(), m.rows, m.root)
+	kept := trackers{}
+	for _, r := range roots {
+		if t, ok := m.trackers[r]; ok {
+			kept[r] = t
+		}
+	}
+	m.trackers = kept
+	var cmds []tea.Cmd
+	for _, root := range roots {
+		if root == "" || m.reading[root] {
+			continue
+		}
+		m.reading = withRead(m.reading, root, true)
+		old, run, d, now := m.trackers[root], m.issues, m.deps, m.deps.now()
+		cmds = append(cmds, func() tea.Msg {
+			t, ok := readTracker(old, root, run, d, now)
+			return trackerMsg{root, t, ok}
+		})
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// landTracker takes a read readTrackers asked for.
+func (m model) landTracker(msg trackerMsg) model {
+	reading := maps.Clone(m.reading)
+	delete(reading, msg.root)
+	m.reading = reading
+	if msg.ok {
+		m.trackers = withRead(m.trackers, msg.root, msg.t)
+	} else if _, had := m.trackers[msg.root]; had {
+		ts := maps.Clone(m.trackers)
+		delete(ts, msg.root)
+		m.trackers = ts
+	}
+	return m
 }
 
 // listedID is the project id the issues list gives, "" when it has no

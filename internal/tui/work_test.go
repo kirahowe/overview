@@ -6,9 +6,11 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/fleet"
@@ -78,6 +80,21 @@ func (f *fakeIssues) deps() deps {
 	return d
 }
 
+// readAll is readTracker for each of roots, as the reads readTrackers
+// asks for find them.
+func readAll(old trackers, roots []string, run issues.Runner, d deps, now time.Time) trackers {
+	out := trackers{}
+	if run == nil {
+		return out
+	}
+	for _, r := range roots {
+		if t, ok := readTracker(old[r], r, run, d, now); ok {
+			out[r] = t
+		}
+	}
+	return out
+}
+
 func TestReadTrackersRunsOnlyWhenIssuesChange(t *testing.T) {
 	f := newFakeIssues()
 	f.project("/w/app", "app", "6 in-progress Rework", "7 done Old")
@@ -85,7 +102,7 @@ func TestReadTrackersRunsOnlyWhenIssuesChange(t *testing.T) {
 	roots := []string{"/w/app", "/w/lib", "/w/plain"}
 	d := f.deps()
 
-	ts := readTrackers(nil, roots, f.run, d, t0)
+	ts := readAll(nil, roots, f.run, d, t0)
 	if len(ts) != 2 || f.runs["/w/app"] != 1 || f.runs["/w/lib"] != 1 || f.runs["/w/plain"] != 0 {
 		t.Fatalf("first read: %v runs %v", ts, f.runs)
 	}
@@ -96,7 +113,7 @@ func TestReadTrackersRunsOnlyWhenIssuesChange(t *testing.T) {
 		t.Fatalf("lib without project.edn has id %q, want its root's name", lib.id)
 	}
 
-	again := readTrackers(ts, roots, f.run, d, t0.Add(time.Minute))
+	again := readAll(ts, roots, f.run, d, t0.Add(time.Minute))
 	if f.runs["/w/app"] != 1 || f.runs["/w/lib"] != 1 {
 		t.Fatalf("unchanged .issues ran again: %v", f.runs)
 	}
@@ -106,7 +123,7 @@ func TestReadTrackersRunsOnlyWhenIssuesChange(t *testing.T) {
 
 	f.project("/w/app", "app", "6 review Rework")
 	f.mtime["/w/app"] = t0.Add(2 * time.Second)
-	changed := readTrackers(again, roots, f.run, d, t0.Add(2*time.Minute))
+	changed := readAll(again, roots, f.run, d, t0.Add(2*time.Minute))
 	if f.runs["/w/app"] != 2 || f.runs["/w/lib"] != 1 {
 		t.Fatalf("a changed .issues did not run once: %v", f.runs)
 	}
@@ -122,21 +139,21 @@ func TestReadTrackersKeepsTheListWhenARunFails(t *testing.T) {
 	f := newFakeIssues()
 	f.project("/w/app", "app", "6 in-progress Rework")
 	d := f.deps()
-	ts := readTrackers(nil, []string{"/w/app"}, f.run, d, t0)
+	ts := readAll(nil, []string{"/w/app"}, f.run, d, t0)
 
 	f.fail["/w/app"] = true
 	f.mtime["/w/app"] = t0.Add(time.Second)
-	failed := readTrackers(ts, []string{"/w/app"}, f.run, d, t0.Add(time.Minute))
+	failed := readAll(ts, []string{"/w/app"}, f.run, d, t0.Add(time.Minute))
 	if app := failed["/w/app"]; app.err == nil || len(app.issues) != 1 || f.runs["/w/app"] != 2 {
 		t.Fatalf("after a failed run: %+v, runs %d", app, f.runs["/w/app"])
 	}
 	// Soon after, nothing changed: no new run.
-	readTrackers(failed, []string{"/w/app"}, f.run, d, t0.Add(time.Minute+5*time.Second))
+	readAll(failed, []string{"/w/app"}, f.run, d, t0.Add(time.Minute+5*time.Second))
 	if f.runs["/w/app"] != 2 {
 		t.Fatalf("retried within %v: %d runs", retryAfter, f.runs["/w/app"])
 	}
 	f.fail["/w/app"] = false
-	ok := readTrackers(failed, []string{"/w/app"}, f.run, d, t0.Add(time.Minute+retryAfter+time.Second))
+	ok := readAll(failed, []string{"/w/app"}, f.run, d, t0.Add(time.Minute+retryAfter+time.Second))
 	if app := ok["/w/app"]; app.err != nil || f.runs["/w/app"] != 3 {
 		t.Fatalf("no retry after %v: %+v, runs %d", retryAfter, app, f.runs["/w/app"])
 	}
@@ -145,13 +162,13 @@ func TestReadTrackersKeepsTheListWhenARunFails(t *testing.T) {
 func TestReadTrackersWithoutARunner(t *testing.T) {
 	f := newFakeIssues()
 	f.project("/w/app", "app", "6 in-progress Rework")
-	if ts := readTrackers(nil, []string{"/w/app"}, nil, f.deps(), t0); len(ts) != 0 {
+	if ts := readAll(nil, []string{"/w/app"}, nil, f.deps(), t0); len(ts) != 0 {
 		t.Fatalf("no runner, yet %v", ts)
 	}
 }
 
-// The refresh reads the trackers of the sessions' projects and of their
-// task refs' directories, and travels back with them.
+// After a refresh the model reads the trackers of the sessions' projects
+// and of their task refs' directories.
 func TestRefreshReadsTrackers(t *testing.T) {
 	f := newFakeIssues()
 	f.project("/w/app", "app", "6 in-progress Rework")
@@ -165,18 +182,100 @@ func TestRefreshReadsTrackers(t *testing.T) {
 	r := row("s1", "red", "", 11)
 	r.Cwd = "/w/app/sub"
 	r.Tasks = []fleet.TaskRef{{Dir: "/w/app-wt", ID: 6}}
-	msg := m.rowsMsg([]fleet.Row{r}, nil, nil, nil)
-	if _, ok := msg.trackers["/w/app"]; !ok || f.runs["/w/app"] != 1 || f.runs["/w/app-wt"] != 1 {
-		t.Fatalf("trackers %v runs %v", msg.trackers, f.runs)
+	m, cmd := step(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
+	m = settle(t, m, cmd)
+	if _, ok := m.trackers["/w/app"]; !ok || f.runs["/w/app"] != 1 || f.runs["/w/app-wt"] != 1 {
+		t.Fatalf("trackers %v runs %v", m.trackers, f.runs)
 	}
-	m = update(m, msg)
 	if got := m.tasks().links["s1"]; !slices.Equal(got, []string{"/w/app#6"}) {
 		t.Fatalf("links %v, want the worktree's ref on the project", got)
 	}
-	m.issues = f.run
-	update(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
+	m, cmd = step(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
+	m = settle(t, m, cmd)
 	if f.runs["/w/app"] != 1 {
 		t.Fatalf("a second refresh ran issues again: %v", f.runs)
+	}
+	// A project that leaves the list takes its tracker with it.
+	r.Cwd, r.Tasks = "/w/other", nil
+	m, cmd = step(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
+	m = settle(t, m, cmd)
+	if len(m.trackers) != 0 {
+		t.Fatalf("trackers %v after the projects left", m.trackers)
+	}
+}
+
+// An issues CLI that hangs holds up nothing: the rows refresh as before,
+// and no second run starts for a project while one is out for it.
+func TestAHangingIssuesRunBlocksNothing(t *testing.T) {
+	f := newFakeIssues()
+	f.project("/w/app", "app", "6 in-progress Rework")
+	started, release := make(chan struct{}, 4), make(chan struct{})
+	var calls atomic.Int32
+	m := newTestModel(t)
+	m.deps = f.deps()
+	m.issues = func(args ...string) ([]byte, error) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return f.run(args...)
+	}
+	r := row("s1", "red", "", 11)
+	r.Cwd = "/w/app"
+	msgs := make(chan tea.Msg, 8)
+	run := func(cmd tea.Cmd) <-chan struct{} {
+		done := make(chan struct{})
+		go func() { runAll(cmd, msgs); close(done) }()
+		return done
+	}
+	m, cmd := step(m, rowsMsg{rows: []fleet.Row{r}})
+	run(cmd)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("issues never ran")
+	}
+	r2 := row("s2", "blue", "", 12)
+	r2.Cwd = "/w/app"
+	m, cmd = step(m, rowsMsg{rows: []fleet.Row{r, r2}})
+	if len(m.rows) != 2 {
+		t.Fatalf("rows %d: the refresh waited on issues", len(m.rows))
+	}
+	select {
+	case <-run(cmd):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second refresh's commands waited on issues")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("%d issues runs for one project at once", n)
+	}
+	close(release)
+	m = update(m, <-msgs)
+	if _, ok := m.trackers["/w/app"]; !ok || len(m.reading) != 0 {
+		t.Fatalf("trackers %v reading %v after the run", m.trackers, m.reading)
+	}
+	// With nothing out, the next refresh may read again.
+	f.mtime["/w/app"] = t0.Add(time.Second)
+	m, cmd = step(m, rowsMsg{rows: []fleet.Row{r, r2}})
+	<-run(cmd)
+	if n := calls.Load(); n != 2 || !m.reading["/w/app"] {
+		t.Fatalf("%d runs, reading %v", n, m.reading)
+	}
+}
+
+// runAll runs cmd and the commands it batches, and sends what they say to
+// out.
+func runAll(cmd tea.Cmd, out chan<- tea.Msg) {
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case nil:
+	case tea.BatchMsg:
+		for _, c := range msg {
+			runAll(c, out)
+		}
+	default:
+		out <- msg
 	}
 }
 
@@ -231,7 +330,7 @@ func TestResolveTask(t *testing.T) {
 	// A project without project.edn has its root's name for an id.
 	f := newFakeIssues()
 	f.project("/w/tool", "", "3 in-progress t")
-	got := readTrackers(nil, []string{"/w/tool"}, f.run, f.deps(), t0)
+	got := readAll(nil, []string{"/w/tool"}, f.run, f.deps(), t0)
 	if k := resolveTask(fleet.TaskRef{Project: "tool", ID: 3}, "/w/tool", got, map[string]bool{"/w/tool": true}, root); k != "/w/tool#3" {
 		t.Errorf("missing project.edn: %q", k)
 	}
@@ -261,7 +360,8 @@ func taskModel(t *testing.T, f *fakeMux) model {
 		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
 		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"},
 	)}
-	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys, trackers: ts})
+	m.trackers = ts
+	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys})
 	return settle(t, m, cmd)
 }
 
@@ -448,7 +548,8 @@ func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
 	bg.Tasks = s1.Tasks
 	m := stagedModel(t, f, s1, bg)
 	ts := trackers{"/code/app": tracked("app", issues.Issue{ID: 6, Ref: "app#6", Title: "w", Status: issues.InProgress})}
-	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys, trackers: ts})
+	m.trackers = ts
+	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys})
 	m = settle(t, m, cmd)
 	if got := ids(m.sections())[:3]; !slices.Equal(got, []string{"task:/code/app#6", "b1", "s1"}) {
 		t.Fatalf("listed %v, want the background session first", got)
@@ -476,7 +577,7 @@ func TestTheListNamesTheProject(t *testing.T) {
 	f.project("/w/empty", "edn-id")
 	f.project("/w/bare", "")
 	d := f.deps()
-	ts := readTrackers(nil, []string{"/w/app", "/w/empty", "/w/bare"}, f.run, d, t0)
+	ts := readAll(nil, []string{"/w/app", "/w/empty", "/w/bare"}, f.run, d, t0)
 	for root, want := range map[string]string{"/w/app": "listed", "/w/empty": "edn-id", "/w/bare": "bare"} {
 		if got := ts[root].id; got != want {
 			t.Errorf("%s: id %q, want %q", root, got, want)
@@ -484,7 +585,7 @@ func TestTheListNamesTheProject(t *testing.T) {
 	}
 	f.fail["/w/app"] = true
 	f.mtime["/w/app"] = t0.Add(time.Second)
-	if got := readTrackers(ts, []string{"/w/app"}, f.run, d, t0.Add(time.Minute))["/w/app"]; got.err == nil || got.id != "listed" {
+	if got := readAll(ts, []string{"/w/app"}, f.run, d, t0.Add(time.Minute))["/w/app"]; got.err == nil || got.id != "listed" {
 		t.Errorf("after a failed run: %+v", got)
 	}
 }
@@ -511,7 +612,8 @@ func TestTheCursorFollowsItsSessionWhenAnAliasGoes(t *testing.T) {
 		for _, id := range open {
 			is = append(is, issue(id, issues.InProgress, "t"))
 		}
-		m = update(m, rowsMsg{rows: []fleet.Row{r1, r2}, trackers: trackers{"/code/app": tracked("app", is...)}})
+		m.trackers = trackers{"/code/app": tracked("app", is...)}
+		m = update(m, rowsMsg{rows: []fleet.Row{r1, r2}})
 		return m.ordered()
 	}
 	for _, c := range []struct {

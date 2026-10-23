@@ -91,8 +91,10 @@ start <n>`. One that has worked on several open issues is listed under
 each. When an issue is done or dropped, its workstream goes, and its
 sessions go back to the project. A workstream in review counts as needing
 you. overview reads a project's issues with the `issues` binary, and reads
-them again only when a file in `.issues` changes. Without the binary or a
-`.issues`, a project's sessions are listed as above.
+them again only when a file in `.issues` changes. The list never waits
+for a read, and a run that takes more than three seconds is stopped.
+Without the binary or a `.issues`, a project's sessions are listed as
+above.
 
 `o` opens the cockpit for the selected entry: for its workstream, if it
 is one or sits under one, and otherwise for its project. The list's pane

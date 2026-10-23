@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"pgregory.net/rapid"
@@ -161,6 +162,21 @@ func TestExecReportsStderr(t *testing.T) {
 	os.WriteFile(script, []byte("#!"+sh+"\necho out\necho warn >&2\n"), 0o755)
 	if out, err := Exec(script)("x"); err != nil || string(out) != "out\n" {
 		t.Errorf("out %q, err %v", out, err)
+	}
+}
+
+// A run that hangs is killed once its time is up, children and all.
+func TestExecTimesOut(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	script := t.TempDir() + "/fake"
+	os.WriteFile(script, []byte("#!"+sh+"\nsleep 3 &\nsleep 3\n"), 0o755)
+	start := time.Now()
+	_, err = execWithin(script, 200*time.Millisecond)("x")
+	if took := time.Since(start); err == nil || !strings.Contains(err.Error(), "timed out") || took > 2*time.Second {
+		t.Fatalf("err %v after %v", err, took)
 	}
 }
 

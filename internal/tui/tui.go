@@ -58,9 +58,7 @@ type (
 		// written is when each row's transcript was last written, by path.
 		written map[string]time.Time
 		reviews map[string]review.Summary
-		// trackers are the issues of the projects that have them.
-		trackers trackers
-		err      error
+		err     error
 	}
 	digestMsg struct {
 		d   fleet.Digest
@@ -79,11 +77,12 @@ type model struct {
 	home fleet.Home
 	llm  string
 	// issues runs the issues CLI, nil when overview was started without one.
-	// trackers holds what it said of each project, as the latest refresh
-	// read it, and goes into every refresh so an unchanged project is not
-	// read again.
+	// trackers holds what it said of each project, as the latest read of
+	// each found it, and goes into every read so an unchanged project is
+	// not read again. reading holds the roots whose read is out.
 	issues   issues.Runner
 	trackers trackers
+	reading  map[string]bool
 
 	rows    []fleet.Row
 	ttys    map[int]string
@@ -369,8 +368,7 @@ func (m model) refresh() tea.Msg {
 
 // rowsMsg is a refresh of rows, with the roots of the directories it
 // names: the sessions', their task refs', the pinned projects' and the one
-// overview was started in. It reads the disk and runs the issues CLI, so
-// it runs in a Cmd.
+// overview was started in. It reads the disk, so it runs in a Cmd.
 func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host, pinned []string) rowsMsg {
 	dirs := append(slices.Clone(pinned), m.cwd)
 	for _, r := range rows {
@@ -386,11 +384,7 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host
 		}
 	}
 	rs := m.deps.roots(dirs...)
-	fresh := m
-	fresh.rows, fresh.pinned, fresh.rowRoots = rows, pinned, rs
-	known := trackerRoots(fresh.knownRoots(), rows, fresh.root)
-	ts := readTrackers(m.trackers, known, m.issues, m.deps, m.deps.now())
-	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), ts, nil}
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), nil}
 }
 
 // turnsKey names a transcript as it was when written at a moment.
@@ -834,12 +828,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.rows, m.ttys, m.hosts, m.rowRoots, m.written, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, msg.written, true
-		m.reviews, m.trackers = msg.reviews, msg.trackers
+		m.reviews = msg.reviews
 		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
 			m.pinned = msg.pinned
 		}
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.adopt()
+		return m.readTrackers()
+	case trackerMsg:
+		m = m.landTracker(msg)
 	case digestMsg:
 		m.digesting = false
 		switch {

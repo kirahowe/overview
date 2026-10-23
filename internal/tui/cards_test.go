@@ -249,7 +249,7 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	for i := range rows {
 		rows[i].StartedAt = started.UnixMilli()
 	}
-	m = update(m, rowsMsg{rows: rows, ttys: m.ttys, trackers: m.trackers})
+	m = update(m, rowsMsg{rows: rows, ttys: m.ttys})
 	shows := 0
 	m.issues = func(args ...string) ([]byte, error) {
 		shows++
@@ -294,7 +294,7 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 		t.Fatalf("read again with nothing changed: %v", asked[n:])
 	}
 	rows[0].State = fleet.Working
-	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys, trackers: m.trackers})
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
 	settle(t, m, cmd)
 	if len(asked) == n || slices.ContainsFunc(asked[n:], func(a []string) bool { return slices.Contains(a, "reflog") }) {
 		t.Fatalf("after a state change: %v", asked[n:])

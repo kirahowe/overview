@@ -5,6 +5,7 @@ package issues
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -47,14 +49,30 @@ type Issue struct {
 // Runner runs the issues binary with args and returns what it printed.
 type Runner func(args ...string) ([]byte, error)
 
-// Exec is the Runner that runs the issues binary at path. A failed run
-// returns an error that carries what the binary said on stderr.
-func Exec(path string) Runner {
+// Timeout is how long Exec lets one run of the binary take before it is
+// killed.
+const Timeout = 3 * time.Second
+
+// Exec is the Runner that runs the issues binary at path, for at most
+// Timeout. A failed run returns an error that carries what the binary
+// said on stderr.
+func Exec(path string) Runner { return execWithin(path, Timeout) }
+
+// execWithin is Exec with a timeout of its own.
+func execWithin(path string, timeout time.Duration) Runner {
 	return func(args ...string) ([]byte, error) {
-		cmd := exec.Command(path, args...)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, path, args...)
+		// A child the binary started may hold its output open after it is
+		// killed: stop waiting for it soon after.
+		cmd.WaitDelay = timeout / 10
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
 		if err := cmd.Run(); err != nil {
+			if ctx.Err() != nil {
+				err = fmt.Errorf("timed out after %v", timeout)
+			}
 			if msg := strings.TrimSpace(errb.String()); msg != "" {
 				return nil, fmt.Errorf("issues %s: %w: %s", strings.Join(args, " "), err, msg)
 			}
