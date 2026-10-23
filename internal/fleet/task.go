@@ -217,8 +217,11 @@ func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 // `cd` the hook cannot follow (home, `-`, a variable), a `popd`, and a
 // group or subshell, whose `cd` may or may not last past it, leave the
 // directory unknown, and a start after one links only when it names an
-// absolute directory itself. A false link is worse than a missed one, so
-// anything unclear links nothing.
+// absolute directory itself. So does a `cd` behind a keyword or wrapper
+// (`if`, `then`, `do`, `command`, `builtin`), a loop, `eval`, `source`,
+// `exec` and any command with `cd` among its words. `then`, `do`, `else`
+// and `command` before `issues` do not hide the invocation. A false link
+// is worse than a missed one, so anything unclear links nothing.
 func IssuesStarts(command, cwd string) []TaskRef {
 	var out []TaskRef
 	known := true
@@ -233,9 +236,17 @@ func IssuesStarts(command, cwd string) []TaskRef {
 		if len(argv) == 0 {
 			continue
 		}
+		argv, wrapped, ok := unwrapCommand(argv)
+		if !ok {
+			known = false
+			continue
+		}
+		if len(argv) == 0 {
+			continue
+		}
 		switch argv[0] {
 		case "cd", "pushd":
-			if len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") && !strings.HasPrefix(argv[1], "+") {
+			if !wrapped && len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") && !strings.HasPrefix(argv[1], "+") {
 				cwd, known = resolveDir(cwd, argv[1])
 			} else {
 				known = false
@@ -245,12 +256,44 @@ func IssuesStarts(command, cwd string) []TaskRef {
 			known = false
 			continue
 		}
+		if !isIssues(argv[0]) && slices.ContainsFunc(argv, func(w string) bool {
+			return w == "cd" || w == "pushd" || w == "popd"
+		}) {
+			known = false
+			continue
+		}
 		if ref, ok := parseStart(argv, cwd, known); ok {
 			out = append(out, ref)
 		}
 	}
 	return out
 }
+
+// unwrapCommand strips the control keywords and wrappers off the front of
+// a simple command. wrapped says one was there, so a `cd` that follows may
+// not run, or not last. It reports false when the command may change the
+// directory in a way the hook cannot follow: a loop, case or function
+// head, eval, source, or a wrapper in front of anything but `issues`.
+func unwrapCommand(argv []string) (rest []string, wrapped, ok bool) {
+	for len(argv) > 0 {
+		switch argv[0] {
+		case "if", "then", "else", "elif", "do", "!":
+			argv, wrapped = argv[1:], true
+			continue
+		case "command", "builtin", "exec":
+			if len(argv) > 1 && isIssues(argv[1]) {
+				return argv[1:], true, true
+			}
+			return nil, true, false
+		case "for", "while", "until", "case", "select", "function", "eval", "source", ".":
+			return nil, true, false
+		}
+		break
+	}
+	return argv, wrapped, true
+}
+
+func isIssues(w string) bool { return w == "issues" || strings.HasSuffix(w, "/issues") }
 
 // opensGroup says whether a command's first word starts or ends a
 // subshell or a brace group, as in `(cd x; ...)` or `{ cd x; ...; }`.
@@ -310,7 +353,7 @@ func flagValue(w string) (takes bool, inline string, hasInline bool) {
 }
 
 func parseStart(argv []string, cwd string, cwdKnown bool) (TaskRef, bool) {
-	if argv[0] != "issues" && !strings.HasSuffix(argv[0], "/issues") {
+	if !isIssues(argv[0]) {
 		return TaskRef{}, false
 	}
 	for _, a := range argv[1:] {

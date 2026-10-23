@@ -367,7 +367,7 @@ func TestPropIssuesStartsRoundTrip(t *testing.T) {
 			words = append(words, flag, quote(t, dir))
 		}
 		words = append(words, "start", strconv.Itoa(id))
-		prefix := rapid.SampledFrom([]string{"", "FOO=1 ", "A='x y' B=2 ", "echo hi && ", "true;\n", "x | "}).Draw(t, "prefix")
+		prefix := rapid.SampledFrom([]string{"", "FOO=1 ", "A='x y' B=2 ", "echo hi && ", "true;\n", "x | ", "if true; then ", "true; do ", "false; else ", "command ", "builtin ", "exec "}).Draw(t, "prefix")
 		suffix := rapid.SampledFrom([]string{"", " && echo done", " | cat", " &", "\necho x"}).Draw(t, "suffix")
 
 		// Something before the start can move the directory or make it
@@ -392,7 +392,7 @@ func TestPropIssuesStartsRoundTrip(t *testing.T) {
 				want.Dir = to
 			}
 		case "unknown":
-			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~/x && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; "}).Draw(t, "group") + prefix
+			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~/x && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; ", "if true; then cd /q; fi; ", "for d in /q; do cd $d; done; ", "command cd /q && ", "builtin cd /q && ", "while true; do break; done; "}).Draw(t, "group") + prefix
 			lost = !dirAbs
 		case "comment":
 			// The comment runs to the end of its line only.
