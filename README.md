@@ -94,6 +94,45 @@ you. overview reads a project's issues with the `issues` binary, and reads
 them again only when a file in `.issues` changes. Without the binary or a
 `.issues`, a project's sessions are listed as above.
 
+`o` opens the cockpit for the selected entry: for its workstream, if it
+is one or sits under one, and otherwise for its project. The list's pane
+zooms to fill its window, so the session beside it keeps running out of
+sight and comes back as it was. The list stays down the left at its
+usual width, and cards about the workstream or project take the rest.
+When the window is too narrow for both, only the cards show. `o` or
+`esc` closes the cockpit. So does going to another pane, since tmux ends
+the zoom then. While the cockpit is open the list stays in its window,
+and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
+first, then do what they always do.
+
+A workstream's cockpit starts with a header: the issue's reference,
+title, status and priority, how long ago its first session started, and
+its sessions and terminals. Then come the issue's details from `issues
+show`, with its acceptance criteria and how many are done. The changes
+and the review sit side by side in a wide window. The changes are the
+files changed since the first session started, most changed first, and
+how many of them are still uncommitted. The review counts the open notes
+across the workstream's sessions and the replies waiting on you. Last
+are the project's other open issues: those in review, those in progress,
+the next three ready ones by priority, and how many sit in the inbox. A
+project's cockpit shows its root and the kind of repository, its
+sessions and terminals, its issues, and its uncommitted changes. A card
+the window has no room for is left out, from the bottom up.
+
+`tab` moves the keyboard into the issues card and back. There, `j` and
+`k` move between the issues, and `enter` starts a session on the
+selected one, with the first prompt `Work on <project>#<n>: <title>`, as
+`c` does on a workstream. The cockpit closes, and the new session shows
+beside the list with the keyboard in it.
+
+A project that does not track its tasks gets a card in the issues
+card's place. It says what the `issues` tool would add, and that
+`issues init` in the project's root starts it, or that the tool needs
+installing when overview has none. overview reads the changes with git
+or jj when the cockpit opens, every five seconds while it is open, and
+when one of its sessions changes state. It reads an issue's details
+again only when a file in `.issues` changes.
+
 A terminal is a window in overview's tmux that runs no Claude session: a
 shell for a one-off command, or a dev server. `t` opens one at the root of
 the selected entry's project. Its row is named after what runs in it, such
@@ -152,7 +191,8 @@ it. On a workstream, or on anything under one, the new session's first
 prompt is `Work on <project>#<n>: <title>`, so it works on that issue. `t`
 does the same with a terminal, and a terminal opened on a workstream is
 listed under it. `d` shows the digests, where `[` and `]` step through
-older ones and `D` writes a new one. `q` detaches, leaving the view and its
+older ones and `D` writes a new one. `o` opens the cockpit, as described
+above. `q` detaches, leaving the view and its
 sessions running, and `Q` quits the view. `?` lists every key.
 
 `a` adds a project to the list. A picker takes the list's place and offers

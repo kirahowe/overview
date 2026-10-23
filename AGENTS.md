@@ -27,7 +27,8 @@ See README.md for behaviour and docs/ for design notes.
   session's prompt, the agent's reply and `x` resolving it; and a
   workstream, from a project's issue in progress through `c` starting a
   session with the prompt that names it and `t` listing a terminal under
-  it. It builds only
+  it; and `o` zooming the list into the cockpit and `esc` putting it
+  back. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.
 - Never point a test or a trial run at the `overview` socket, not even to

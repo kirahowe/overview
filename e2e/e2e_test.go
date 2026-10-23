@@ -720,3 +720,41 @@ func TestWorkstreams(t *testing.T) {
 		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
 	})
 }
+
+// The cockpit, end to end: o zooms the list's pane to fill its window and
+// draws the cards beside the list, and esc ends the zoom, leaving the list
+// beside the session as it was.
+func TestCockpit(t *testing.T) {
+	r := launch(t, "o")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the list beside the session", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, 0)
+		return ok && strings.Contains(r.screen(), "e2e-0"), say
+	})
+	width := listPane(r.ov.panes()).w
+	zoomed := func() string {
+		return r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag} #{pane_width} #{window_width}")
+	}
+
+	r.press("o")
+	waitFor(t, "the cockpit, zoomed", func() (bool, string) {
+		z, s := zoomed(), r.screen()
+		f := strings.Fields(z)
+		return len(f) == 3 && f[0] == "1" && f[1] == f[2] && strings.Contains(s, "Uncommitted") && strings.Contains(s, "no issues"), z + "\n" + s
+	})
+	if w := r.windowOf(session.id); w != r.windowOf(r.list.id) {
+		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
+	}
+
+	r.press("Escape")
+	waitFor(t, "the list beside the session again", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, width)
+		f := strings.Fields(zoomed())
+		return ok && len(f) == 3 && f[0] == "0" && !strings.Contains(r.screen(), "Uncommitted"), zoomed() + " " + say
+	})
+}
