@@ -67,9 +67,12 @@ func (m model) View() string {
 		return ""
 	}
 	var body []string
-	if m.screen == digestScreen {
+	switch {
+	case m.screen == digestScreen:
 		body = m.digestView()
-	} else {
+	case m.cockpit.open && !m.pick.open:
+		body = m.cockpitBody()
+	default:
 		body = m.sessionsView()
 	}
 	for len(body) < m.listHeight() {

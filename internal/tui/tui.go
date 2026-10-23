@@ -165,6 +165,11 @@ type model struct {
 	// pick is the add-project picker, open while it takes the list pane.
 	pick picker
 
+	// cockpit is the cockpit, as cockpit.go describes. zooming is set while
+	// a Cmd that zooms the list or puts it back is out.
+	cockpit cockpit
+	zooming bool
+
 	// reviews sums up each session's review, by session ID, as the latest
 	// refresh read them. reviewArgs are the flags every review is started
 	// with.
@@ -714,7 +719,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.unblur()
 	case tea.BlurMsg:
 		m.blurred = true
-	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg:
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		// Input that reaches the list proves the user is there, whether or
@@ -821,6 +826,11 @@ func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 // apply carries out one action. It is the only place input changes the
 // model, and it runs nothing itself: any work comes back as a Cmd.
 func (m model) apply(a action) (model, tea.Cmd) {
+	if m.cockpit.open && closesCockpit(a.do) {
+		m, out := m.closeCockpit()
+		m, cmd := m.apply(a)
+		return m, tea.Batch(out, cmd)
+	}
 	es := m.ordered()
 	e, i, ok := m.selected(es)
 	row, isSession := e.session()
@@ -1007,6 +1017,16 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
 	case pickCancel:
 		m.pick = picker{}
+	case toCockpit:
+		return m.openCockpit()
+	case outCockpit:
+		return m.closeCockpit()
+	case cockpitTab:
+		m.cockpit.issues = !m.cockpit.issues
+	case cockpitMove:
+		m.cockpit.pick += a.n
+	case cockpitPick:
+		return m, nil
 	case copyID:
 		if ok && e.kind == workstreamEntry {
 			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil

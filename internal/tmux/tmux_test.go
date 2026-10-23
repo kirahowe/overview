@@ -17,16 +17,16 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, List: true, Command: "overview",
-			View: `"--theme" "x"`, Path: "/w"},
+			View: `"--theme" "x"`, Zoomed: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80,
 			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", Path: "/w/app/odd\tdir"},
 	}
@@ -55,6 +55,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				View:    rapid.SampledFrom([]string{"", `"--theme" "a b"`}).Draw(t, "view"),
 				Review:  rapid.SampledFrom([]string{"", "5f2c-1d"}).Draw(t, "review"),
 				Task:    rapid.SampledFrom([]string{"", "/w/app#6", "/w/a b#12"}).Draw(t, "task"),
+				Zoomed:  rapid.Bool().Draw(t, "zoomed"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -66,8 +67,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				}
 				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, p.Path)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -640,5 +641,45 @@ func TestSplitCaptureAndPaste(t *testing.T) {
 			t.Fatalf("the paste never arrived whole:\n%s", out)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Zoom makes a pane fill its window, and the listing says so for every
+// pane of that window until a second Zoom puts the window back.
+func TestZoomShowsInTheListing(t *testing.T) {
+	s := testServer(t)
+	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoomed := func() map[string]bool {
+		panes, err := s.Panes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, p := range panes {
+			out[p.ID] = p.Zoomed
+		}
+		return out
+	}
+	if z := zoomed(); z[list.ID] || z[beside.ID] {
+		t.Fatalf("zoomed before Zoom: %v", z)
+	}
+	if err := s.Zoom(list.ID); err != nil {
+		t.Fatal(err)
+	}
+	if z := zoomed(); !z[list.ID] || !z[beside.ID] {
+		t.Fatalf("after Zoom: %v", z)
+	}
+	if err := s.Zoom(list.ID); err != nil {
+		t.Fatal(err)
+	}
+	if z := zoomed(); z[list.ID] || z[beside.ID] {
+		t.Fatalf("after a second Zoom: %v", z)
 	}
 }

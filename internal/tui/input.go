@@ -50,6 +50,11 @@ const (
 	pickEnter   // pin the selected match
 	pickCancel  // close the picker
 	openReview  // review the selected session's changes in a split above it
+	toCockpit   // open the cockpit for the selected entry
+	outCockpit  // close the cockpit
+	cockpitTab  // move the keyboard between the list and the cockpit's issues card
+	cockpitMove // n issues down the issues card, negative for up
+	cockpitPick // start a workstream on the issue under the issues card's cursor
 )
 
 type action struct {
@@ -171,6 +176,11 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return nil
 	}
 
+	if m.cockpit.open {
+		if as := m.cockpitKeys(k); as != nil {
+			return as
+		}
+	}
 	switch k {
 	case "j", "down":
 		return doN(move, 1)
@@ -202,6 +212,33 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(openReview)
 	case "a":
 		return do(addProject)
+	case "o":
+		return do(toCockpit)
+	}
+	return nil
+}
+
+// cockpitKeys translates the keys that mean something else while the
+// cockpit is open, nil for the others: o and esc close it, tab moves the
+// keyboard between the list and the issues card, and in that card the
+// arrows move its cursor and enter starts work on its issue.
+func (m model) cockpitKeys(k string) []action {
+	switch k {
+	case "o", "esc":
+		return do(outCockpit)
+	case "tab":
+		return do(cockpitTab)
+	}
+	if !m.cockpit.issues {
+		return nil
+	}
+	switch k {
+	case "j", "down":
+		return doN(cockpitMove, 1)
+	case "k", "up":
+		return doN(cockpitMove, -1)
+	case "enter":
+		return do(cockpitPick)
 	}
 	return nil
 }
@@ -244,6 +281,8 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		return nil // the footer
 	case step != 0:
 		return doN(move, step)
+	case m.cockpit.open && !m.inCockpitList(msg.X):
+		return nil // the cards
 	}
 	cur, _, _ := m.selected(m.ordered())
 	_, owners := m.listView(m.sections(), cur.key())

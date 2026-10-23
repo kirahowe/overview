@@ -56,6 +56,7 @@ type multiplexer interface {
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
+	Zoom(pane string) error
 }
 
 type spawnKind int
@@ -260,7 +261,9 @@ type widthMsg struct{ err error }
 // is taken for a drag.
 func (m model) keepWidth() (model, tea.Cmd) {
 	list, ok := m.pane(m.self)
-	if !ok || m.mux == nil || m.staging {
+	// A zoomed list is as wide as its window, which says nothing of the
+	// width it keeps, and tmux puts that back when the zoom ends.
+	if !ok || m.mux == nil || m.staging || m.zooming || m.cockpit.open || list.Zoomed {
 		return m, nil
 	}
 	n := 0
@@ -489,7 +492,9 @@ func (m model) setPanes(panes []tmux.Pane, rs roots) model {
 // text has changed.
 func (m model) restage() (model, tea.Cmd) {
 	want := m.want()
-	if m.mux == nil || m.staging || want == "" || want == m.failed {
+	// The cockpit holds the list in its window, zoomed, until it closes and
+	// the zoom has gone.
+	if m.mux == nil || m.staging || m.zooming || m.cockpit.open || want == "" || want == m.failed {
 		return m, nil
 	}
 	// With the keyboard outside the list, the list stays beside the pane
@@ -556,6 +561,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// A move that failed is tried again once tmux has been reread.
 		m = m.setPanes(msg.panes, msg.roots)
 		m.failed = ""
+		m = m.zoomLost()
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
 			return m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
@@ -622,6 +628,12 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
 		m.entering = msg.pane.ID
+	case zoomedMsg:
+		m.landed++
+		m.zooming = false
+		if msg.err != nil {
+			return m.say("could not zoom the list: " + msg.err.Error()), nil
+		}
 	case widthMsg:
 		m.landed++
 		if msg.err != nil {
