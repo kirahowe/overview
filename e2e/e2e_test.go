@@ -136,7 +136,11 @@ type rig struct {
 
 // launch builds overview and starts it on two private servers named after
 // tag, then waits for the view and its holder.
-func launch(t *testing.T, tag string) *rig {
+func launch(t *testing.T, tag string) *rig { t.Helper(); return launchWith(t, tag, nil) }
+
+// launchWith is launch with setup run before overview starts, to add to
+// the rig's directories and config file.
+func launchWith(t *testing.T, tag string, setup func(r *rig) string) *rig {
 	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
@@ -172,7 +176,11 @@ func launch(t *testing.T, tag string) *rig {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(r.config, "config"), []byte("theme = revdiff\nclaude = "+r.fake+"\n"), 0o644); err != nil {
+	extra := ""
+	if setup != nil {
+		extra = setup(r)
+	}
+	if err := os.WriteFile(filepath.Join(r.config, "config"), []byte("theme = revdiff\nclaude = "+r.fake+"\n"+extra), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -643,4 +651,72 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 	if l := listPane(r.ov.panes()); l.pid != r.list.pid {
 		t.Fatalf("the view went with the client: %+v", l)
 	}
+}
+
+// Workstreams, end to end: a project with .issues lists its issue in
+// progress before its session, with no session under it. c on it starts
+// claude with the opening prompt that names the issue, and t opens a
+// terminal that is listed under it.
+func TestWorkstreams(t *testing.T) {
+	r := launchWith(t, "w", func(r *rig) string {
+		for _, d := range []string{".jj", ".issues"} {
+			if err := os.MkdirAll(filepath.Join(r.work, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, text := range map[string]string{"project.edn": `{:id "work"}`, "6-keep-width.edn": `{:id 6}`} {
+			if err := os.WriteFile(filepath.Join(r.work, ".issues", name), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fake := filepath.Join(r.dir, "issues")
+		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "in-progress", "title": "keep width", "priority": "p1"}]}`
+		if err := os.WriteFile(fake, []byte("#!/bin/sh\necho '"+list+"'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return "issues = " + fake + "\n"
+	})
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the workstream above the session", func() (bool, string) {
+		s := r.screen()
+		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "no sessions"), strings.Index(s, "e2e-0")
+		return i >= 0 && j > i && k > j && strings.Contains(s, "1 task"), s
+	})
+
+	r.press("g")
+	waitFor(t, "the holder for the workstream", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
+	before = r.ov.panes()
+	r.press("c")
+	started := r.fresh(t, "a session on the task", before, isSleep)
+	if got := r.ov.must("display-message", "-p", "-t", started.id, "#{pane_start_command}"); !strings.Contains(got, "Work on work#6: keep width") {
+		t.Fatalf("the session started as %q", got)
+	}
+
+	// The fake claude has no hook, so the new session is listed unlinked.
+	r.lists(t, r.work, session, started)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the new session in the list", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "e2e-1"), s
+	})
+	r.press("g")
+	waitFor(t, "the holder again", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
+	before = r.ov.panes()
+	r.press("t")
+	shell := r.fresh(t, "a terminal for the task", before, isShell)
+	if got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-task"); got != r.work+"#6" {
+		t.Fatalf("the terminal's task is %q", got)
+	}
+	waitFor(t, "the terminal under the workstream", func() (bool, string) {
+		s := r.screen()
+		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ "), strings.Index(s, "e2e-0")
+		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
+	})
 }

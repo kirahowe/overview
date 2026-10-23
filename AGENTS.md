@@ -24,7 +24,10 @@ See README.md for behaviour and docs/ for design notes.
   a typed path and `tab`; the list staying put while a terminal becomes a
   session under the keyboard; and `q` detaching only the terminal it was
   typed in; and a review, from `v` through a note sent into a fake
-  session's prompt, the agent's reply and `x` resolving it. It builds only
+  session's prompt, the agent's reply and `x` resolving it; and a
+  workstream, from a project's issue in progress through `c` starting a
+  session with the prompt that names it and `t` listing a terminal under
+  it. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.
 - Never point a test or a trial run at the `overview` socket, not even to
