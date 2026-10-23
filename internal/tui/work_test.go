@@ -488,3 +488,48 @@ func TestTheListNamesTheProject(t *testing.T) {
 		t.Errorf("after a failed run: %+v", got)
 	}
 }
+
+// The cursor on an alias stays with its session when the alias goes: to
+// the session's entry under the same workstream, else its primary one. On
+// a workstream whose issue closed it goes to the first session that was
+// under it.
+func TestTheCursorFollowsItsSessionWhenAnAliasGoes(t *testing.T) {
+	s1, s2 := row("s1", "red", "", 11), row("s2", "blue", "", 12)
+	s1.Cwd, s2.Cwd = "/code/app", "/code/app"
+	ref := func(ids ...int) []fleet.TaskRef {
+		var out []fleet.TaskRef
+		for _, id := range ids {
+			out = append(out, fleet.TaskRef{Project: "app", ID: id})
+		}
+		return out
+	}
+	list := func(s1refs []int, open ...int) []entry {
+		r1, r2 := s1, s2
+		r1.Tasks, r2.Tasks = ref(s1refs...), ref(6)
+		m := newTestModel(t)
+		var is []issues.Issue
+		for _, id := range open {
+			is = append(is, issue(id, issues.InProgress, "t"))
+		}
+		m = update(m, rowsMsg{rows: []fleet.Row{r1, r2}, trackers: trackers{"/code/app": tracked("app", is...)}})
+		return m.ordered()
+	}
+	for _, c := range []struct {
+		name        string
+		before, now []entry
+		sel, want   string
+	}{
+		// s1 is under #6 and #7, primary on #7; #6 closes. The next entry
+		// in the old order was s2.
+		{"its primary issue stays", list([]int{6, 7}, 6, 7), list([]int{6, 7}, 7), "task:/code/app#6/s1", "s1"},
+		// #7 closes, and s1's place under #6 becomes its primary entry.
+		{"the same workstream", list([]int{6, 7}, 6, 7), list([]int{6, 7}, 6), "task:/code/app#6/s1", "s1"},
+		// s1 re-links: now primary on #6, alias on #7.
+		{"relinked", list([]int{6, 7}, 6, 7), list([]int{7, 6}, 6, 7), "task:/code/app#6/s1", "s1"},
+		{"the workstream closed", list([]int{7}, 6, 7), list([]int{7}, 6), "task:/code/app#7", "s1"},
+	} {
+		if got, ok := nearKey(c.before, c.now, c.sel); !ok || got != c.want {
+			t.Errorf("%s: %s %v, want %s", c.name, got, ok, c.want)
+		}
+	}
+}

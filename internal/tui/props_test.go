@@ -1613,3 +1613,53 @@ func TestPropCockpitFitsAnySize(t *testing.T) {
 		}
 	})
 }
+
+// When the entry under the cursor goes, the cursor stays with its
+// session while the session is listed: an issue that closes or links
+// that change move its entries, never the cursor to another session.
+func TestPropTheCursorStaysWithItsSession(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms := genRows(t), genTaskTerms(t)
+		tk, query := genTasks(t, rows), genQuery(t)
+		old := flatten(buildList(rows, terms, nil, tk, query, fakeProject, fakeShort, fakeHost))
+		if len(old) == 0 {
+			return
+		}
+		// Issues close and sessions link again, or everything changes.
+		next := tasks{open: map[string][]issues.Issue{}, ids: tk.ids, links: map[string][]string{}}
+		for _, root := range slices.Sorted(maps.Keys(tk.open)) {
+			next.open[root] = slices.DeleteFunc(slices.Clone(tk.open[root]), func(issues.Issue) bool { return rapid.Bool().Draw(t, "close") })
+		}
+		for _, id := range slices.Sorted(maps.Keys(tk.links)) {
+			next.links[id] = rapid.Permutation(tk.links[id]).Draw(t, "relink")
+		}
+		if rapid.IntRange(0, 4).Draw(t, "anew") == 0 {
+			next, query = genTasks(t, rows), genQuery(t)
+		}
+		now := flatten(buildList(rows, terms, nil, next, query, fakeProject, fakeShort, fakeHost))
+		// keepNear leaves a listed cursor be: the cursor is on one that went.
+		gone := slices.DeleteFunc(slices.Clone(old), func(o entry) bool {
+			return slices.ContainsFunc(now, func(e entry) bool { return e.key() == o.key() })
+		})
+		if len(gone) == 0 {
+			return
+		}
+		was := rapid.SampledFrom(gone).Draw(t, "sel")
+		sel := was.key()
+		got, ok := nearKey(old, now, sel)
+		at := slices.IndexFunc(now, func(e entry) bool { return e.key() == got })
+		if ok && at < 0 {
+			t.Fatalf("moved to %s, which is not listed", got)
+		}
+		if was.kind != sessionEntry {
+			return
+		}
+		still := slices.ContainsFunc(now, func(e entry) bool {
+			r, ok := e.session()
+			return ok && r.SessionID == was.row.SessionID
+		})
+		if still && (!ok || now[at].kind != sessionEntry || now[at].row.SessionID != was.row.SessionID) {
+			t.Fatalf("on %s, moved to %s (%v), though %s is listed", sel, got, ok, was.row.SessionID)
+		}
+	})
+}

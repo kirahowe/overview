@@ -563,33 +563,93 @@ func nearest(old []string, sel string, listed func(string) bool) (string, bool) 
 	return "", false
 }
 
-// keepNear applies nearest across one update, from the model before it,
+// keepNear applies nearKey across one update, from the model before it,
 // when the entry under the cursor is no longer shown.
 func (m model) keepNear(before model) model {
 	if m.shown(m.sel) {
 		return m
 	}
-	var old []string
-	for _, e := range before.ordered() {
-		old = append(old, e.key())
-	}
-	now, alias := map[string]bool{}, map[string]bool{}
-	for _, e := range before.ordered() {
-		alias[e.key()] = e.alias != ""
-	}
-	for _, e := range m.ordered() {
-		now[e.key()] = true
-	}
-	// A cursor on an entry of its own stays among those, out of the
-	// agents list, while there are any.
-	key, ok := nearest(old, m.sel, func(k string) bool { return now[k] && (alias[m.sel] || !alias[k]) })
-	if !ok {
-		key, ok = nearest(old, m.sel, func(k string) bool { return now[k] })
-	}
-	if ok {
+	if key, ok := nearKey(before.ordered(), m.ordered(), m.sel); ok {
 		m.sel, m.confirm = key, ""
 	}
 	return m
+}
+
+// nearKey is where the cursor goes when sel, the key of an entry in old,
+// is not in now. A session's entry that has gone goes to another entry
+// of the same session, as samePlace finds it, and a workstream that has
+// gone to the first session under it that is still listed, so the cursor
+// stays with the session it was on. Otherwise it is nearest: a cursor on
+// an entry of its own stays among those, out of the agents list, while
+// there are any.
+func nearKey(old, now []entry, sel string) (string, bool) {
+	listed := map[string]bool{}
+	for _, e := range now {
+		listed[e.key()] = true
+	}
+	if key, ok := samePlace(old, now, sel); ok {
+		return key, true
+	}
+	var keys []string
+	alias := map[string]bool{}
+	for _, e := range old {
+		keys = append(keys, e.key())
+		alias[e.key()] = e.alias != ""
+	}
+	key, ok := nearest(keys, sel, func(k string) bool { return listed[k] && (alias[sel] || !alias[k]) })
+	if !ok {
+		key, ok = nearest(keys, sel, func(k string) bool { return listed[k] })
+	}
+	return key, ok
+}
+
+// samePlace is the entry in now for the session the entry sel in old
+// showed: the one in the same place, under the same workstream or in the
+// agents list, if there is one, else its primary entry, else any. For a
+// workstream sel it is the primary entry of the first session that was
+// under it and is still listed. ok is false when there is none, or sel
+// is neither.
+func samePlace(old, now []entry, sel string) (string, bool) {
+	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
+	if i < 0 {
+		return "", false
+	}
+	was := old[i]
+	if was.kind == workstreamEntry {
+		for _, c := range children(old, was.task) {
+			if c.kind != sessionEntry {
+				continue
+			}
+			for _, e := range now {
+				if e.kind == sessionEntry && e.alias == "" && e.row.SessionID == c.row.SessionID {
+					return e.key(), true
+				}
+			}
+		}
+		return "", false
+	}
+	if was.kind != sessionEntry {
+		return "", false
+	}
+	agents := was.alias == agentsPrefix
+	primary, other := "", ""
+	for _, e := range now {
+		if e.kind != sessionEntry || e.row.SessionID != was.row.SessionID {
+			continue
+		}
+		switch {
+		case (e.alias == agentsPrefix) == agents && (agents || e.task == was.task):
+			return e.key(), true
+		case e.alias == "" && primary == "":
+			primary = e.key()
+		case other == "":
+			other = e.key()
+		}
+	}
+	if primary == "" {
+		primary = other
+	}
+	return primary, primary != ""
 }
 
 // stick applies stuck across one update, from the model before it.
