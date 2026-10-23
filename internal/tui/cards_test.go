@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/diff"
@@ -276,7 +275,7 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 		return nil, errors.New("unexpected " + strings.Join(args, " "))
 	}
 	m = selectKey(t, m, "s1")
-	m = update(m, tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o")
 	text := ansi.Strip(m.View())
 	for _, want := range []string{"Keep it.", "acceptance  1 of 2", "✓ kept", "○ tested", "+3 −2 in 2 files", "1 uncommitted", "x.go"} {

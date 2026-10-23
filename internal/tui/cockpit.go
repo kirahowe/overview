@@ -30,77 +30,108 @@ const (
 )
 
 // cockpit is the cockpit's state. issues says the issues card has the
-// keyboard, and pick is its cursor there.
+// keyboard, and pick is its cursor there. panes is how many panes the
+// list's window had when a listing last showed the cockpit as it should
+// be, so zoomLost can tell the user leaving from a pane going away.
 type cockpit struct {
 	open   bool
 	issues bool
 	pick   int
+	panes  int
 }
 
 // zoomedMsg answers zoomCmd.
 type zoomedMsg struct{ err error }
 
-// zoomCmd zooms the list's pane, or ends the zoom, unless the listing
-// shows it so already: tmux's zoom is a toggle, and the user may have
-// ended it.
+// zoomCmd zooms the list's pane, or ends the zoom, in one tmux command
+// that does nothing when the window is so already.
 func zoomCmd(mux multiplexer, self string, on bool) tea.Cmd {
-	return func() tea.Msg {
-		panes, err := mux.Panes()
-		if err != nil {
-			return zoomedMsg{err}
-		}
-		for _, p := range panes {
-			if p.ID == self && p.Zoomed != on {
-				return zoomedMsg{mux.Zoom(self)}
-			}
-		}
-		return zoomedMsg{}
-	}
+	return func() tea.Msg { return zoomedMsg{mux.SetZoom(self, on)} }
 }
 
-// openCockpit opens the cockpit, zooming the list inside tmux. The zoom
-// counts as a spawn, so no listing from before it lands is taken to say
-// the zoom has gone.
+// syncZoom asks tmux for the zoom the cockpit wants: on while it is open.
+// One zoom is out at a time, so two never race in tmux. A wish made while
+// one is out waits for it to land, and then the latest wish goes. The
+// zoom counts as a spawn, so no listing from before it lands is taken to
+// say the zoom has gone.
+func (m model) syncZoom() (model, tea.Cmd) {
+	if m.mux == nil {
+		return m, nil
+	}
+	if m.zooming {
+		m.rezoom = true
+		return m, nil
+	}
+	m.spawns++
+	m.zooming, m.rezoom = true, false
+	return m, zoomCmd(m.mux, m.self, m.cockpit.open)
+}
+
+// openCockpit opens the cockpit, zooming the list inside tmux. While the
+// list is moving between windows it would zoom the window it is leaving,
+// so the cockpit opens once the move lands.
 func (m model) openCockpit() (model, tea.Cmd) {
 	if m.cockpit.open {
 		return m, nil
 	}
-	m.cockpit = cockpit{open: true}
-	m.changeReads = stale(m.changeReads)
-	if m.mux == nil {
+	if m.staging {
+		m.cockpitSoon = true
 		return m, nil
 	}
-	m.spawns++
-	m.zooming = true
-	return m, zoomCmd(m.mux, m.self, true)
+	m.cockpitSoon = false
+	m.cockpit = cockpit{open: true, panes: m.inStage()}
+	m.changeReads = stale(m.changeReads)
+	return m.syncZoom()
 }
 
 // closeCockpit closes the cockpit and ends the zoom. The list goes back to
 // following the cursor once the zoom has gone.
 func (m model) closeCockpit() (model, tea.Cmd) {
+	m.cockpitSoon = false
 	if !m.cockpit.open {
 		return m, nil
 	}
 	m.cockpit = cockpit{}
-	if m.mux == nil {
-		return m, nil
-	}
-	m.spawns++
-	m.zooming = true
-	return m, zoomCmd(m.mux, m.self, false)
+	return m.syncZoom()
 }
 
-// zoomLost closes the cockpit, without touching tmux, when a current
-// listing shows the list's window no longer zoomed: the user went to
-// another pane, and tmux ended the zoom.
-func (m model) zoomLost() model {
-	if !m.cockpit.open || m.zooming || m.mux == nil {
-		return m
+// inStage counts the panes in the list's window.
+func (m model) inStage() int {
+	w, n := m.windowOf(m.self), 0
+	for _, p := range m.panes {
+		if p.Window == w && w != "" {
+			n++
+		}
 	}
-	if p, ok := m.pane(m.self); ok && !p.Zoomed {
+	return n
+}
+
+// zoomLost reads a current listing for what became of the cockpit's
+// zoom. tmux ends a zoom when the user goes to another pane of the
+// window, and also when a pane of it closes or opens. Only the first is
+// the user leaving the cockpit, and it closes, without touching tmux:
+// the list's window has the panes it had, unzoomed. When a pane has gone
+// the cockpit stays, zoomed again if the list has company. A list alone
+// in its window fills it unzoomed, as tmux cannot zoom it.
+func (m model) zoomLost() (model, tea.Cmd) {
+	if !m.cockpit.open || m.zooming || m.mux == nil {
+		return m, nil
+	}
+	p, ok := m.pane(m.self)
+	if !ok {
+		return m, nil
+	}
+	n := m.inStage()
+	switch {
+	case p.Zoomed || n == 1:
+		m.cockpit.panes = n
+	case n < m.cockpit.panes:
+		m.cockpit.panes = n
+		return m.syncZoom()
+	default:
 		m.cockpit = cockpit{}
 	}
-	return m
+	return m, nil
 }
 
 // closesCockpit says whether an action leaves the cockpit before it acts:

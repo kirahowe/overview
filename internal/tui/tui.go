@@ -166,9 +166,13 @@ type model struct {
 	pick picker
 
 	// cockpit is the cockpit, as cockpit.go describes. zooming is set while
-	// a Cmd that zooms the list or puts it back is out.
-	cockpit cockpit
-	zooming bool
+	// a Cmd that zooms the list or puts it back is out, and rezoom when the
+	// cockpit's wish changed meanwhile, to be sent when it lands.
+	// cockpitSoon is an o that came while the list was moving, and opens
+	// the cockpit once the move lands.
+	cockpit         cockpit
+	zooming, rezoom bool
+	cockpitSoon     bool
 	// issueReads and changeReads are the cockpit's reads, by cockpitKey.
 	issueReads  map[string]issueRead
 	changeReads map[string]changesRead

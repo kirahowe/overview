@@ -43,7 +43,7 @@ type fakeMux struct {
 	drawn map[string]string // what the view wrote to each tty
 	focus string            // the active pane of the window shown
 
-	zooms []string // the panes Zoom toggled
+	zooms []string // the zooms SetZoom was asked for, "%0 true"
 
 	moveErr error
 }
@@ -263,13 +263,16 @@ func (f *fakeMux) Select(pane string) error {
 
 func (f *fakeMux) Detach() error { f.detach++; return nil }
 
-// Zoom toggles the zoom of pane's window, as tmux's resize-pane -Z does.
-func (f *fakeMux) Zoom(pane string) error {
+// SetZoom zooms pane's window or ends its zoom, as the one tmux command
+// does: idempotently, and not at all for a pane alone in its window.
+func (f *fakeMux) SetZoom(pane string, on bool) error {
 	if f.find(pane) < 0 {
 		return errors.New("can't find pane " + pane)
 	}
-	f.zooms = append(f.zooms, pane)
-	f.setZoom(f.window(pane), !f.zoomed(pane))
+	f.zooms = append(f.zooms, fmt.Sprint(pane, " ", on))
+	if w := f.window(pane); f.inWindow(w) > 1 {
+		f.setZoom(w, on)
+	}
 	return nil
 }
 
@@ -289,8 +292,10 @@ func (f *fakeMux) setZoom(w string, on bool) {
 	}
 }
 
-// Split puts a new pane in target's window.
+// Split puts a new pane in target's window, which ends its zoom, as
+// tmux's split-window does.
 func (f *fakeMux) Split(target, dir, size string, env []string, command ...string) (tmux.Pane, error) {
+	f.setZoom(f.window(target), false)
 	p := f.split(target)
 	f.splits = append(f.splits, spawnCall{dir: dir, env: env, command: command})
 	f.focus = p.ID
@@ -300,6 +305,8 @@ func (f *fakeMux) Split(target, dir, size string, env []string, command ...strin
 // exit ends a pane's process, which closes it.
 func (f *fakeMux) exit(id string) {
 	if i := f.find(id); i >= 0 {
+		// tmux ends the zoom of a window that loses a pane.
+		f.setZoom(f.panes[i].Window, false)
 		f.panes = slices.Delete(f.panes, i, i+1)
 	}
 }

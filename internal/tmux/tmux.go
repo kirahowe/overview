@@ -271,6 +271,20 @@ func (s Server) Zoom(pane string) error {
 	return err
 }
 
+// SetZoom zooms pane's window to pane when on, and ends the window's zoom
+// when not, whatever it was before. tmux reads the window's zoom and acts
+// on it in one command, so no listing taken in between can make it toggle
+// the wrong way. A pane alone in its window cannot be zoomed, and then the
+// window stays as it was.
+func (s Server) SetZoom(pane string, on bool) error {
+	then, otherwise := "", "resize-pane -Z -t "+pane
+	if !on {
+		then, otherwise = otherwise, ""
+	}
+	_, err := s.run("if-shell", "-F", "-t", pane, "#{window_zoomed_flag}", then, otherwise)
+	return err
+}
+
 // Live takes pane out of copy mode, where a paste would not be
 // bracketed and Enter would not reach the program, and returns what runs
 // there in the foreground and the text it shows, without colours. One

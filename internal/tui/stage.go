@@ -56,7 +56,7 @@ type multiplexer interface {
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
-	Zoom(pane string) error
+	SetZoom(pane string, on bool) error
 }
 
 type spawnKind int
@@ -559,28 +559,26 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// A move that failed is tried again once tmux has been reread.
 		m = m.setPanes(msg.panes, msg.roots)
 		m.failed = ""
-		m = m.zoomLost()
+		m, zoom := m.zoomLost()
+		var cmd tea.Cmd
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
-			return m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
+			m, cmd = m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
+		} else {
+			m, cmd = m.keepWidth()
 		}
-		return m.keepWidth()
+		return m, tea.Batch(zoom, cmd)
 	case stagedMsg:
 		m.staging = false
-		if msg.err != nil {
-			m.failed, m.entering = msg.to, ""
-			m = m.say("could not show the session: " + msg.err.Error())
+		if m.cockpitSoon {
+			// o came while the list was moving: it opens where the list
+			// went, and the cockpit holds it there.
+			m, cmd := m.stageLanded(msg)
+			m, open := m.openCockpit()
+			return m, tea.Batch(cmd, open)
 		}
-		// The holder may have been resized, so draw it afresh.
-		m.holderShown = ""
-		switch {
-		case msg.panes == nil:
-		case m.current(msg.gen):
-			return m.setPanes(msg.panes, msg.roots).keepWidth()
-		default:
-			// The rest may be stale, but where the list went is not.
-			m.panes = movedSelf(m.panes, msg.panes, m.self)
-		}
+		return m.stageLanded(msg)
+
 	case spawnedMsg:
 		m.landed++
 		if msg.kind == spawnHolder {
@@ -630,7 +628,10 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.landed++
 		m.zooming = false
 		if msg.err != nil {
-			return m.say("could not zoom the list: " + msg.err.Error()), nil
+			m = m.say("could not zoom the list: " + msg.err.Error())
+		}
+		if m.rezoom {
+			return m.syncZoom()
 		}
 	case widthMsg:
 		m.landed++
@@ -649,6 +650,25 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// where it went, so no move aims at a closed pane.
 		gone := slices.DeleteFunc(slices.Clone(m.panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
 		m.panes = movedSelf(gone, msg.panes, m.self)
+	}
+	return m, nil
+}
+
+// stageLanded takes the answer to a stage Cmd.
+func (m model) stageLanded(msg stagedMsg) (model, tea.Cmd) {
+	if msg.err != nil {
+		m.failed, m.entering = msg.to, ""
+		m = m.say("could not show the session: " + msg.err.Error())
+	}
+	// The holder may have been resized, so draw it afresh.
+	m.holderShown = ""
+	switch {
+	case msg.panes == nil:
+	case m.current(msg.gen):
+		return m.setPanes(msg.panes, msg.roots).keepWidth()
+	default:
+		// The rest may be stale, but where the list went is not.
+		m.panes = movedSelf(m.panes, msg.panes, m.self)
 	}
 	return m, nil
 }

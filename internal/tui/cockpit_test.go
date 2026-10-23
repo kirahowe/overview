@@ -19,7 +19,7 @@ func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 		t.Fatalf("the list is in %s, want beside %s", f.stage(), first)
 	}
 	m = pressSettled(t, m, "o")
-	if !m.cockpit.open || !slices.Equal(f.zooms, []string{"%0"}) || !f.zoomed("%0") {
+	if !m.cockpit.open || !slices.Equal(f.zooms, []string{"%0 true"}) || !f.zoomed("%0") {
 		t.Fatalf("after o: open %v zooms %v", m.cockpit.open, f.zooms)
 	}
 	// The cursor moves, and the list stays in its window.
@@ -40,7 +40,7 @@ func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 	}
 	// o closes it too.
 	m = pressSettled(t, m, "o", "o")
-	if m.cockpit.open || f.zoomed("%0") || len(f.zooms) != 4 {
+	if m.cockpit.open || f.zoomed("%0") || !slices.Equal(f.zooms[2:], []string{"%0 true", "%0 false"}) {
 		t.Fatalf("after o o: open %v zooms %v", m.cockpit.open, f.zooms)
 	}
 }
@@ -55,6 +55,147 @@ func TestTheCockpitClosesWhenTmuxEndsTheZoom(t *testing.T) {
 	m = settle(t, m, cmd)
 	if m.cockpit.open || len(f.zooms) != 1 || f.zoomed("%0") {
 		t.Fatalf("open %v zooms %v zoomed %v", m.cockpit.open, f.zooms, f.zoomed("%0"))
+	}
+}
+
+// cmdMsgs runs cmd's tree of Cmds, in the order given, and returns the
+// messages they answer with, without feeding them back.
+func cmdMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case nil:
+		return nil
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, cmdMsgs(c)...)
+		}
+		return out
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+// feed steps m through msgs and settles what each asks for.
+func feed(t *testing.T, m model, msgs []tea.Msg) model {
+	t.Helper()
+	for _, msg := range msgs {
+		var cmd tea.Cmd
+		m, cmd = step(m, msg)
+		m = settle(t, m, cmd)
+	}
+	return m
+}
+
+// o o pressed faster than tmux answers sends one zoom at a time, and the
+// window ends as the cockpit does: closed and unzoomed. With two zooms out
+// at once, the close could run first and leave the window zoomed.
+func TestOOFastLeavesTheWindowUnzoomed(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	m, first := press(m, "o")
+	m, second := press(m, "o")
+	if late := cmdMsgs(second); len(late) != 0 {
+		t.Fatalf("a second zoom went out while the first was: %v", late)
+	}
+	m = feed(t, m, cmdMsgs(first))
+	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if m.cockpit.open || f.zoomed("%0") || m.zooming {
+		t.Fatalf("open %v zoomed %v zooming %v zooms %v", m.cockpit.open, f.zoomed("%0"), m.zooming, f.zooms)
+	}
+}
+
+// v from the cockpit splits the session's window for the review, which
+// ends the zoom in tmux. The cockpit's own unzoom must not zoom it again,
+// whichever of the two runs first.
+func TestVFromTheCockpitLeavesTheReviewShown(t *testing.T) {
+	for _, splitFirst := range []bool{true, false} {
+		f := newFakeMux()
+		m := stagedModel(t, f, row("s1", "red", "auth", 11))
+		m = pressSettled(t, m, "o")
+		m, cmd := press(m, "v")
+		msgs := cmdMsgs(cmd)
+		if splitFirst {
+			slices.Reverse(msgs)
+		}
+		m = feed(t, m, msgs)
+		m, cmd = step(m, listPanes(f, m.deps.roots, m.landed)())
+		m = settle(t, m, cmd)
+		if m.cockpit.open || f.zoomed("%0") || len(f.splits) != 1 {
+			t.Fatalf("split first %v: open %v zoomed %v splits %d zooms %v", splitFirst, m.cockpit.open, f.zoomed("%0"), len(f.splits), f.zooms)
+		}
+	}
+}
+
+// o while the list is moving to another window waits for the move, so
+// the zoom lands on the window the list went to, not the one it left.
+func TestOWhileTheListMovesOpensWhereItLands(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m, move := press(m, "j")
+	if !m.staging {
+		t.Fatal("j started no move")
+	}
+	m, open := press(m, "o")
+	if m.cockpit.open || len(cmdMsgs(open)) != 0 || len(f.zooms) != 0 {
+		t.Fatalf("o during the move: open %v zooms %v", m.cockpit.open, f.zooms)
+	}
+	m = feed(t, m, cmdMsgs(move))
+	second := paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
+	if !m.cockpit.open || !f.staged(second) || !f.zoomed("%0") {
+		t.Fatalf("open %v, list in %s beside %s %v, zoomed %v", m.cockpit.open, f.stage(), second, f.staged(second), f.zoomed("%0"))
+	}
+}
+
+// A list alone in its window cannot be zoomed, and fills it anyway: the
+// cockpit opens and stays open.
+func TestTheCockpitOpensWithTheListAlone(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	// The session beside the list exits while the user is elsewhere, so
+	// the list stays where it was, alone.
+	m.blurred = true
+	f.exit(paneWithTTY(f, m.ttys[11]))
+	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if n := f.inWindow(f.stage()); n != 1 {
+		t.Fatalf("the list shares its window with %d panes", n-1)
+	}
+	m = pressSettled(t, m, "o")
+	m, cmd = step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if !m.cockpit.open {
+		t.Fatal("the cockpit closed with the list alone")
+	}
+}
+
+// A pane closing in the list's window ends tmux's zoom without the user
+// going anywhere: the cockpit stays, zoomed again while the list has
+// company, and unzoomed once it is alone.
+func TestAPaneClosingKeepsTheCockpit(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11))
+	split := f.split(f.panes[f.find(paneWithTTY(f, m.ttys[11]))].ID)
+	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	m = pressSettled(t, m, "o")
+	if !f.zoomed("%0") {
+		t.Fatal("not zoomed")
+	}
+	f.exit(split.ID)
+	m, cmd = step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if !m.cockpit.open || !f.zoomed("%0") {
+		t.Fatalf("after a split closed: open %v zoomed %v", m.cockpit.open, f.zoomed("%0"))
+	}
+	f.exit(paneWithTTY(f, m.ttys[11]))
+	m, cmd = step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if !m.cockpit.open || f.inWindow(f.stage()) != 1 {
+		t.Fatalf("after the session closed: open %v, %d panes", m.cockpit.open, f.inWindow(f.stage()))
 	}
 }
 
@@ -140,7 +281,7 @@ func TestCockpitListWidth(t *testing.T) {
 func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	f := newFakeMux()
 	m := selectKey(t, taskModel(t, f), "s2")
-	m = update(m, tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab")
 	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
 		t.Fatalf("after tab: issues %v, footer %q", m.cockpit.issues, ansi.Strip(m.footer()))
@@ -206,7 +347,7 @@ func TestEnterOnABlockedIssueStartsAWorkstream(t *testing.T) {
 	tr := m.trackers["/code/app"]
 	tr.issues = append(slices.Clone(tr.issues), issues.Issue{ID: 8, Ref: "app#8", Title: "wait on tmux", Status: issues.Blocked, Priority: "p2"})
 	m.trackers = trackers{"/code/app": tr}
-	m = update(m, tea.WindowSizeMsg{Width: 150, Height: 40})
+	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab", "j", "j")
 	if text := ansi.Strip(m.View()); !strings.Contains(text, "▸ blocked      #8 wait on tmux") {
 		t.Fatalf("the cursor is not on #8:\n%s", text)
@@ -215,4 +356,12 @@ func TestEnterOnABlockedIssueStartsAWorkstream(t *testing.T) {
 	if len(f.spawned) != 1 || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#8: wait on tmux"}) {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
+}
+
+// resized is m at w by h, with the restage that follows settled, so the
+// list is where the cursor wants it.
+func resized(t *testing.T, m model, w, h int) model {
+	t.Helper()
+	m, cmd := step(m, tea.WindowSizeMsg{Width: w, Height: h})
+	return settle(t, m, cmd)
 }

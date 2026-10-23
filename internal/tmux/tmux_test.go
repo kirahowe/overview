@@ -683,3 +683,44 @@ func TestZoomShowsInTheListing(t *testing.T) {
 		t.Fatalf("after a second Zoom: %v", z)
 	}
 }
+
+// SetZoom says what the window should be, not which way to toggle it:
+// asking twice for either leaves it so, and a pane alone in its window
+// stays unzoomed.
+func TestSetZoomIsIdempotent(t *testing.T) {
+	s := testServer(t)
+	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoomed := func(id string) bool {
+		panes, err := s.Panes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range panes {
+			if p.ID == id {
+				return p.Zoomed
+			}
+		}
+		t.Fatalf("no pane %s in %+v", id, panes)
+		return false
+	}
+	if err := s.SetZoom(list.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if zoomed(list.ID) {
+		t.Fatal("a pane alone in its window was zoomed")
+	}
+	if _, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300"); err != nil {
+		t.Fatal(err)
+	}
+	for i, on := range []bool{true, true, false, false, true, false} {
+		if err := s.SetZoom(list.ID, on); err != nil {
+			t.Fatal(err)
+		}
+		if got := zoomed(list.ID); got != on {
+			t.Fatalf("step %d: SetZoom(%v) left the window zoomed %v", i, on, got)
+		}
+	}
+}
