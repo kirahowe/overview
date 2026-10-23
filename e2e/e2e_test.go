@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -655,8 +656,10 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 
 // Workstreams, end to end: a project with .issues lists its issue in
 // progress before its session, with no session under it. c on it starts
-// claude with the opening prompt that names the issue, and t opens a
-// terminal that is listed under it.
+// claude with the opening prompt that names the issue. Once overview hook
+// reads that prompt, the session is listed under the workstream. t opens
+// a terminal that is listed under it, and an issues start that the hook
+// reads moves the other session there too.
 func TestWorkstreams(t *testing.T) {
 	r := launchWith(t, "w", func(r *rig) string {
 		for _, d := range []string{".jj", ".issues"} {
@@ -706,8 +709,20 @@ func TestWorkstreams(t *testing.T) {
 		s := r.screen()
 		return strings.Contains(s, "e2e-1"), s
 	})
+
+	// The hook links a session whose prompt names the issue, and the list
+	// moves it under the workstream.
+	r.hook(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "cwd": r.work,
+		"transcript_path": filepath.Join(r.home, "projects", "work", "s-1.jsonl"), "prompt": "Work on work#6: keep width"})
+	waitFor(t, "the linked session under the workstream", func() (bool, string) {
+		s := r.screen()
+		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "e2e-1"), strings.Index(s, "e2e-0")
+		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
+	})
+
+	// On the workstream, the list is beside its session now.
 	r.press("g")
-	waitFor(t, "the holder again", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
+	waitFor(t, "the list beside the linked session", func() (bool, string) { return beside(r.ov.panes(), started.id, 0) })
 	before = r.ov.panes()
 	r.press("t")
 	shell := r.fresh(t, "a terminal for the task", before, isShell)
@@ -719,6 +734,32 @@ func TestWorkstreams(t *testing.T) {
 		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ "), strings.Index(s, "e2e-0")
 		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
 	})
+
+	// An agent's issues start links the other session, which goes under
+	// the workstream too, before its terminal.
+	r.hook(t, map[string]any{"hook_event_name": "PostToolUse", "session_id": "s-0", "cwd": r.work,
+		"transcript_path": filepath.Join(r.home, "projects", "work", "s-0.jsonl"),
+		"tool_name":       "Bash", "tool_input": map[string]any{"command": "issues start 6"}})
+	waitFor(t, "both sessions under the workstream", func() (bool, string) {
+		s := r.screen()
+		i, term := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ ")
+		a, b := strings.Index(s, "e2e-0"), strings.Index(s, "e2e-1")
+		return i >= 0 && a > i && b > i && term > a && term > b, s
+	})
+}
+
+// hook runs overview hook on a payload, as Claude Code would.
+func (r *rig) hook(t *testing.T, payload map[string]any) {
+	t.Helper()
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(r.bin, "hook")
+	cmd.Stdin = bytes.NewReader(b)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("overview hook: %v\n%s", err, out)
+	}
 }
 
 // The cockpit, end to end: o zooms the list's pane to fill its window and
