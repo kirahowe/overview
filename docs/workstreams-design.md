@@ -141,6 +141,17 @@ with tmux's `resize-pane -Z`, so the session beside it keeps running and
 comes back exactly as it was. The list stays down the left, and the
 cards take the rest.
 
+The zoom is one tmux command that sets the state rather than toggling
+it, `if-shell -F '#{window_zoomed_flag}'` around `resize-pane -Z`, and
+the view sends one at a time, so fast presses and a review's split
+cannot leave the window zoomed the wrong way. An `o` while the list is
+moving between windows waits for the move. tmux ends a zoom when the
+user goes to another pane of the window, and the cockpit then closes.
+It also ends one when a pane of the window closes; the cockpit stays
+open then and zooms again, or fills the window unzoomed when the list
+is left alone, since tmux cannot zoom a lone pane. `esc` clears a filter
+on the list before it closes the cockpit.
+
 For a workstream, in this order:
 
 - The header: the issue's reference, title, status and priority, how
