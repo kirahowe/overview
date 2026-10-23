@@ -447,3 +447,16 @@ func TestIssuesCardSaysWhyTheReadFailed(t *testing.T) {
 		}
 	}
 }
+
+func TestAgesReadAsPhrases(t *testing.T) {
+	if got := agoPhrase("now"); got != "just now" {
+		t.Errorf("agoPhrase(now) = %q", got)
+	}
+	if got := agoPhrase("3m"); got != "3m ago" {
+		t.Errorf("agoPhrase(3m) = %q", got)
+	}
+	c := changesCard("Changes", "now", changeInfo{})
+	if got := ansi.Strip(c.right); got != "just started" {
+		t.Errorf("changes card right = %q", got)
+	}
+}

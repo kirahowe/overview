@@ -200,7 +200,7 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), accent: true, body: func(w int) []string {
 		when := ""
 		if started != "" {
-			when = dim.Render("started " + started + " ago")
+			when = dim.Render("started " + agoPhrase(started))
 		}
 		return []string{
 			spread(bold.Foreground(pal.Text).Render(title), when, w),
@@ -359,6 +359,14 @@ type changeInfo struct {
 
 // shownFiles is how many files a changes card lists before it says how
 // many more there are.
+// agoPhrase is an age from Ago as a phrase: "3m ago", or "just now".
+func agoPhrase(age string) string {
+	if age == "now" {
+		return "just now"
+	}
+	return age + " ago"
+}
+
 const shownFiles = 6
 
 // changesCard lists the files changed, the most changed first.
@@ -366,6 +374,9 @@ func changesCard(title, since string, info changeInfo) card {
 	right := ""
 	if since != "" {
 		right = dim.Render("since " + since)
+		if since == "now" {
+			right = dim.Render("just started")
+		}
 	}
 	return card{title: title, right: right, body: func(w int) []string {
 		switch {
