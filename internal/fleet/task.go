@@ -218,27 +218,37 @@ func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 
 // IssuesStarts finds every `issues start <n>` in a shell command. It is a
 // reader for the common shapes, not a shell: no expansion, and command
-// substitutions and heredoc bodies are opaque. A `cd <dir>` earlier in the
-// string moves the directory later commands use. A `cd` the hook cannot
-// follow (home, `-`, a variable) leaves the directory unknown, and a start
-// after it links only when it names an absolute directory itself. A false
-// link is worse than a missed one, so anything unclear links nothing.
+// substitutions and heredoc bodies are opaque. A `cd <dir>` or `pushd
+// <dir>` earlier in the string moves the directory later commands use. A
+// `cd` the hook cannot follow (home, `-`, a variable), a `popd`, and a
+// group or subshell, whose `cd` may or may not last past it, leave the
+// directory unknown, and a start after one links only when it names an
+// absolute directory itself. A false link is worse than a missed one, so
+// anything unclear links nothing.
 func IssuesStarts(command, cwd string) []TaskRef {
 	var out []TaskRef
 	known := true
 	for _, argv := range splitCommands(command) {
+		if opensGroup(argv[0]) {
+			known = false
+			continue
+		}
 		for len(argv) > 0 && isAssignment(argv[0]) {
 			argv = argv[1:]
 		}
 		if len(argv) == 0 {
 			continue
 		}
-		if argv[0] == "cd" {
-			if len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") {
+		switch argv[0] {
+		case "cd", "pushd":
+			if len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") && !strings.HasPrefix(argv[1], "+") {
 				cwd, known = resolveDir(cwd, argv[1])
 			} else {
 				known = false
 			}
+			continue
+		case "popd":
+			known = false
 			continue
 		}
 		if ref, ok := parseStart(argv, cwd, known); ok {
@@ -246,6 +256,12 @@ func IssuesStarts(command, cwd string) []TaskRef {
 		}
 	}
 	return out
+}
+
+// opensGroup says whether a command's first word starts or ends a
+// subshell or a brace group, as in `(cd x; ...)` or `{ cd x; ...; }`.
+func opensGroup(w string) bool {
+	return strings.HasPrefix(w, "(") || strings.HasPrefix(w, "{") || w == "}" || w == ")"
 }
 
 func isAssignment(w string) bool {
@@ -405,8 +421,9 @@ func positiveInt(s string) (int, bool) {
 
 // splitCommands cuts a shell string into simple commands at && || ; | & and
 // newlines outside quotes, and each into words with basic quoting. Command
-// substitutions become an opaque `$()` or backtick word, and heredoc bodies
-// are skipped.
+// substitutions become an opaque `$()` or backtick word, heredoc bodies
+// are skipped, and so is a comment: an unquoted # that starts a word, to
+// the end of its line.
 func splitCommands(s string) [][]string {
 	var cmds [][]string
 	var words []string
@@ -505,6 +522,10 @@ func splitCommands(s string) [][]string {
 			if len(pending) > 0 {
 				i = pos - 1
 				pending = nil
+			}
+		case c == '#' && !inWord:
+			for i+1 < len(r) && r[i+1] != '\n' {
+				i++
 			}
 		case c == '&' || c == '|' || c == ';':
 			endCmd()

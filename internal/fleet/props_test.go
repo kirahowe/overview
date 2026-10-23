@@ -370,8 +370,44 @@ func TestPropIssuesStartsRoundTrip(t *testing.T) {
 		prefix := rapid.SampledFrom([]string{"", "FOO=1 ", "A='x y' B=2 ", "echo hi && ", "true;\n", "x | "}).Draw(t, "prefix")
 		suffix := rapid.SampledFrom([]string{"", " && echo done", " | cat", " &", "\necho x"}).Draw(t, "suffix")
 
+		// Something before the start can move the directory or make it
+		// unknown, or comment the start out.
+		var dirAbs, dirRel bool
+		for i, w := range words {
+			if w == "-C" || w == "--dir" {
+				dirAbs = strings.HasPrefix(words[i+1], "/") || strings.HasPrefix(words[i+1], "'/") || strings.HasPrefix(words[i+1], `"/`)
+				dirRel = !dirAbs
+			}
+		}
+		lost := false
+		switch before := rapid.SampledFrom([]string{"", "pushd", "unknown", "comment"}).Draw(t, "before"); before {
+		case "pushd":
+			to := "/" + rapid.StringMatching(`[a-z]{1,6}`).Draw(t, "to")
+			prefix = "pushd " + to + " && " + prefix
+			switch {
+			case dirRel:
+				rel, _ := filepath.Rel(cwd, want.Dir)
+				want.Dir = filepath.Join(to, rel)
+			case !dirAbs:
+				want.Dir = to
+			}
+		case "unknown":
+			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~/x && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; "}).Draw(t, "group") + prefix
+			lost = !dirAbs
+		case "comment":
+			// The comment runs to the end of its line only.
+			lost = !strings.Contains(prefix, "\n")
+			prefix = "echo x # see " + prefix
+		}
+
 		cmd := prefix + strings.Join(words, " ") + suffix
 		got := IssuesStarts(cmd, cwd)
+		if lost {
+			if len(got) != 0 {
+				t.Fatalf("IssuesStarts(%q) = %+v, want nothing", cmd, got)
+			}
+			return
+		}
 		if len(got) != 1 || got[0] != want {
 			t.Fatalf("IssuesStarts(%q) = %+v, want [%+v]", cmd, got, want)
 		}
