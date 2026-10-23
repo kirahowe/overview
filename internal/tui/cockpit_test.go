@@ -283,7 +283,7 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	m := selectKey(t, taskModel(t, f), "s2")
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab")
-	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
+	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter go to") {
 		t.Fatalf("after tab: issues %v, footer %q", m.cockpit.issues, ansi.Strip(m.footer()))
 	}
 	// j moves the card's cursor, not the list's, and stops at the end.
@@ -304,11 +304,28 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	}
 }
 
+// withIssues is m with more of /code/app's issues.
+func withIssues(m model, more ...issues.Issue) model {
+	tr := m.trackers["/code/app"]
+	tr.issues = append(slices.Clone(tr.issues), more...)
+	m.trackers = trackers{"/code/app": tr}
+	return m
+}
+
 func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
 	f := newFakeMux()
-	m := selectKey(t, taskModel(t, f), "s2")
-	m = pressSettled(t, m, "o", "tab", "j", "enter")
-	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/app" || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#6: keep width"}) {
+	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 9, Ref: "app#9", Title: "add threads", Status: issues.Ready, Priority: "p2"})
+	m = resized(t, m, 150, 40)
+	// in review #4, in progress #6, up next #9.
+	m = pressSettled(t, m, "o", "tab", "j", "j")
+	if text := ansi.Strip(m.View()); !strings.Contains(text, "▸ up next      #9 add threads") {
+		t.Fatalf("the cursor is not on #9:\n%s", text)
+	}
+	if !strings.Contains(ansi.Strip(m.footer()), "enter start") {
+		t.Fatalf("footer %q", ansi.Strip(m.footer()))
+	}
+	m = pressSettled(t, m, "enter")
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/app" || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#9: add threads"}) {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
 	if m.cockpit.open || f.zoomed("%0") {
@@ -316,6 +333,21 @@ func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
 	}
 	if m.opened.ID == "" || !f.staged(m.opened.ID) || f.focus != m.opened.ID {
 		t.Fatalf("the new session %s is not shown and focused: list in %s, focus %s", m.opened.ID, f.stage(), f.focus)
+	}
+}
+
+// enter on an issue already in progress starts nothing: the list's cursor
+// goes to its workstream, and the cockpit stays open on it.
+func TestEnterOnAnIssueInProgressGoesToItsWorkstream(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, taskModel(t, f), "s2")
+	m = resized(t, m, 150, 40)
+	m = pressSettled(t, m, "o", "tab", "j", "enter")
+	if len(f.spawned) != 0 {
+		t.Fatalf("started a session on #6: %+v", f.spawned)
+	}
+	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.cockpit.issues || m.target().task != "/code/app#6" {
+		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.cockpit.issues, m.target())
 	}
 }
 
@@ -339,22 +371,19 @@ func TestTheProjectCockpitWithoutIssues(t *testing.T) {
 	}
 }
 
-// A blocked issue is listed after those in progress, and enter starts a
-// session on it as on the others.
-func TestEnterOnABlockedIssueStartsAWorkstream(t *testing.T) {
+// A blocked issue is listed after those in progress, and is a workstream
+// already, so enter goes to it rather than starting another session.
+func TestEnterOnABlockedIssueGoesToItsWorkstream(t *testing.T) {
 	f := newFakeMux()
-	m := selectKey(t, taskModel(t, f), "s2")
-	tr := m.trackers["/code/app"]
-	tr.issues = append(slices.Clone(tr.issues), issues.Issue{ID: 8, Ref: "app#8", Title: "wait on tmux", Status: issues.Blocked, Priority: "p2"})
-	m.trackers = trackers{"/code/app": tr}
+	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 8, Ref: "app#8", Title: "wait on tmux", Status: issues.Blocked, Priority: "p2"})
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab", "j", "j")
 	if text := ansi.Strip(m.View()); !strings.Contains(text, "▸ blocked      #8 wait on tmux") {
 		t.Fatalf("the cursor is not on #8:\n%s", text)
 	}
-	pressSettled(t, m, "enter")
-	if len(f.spawned) != 1 || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#8: wait on tmux"}) {
-		t.Fatalf("spawned %+v", f.spawned)
+	m = pressSettled(t, m, "enter")
+	if len(f.spawned) != 0 || m.sel != "task:/code/app#8" || !m.cockpit.open {
+		t.Fatalf("spawned %+v, sel %s, open %v", f.spawned, m.sel, m.cockpit.open)
 	}
 }
 

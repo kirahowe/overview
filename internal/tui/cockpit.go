@@ -574,9 +574,12 @@ func (m model) cockpitRows(t target) [][]card {
 	}
 }
 
-// startPicked starts a workstream on the issue under the issues card's
-// cursor: claude at the project's root with the opening prompt that names
-// the issue, shown as c shows a new session, once the cockpit has closed.
+// startPicked acts on the issue under the issues card's cursor. An issue
+// that is a workstream already, in the list as one, gets the cursor, and
+// the cockpit follows it there, so enter never starts a second session on
+// work under way. A ready or inbox issue gets a workstream: claude at the
+// project's root with the opening prompt that names the issue, shown as
+// c shows a new session, once the cockpit has closed.
 func (m model) startPicked() (model, tea.Cmd) {
 	t := m.target()
 	others, _ := m.others(t)
@@ -585,9 +588,44 @@ func (m model) startPicked() (model, tea.Cmd) {
 		return m.say("no issue to start"), nil
 	}
 	i := ps[max(0, min(m.cockpit.pick, len(ps)-1))]
+	es := m.ordered()
+	j := streamAt(es, taskKey(t.root, i.ID))
+	if j < 0 && m.filter != "" {
+		// The filter hides it: show everything, so the cursor can go.
+		m.filter, m.filtering = "", false
+		es = m.ordered()
+		j = streamAt(es, taskKey(t.root, i.ID))
+	}
+	if j >= 0 {
+		m = m.moveTo(es, j)
+		m.cockpit.issues, m.cockpit.pick = false, 0
+		return m, nil
+	}
+	if i.Status != issues.Ready && i.Status != issues.Inbox {
+		return m.say(issueRef(m.projectID(t.root), i) + " is " + i.Status + " with no workstream in the list"), nil
+	}
 	m, out := m.closeCockpit()
 	m, cmd := m.startOn(t.root, i)
 	return m, tea.Batch(out, cmd)
+}
+
+// streamAt is where the workstream key is in es, -1 when it is not.
+func streamAt(es []entry, key string) int {
+	return slices.IndexFunc(es, func(e entry) bool { return e.kind == workstreamEntry && e.task == key })
+}
+
+// pickStarts says whether enter in the issues card starts a session: the
+// issue under its cursor is ready or in the inbox, and no workstream yet.
+func (m model) pickStarts() bool {
+	t := m.target()
+	others, _ := m.others(t)
+	ps := pickable(others)
+	if len(ps) == 0 {
+		return false
+	}
+	i := ps[max(0, min(m.cockpit.pick, len(ps)-1))]
+	m.filter = ""
+	return (i.Status == issues.Ready || i.Status == issues.Inbox) && streamAt(m.ordered(), taskKey(t.root, i.ID)) < 0
 }
 
 // keepCockpit gives the keyboard back to the list when the cursor has

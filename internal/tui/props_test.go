@@ -1635,7 +1635,10 @@ func TestPropTheFocusedCardIsShown(t *testing.T) {
 			case 2:
 				m = update(m, keyMsg(rapid.SampledFrom([]string{"j", "k"}).Draw(t, "key")))
 			case 3:
+				// The list's width changes as a drag would, and the next
+				// listing lands.
 				m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
+				m = update(m, tea.WindowSizeMsg{Width: m.w, Height: m.h})
 			}
 			if !m.cockpit.issues {
 				continue

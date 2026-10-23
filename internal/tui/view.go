@@ -722,7 +722,11 @@ func (m model) cockpitHeader(left []seg, need, working, idle int) string {
 // keyboard is.
 func (m model) cockpitHints() []hint {
 	if m.cockpit.issues {
-		return []hint{{"enter", "start"}, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, {"?", "help"}}
+		enter := hint{"enter", "start"}
+		if !m.pickStarts() {
+			enter.label = "go to"
+		}
+		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, {"?", "help"}}
 	}
 	return []hint{{"o", "close"}, {"tab", "issues"}, {"enter", "type"}, {"c", "claude"}, {"t", "term"}, {"v", "review"}, {"?", "help"}}
 }
@@ -859,7 +863,7 @@ func (m model) helpBox() []string {
 	left = append(left, section("cockpit",
 		entry{"o", "open / close the cockpit"},
 		entry{"tab", "list or issues card"},
-		entry{"enter", "on an issue, start it"},
+		entry{"enter", "on an issue, start or go to it"},
 	)...)
 	right := section("digest",
 		entry{"d", "show / hide digests"},

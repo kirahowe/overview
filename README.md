@@ -134,10 +134,13 @@ and the issue's card lists six of its criteria at most.
 
 `tab` moves the keyboard into the issues card and back, while the
 window has room to show the card. There, `j` and
-`k` move between the issues, and `enter` starts a session on the
-selected one, with the first prompt `Work on <project>#<n>: <title>`, as
-`c` does on a workstream. The cockpit closes, and the new session shows
-beside the list with the keyboard in it.
+`k` move between the issues. On an issue that is a workstream already,
+one in review, in progress or blocked or with a session linked to it,
+`enter` moves the list's cursor to that workstream, and the cockpit
+stays open on it. On a ready issue, `enter` starts a session with the
+first prompt `Work on <project>#<n>: <title>`, as `c` does on a
+workstream. The cockpit closes, and the new session shows beside the
+list with the keyboard in it.
 
 A project that does not track its tasks gets a card in the issues
 card's place. It says what the `issues` tool would add, and that
