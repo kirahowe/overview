@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path"
@@ -1404,10 +1405,38 @@ func workRows(t *rapid.T) ([]fleet.Row, map[int]string, trackers) {
 	}
 	tk := genTasks(t, nil)
 	ts := trackers{}
-	for root, list := range tk.open {
-		ts[root] = tracker{id: tk.ids[root], issues: list}
+	for _, root := range slices.Sorted(maps.Keys(tk.open)) {
+		ts[root] = tracker{id: tk.ids[root], issues: parsedIssues(t, tk.open[root])}
 	}
 	return rows, ttys, ts
+}
+
+// messyTitle is a title as an issue's file may hold it: words with
+// newlines, tabs, escape sequences, other control characters and wide
+// characters among them.
+var messyTitle = rapid.Custom(func(t *rapid.T) string {
+	parts := rapid.SliceOfN(rapid.SampledFrom([]string{"fix", "the", "list", "日本語", "é", " ", "\n", "\r\n", "\t",
+		"\x1b[31m", "\x1b]0;x\x07", "\x1b[2J", "\x00", "\x7f", "\u0085", "\u009b"}), 0, 14).Draw(t, "parts")
+	return strings.Join(parts, "")
+})
+
+// parsedIssues are list as the issues CLI would print them, with messy
+// titles, read back through issues.ParseList as the refresh reads them.
+func parsedIssues(t *rapid.T, list []issues.Issue) []issues.Issue {
+	var docs []map[string]any
+	for _, i := range list {
+		docs = append(docs, map[string]any{"id": i.ID, "ref": i.Ref, "title": i.Title + messyTitle.Draw(t, "mtitle"),
+			"status": i.Status, "priority": i.Priority})
+	}
+	b, err := json.Marshal(map[string]any{"issues": docs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := issues.ParseList(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // j from the top visits every entry once, aliases and workstreams too, and

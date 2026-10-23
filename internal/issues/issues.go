@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The statuses an issue moves through.
@@ -96,9 +97,47 @@ type wire struct {
 	DetailsText string   `json:"details-text"`
 }
 
+// issue is the issue w describes, its text cleaned: whatever the files
+// hold, a field is shown on one line, and nothing in it reaches the
+// terminal as a control character.
 func (w wire) issue() Issue {
-	return Issue{ID: w.ID, Ref: w.Ref, Project: w.Project, Title: w.Title, Status: w.Status,
-		Priority: w.Priority, Type: w.Type, Tags: w.Tags, BlockedBy: w.BlockedBy, Details: w.DetailsText}
+	var tags []string
+	for _, t := range w.Tags {
+		tags = append(tags, OneLine(t))
+	}
+	return Issue{ID: w.ID, Ref: OneLine(w.Ref), Project: OneLine(w.Project), Title: OneLine(w.Title), Status: OneLine(w.Status),
+		Priority: OneLine(w.Priority), Type: OneLine(w.Type), Tags: tags, BlockedBy: w.BlockedBy, Details: Text(w.DetailsText)}
+}
+
+// OneLine is s on one line: control characters, newlines among them, are
+// removed, and each run of white space is one space, with none at either
+// end.
+func OneLine(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s)), " ")
+}
+
+// Text is s with its lines kept: a tab is a space, and every other control
+// character but the newline is removed.
+func Text(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n':
+			return r
+		case r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // ParseList reads the output of list --json.

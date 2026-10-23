@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	"pgregory.net/rapid"
 )
@@ -225,6 +226,7 @@ func TestPropParseListRoundTrips(t *testing.T) {
 		}
 		for k := range in {
 			a, b := in[k], got[k]
+			a.Title = OneLine(a.Title)
 			if len(a.Tags) == 0 && len(b.Tags) == 0 {
 				a.Tags, b.Tags = nil, nil
 			}
@@ -327,6 +329,69 @@ func TestPropRanksAreTotal(t *testing.T) {
 		p := rapid.String().Draw(t, "p")
 		if r := PriorityRank(p); (r <= 3) != (len(p) == 2 && p[0] == 'p' && p[1] >= '0' && p[1] <= '3') {
 			t.Fatalf("PriorityRank(%q) = %d", p, r)
+		}
+	})
+}
+
+// messy is text with the characters that break a layout or reach the
+// terminal as commands: newlines, tabs, escape sequences, other controls,
+// and wide characters around them.
+var messy = rapid.Custom(func(t *rapid.T) string {
+	parts := rapid.SliceOfN(rapid.SampledFrom([]string{"fix", "the", "日本", "é", " ", "  ", "\n", "\r\n", "\t",
+		"\x1b[31m", "\x1b]0;title\x07", "\x00", "\x7f", "\u0085", "\u009b", "\u2028"}), 0, 12).Draw(t, "parts")
+	return strings.Join(parts, "")
+})
+
+func hasControl(s string, allow rune) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r != allow && unicode.IsControl(r) })
+}
+
+// OneLine leaves one line of the same words, single spaced and free of
+// control characters, and changes nothing more on a second pass. Text
+// keeps the lines and drops every other control character.
+func TestPropCleaning(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		s := rapid.OneOf(messy, rapid.String()).Draw(t, "s")
+		one := OneLine(s)
+		if hasControl(one, -1) || strings.Contains(one, "  ") || strings.TrimSpace(one) != one {
+			t.Fatalf("OneLine(%q) = %q", s, one)
+		}
+		if strings.ContainsFunc(one, func(r rune) bool { return r != ' ' && unicode.IsSpace(r) }) {
+			t.Fatalf("OneLine(%q) = %q keeps other white space", s, one)
+		}
+		if OneLine(one) != one {
+			t.Fatalf("OneLine is not idempotent on %q", s)
+		}
+		text := Text(s)
+		if hasControl(text, '\n') || strings.Count(text, "\n") != strings.Count(s, "\n") || Text(text) != text {
+			t.Fatalf("Text(%q) = %q", s, text)
+		}
+	})
+}
+
+// Every text field the CLI prints comes out of the parsers clean.
+func TestPropParsedFieldsAreClean(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		doc := map[string]any{"id": 1, "ref": messy.Draw(t, "ref"), "project": messy.Draw(t, "project"),
+			"title": messy.Draw(t, "title"), "status": messy.Draw(t, "status"), "priority": messy.Draw(t, "priority"),
+			"type": messy.Draw(t, "type"), "tags": []string{messy.Draw(t, "tag")}, "details-text": messy.Draw(t, "details")}
+		b, _ := json.Marshal(doc)
+		i, err := ParseShow(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{i.Ref, i.Project, i.Title, i.Status, i.Priority, i.Type, i.Tags[0]} {
+			if f != OneLine(f) {
+				t.Fatalf("field %q is not clean in %+v", f, i)
+			}
+		}
+		if i.Details != Text(i.Details) {
+			t.Fatalf("details %q are not clean", i.Details)
+		}
+		lb, _ := json.Marshal(map[string]any{"issues": []any{doc}})
+		l, err := ParseList(lb)
+		if err != nil || !reflect.DeepEqual(l[0], i) {
+			t.Fatalf("list gave %+v, show %+v (%v)", l, i, err)
 		}
 	})
 }
