@@ -1098,6 +1098,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if _, tracked := m.trackers[m.target().root]; !tracked && !m.cockpit.issues {
 			return m.say("this project does not track its issues"), nil
 		}
+		if !m.cockpit.issues && !m.issuesShown() {
+			return m.say("the window has no room for the issues card"), nil
+		}
 		m.cockpit.issues = !m.cockpit.issues
 	case cockpitMove:
 		others, _ := m.others(m.target())

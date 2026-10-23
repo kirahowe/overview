@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -188,6 +189,7 @@ func TestIssuesCard(t *testing.T) {
 		"│   up next      #9 urgent                       │",
 		"│                #5 threads                      │",
 		"│                #10 later                       │",
+		"│                … 1 more                        │",
 		"│   inbox 2                                      │",
 		"└────────────────────────────────────────────────┘",
 	})
@@ -198,8 +200,41 @@ func TestIssuesCard(t *testing.T) {
 	if !slices.Equal(ids, []int{4, 7, 14, 9, 5, 10}) {
 		t.Fatalf("pickable %v", ids)
 	}
+	// Each group lists a few, so the card stays short enough to show.
+	var many []issues.Issue
+	for n, st := range map[string]int{issues.Review: 5, issues.InProgress: 6, issues.Blocked: 4, issues.Ready: 9} {
+		for j := 0; j < st; j++ {
+			many = append(many, issues.Issue{ID: 100 + len(many), Title: "x", Status: n})
+		}
+	}
+	text := ansi.Strip(strings.Join(drawn(issuesCard(many, nil, false, 0, nil), 50), "\n"))
+	for _, want := range []string{"… 2 more", "… 2 more", "… 2 more", "… 6 more"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("lacks %q:\n%s", want, text)
+		}
+	}
+	if n := len(pickable(many)); n != 3+4+2+3 {
+		t.Fatalf("%d pickable, want those listed", n)
+	}
 	if got := drawn(issuesCard(nil, nil, false, 0, nil), 40); !strings.Contains(got[1], "no other open issues") {
 		t.Fatalf("empty: %q", got)
+	}
+}
+
+// An issue with many criteria lists the first few and counts the rest.
+func TestIssueCardCapsItsCriteria(t *testing.T) {
+	var crit []issues.Criterion
+	for i := 0; i < 9; i++ {
+		crit = append(crit, issues.Criterion{Text: fmt.Sprint("c", i), Done: i < 2})
+	}
+	text := ansi.Strip(strings.Join(drawn(issueCard(6, issueInfo{criteria: crit}), 40), "\n"))
+	for _, want := range []string{"acceptance  2 of 9", "○ c5", "… 3 more"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "c6") {
+		t.Errorf("lists past the cap:\n%s", text)
 	}
 }
 

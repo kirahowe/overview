@@ -1618,6 +1618,38 @@ func TestPropCockpitFitsAnySize(t *testing.T) {
 	})
 }
 
+// The card with the keyboard is always one the cockpit shows: whatever
+// the size, the cursor and the keys pressed, the issues card has the
+// keyboard only while it is drawn, with its cursor on a listed issue.
+func TestPropTheFocusedCardIsShown(t *testing.T) {
+	base := workModel(t, 150, 40)
+	rapid.Check(t, func(t *rapid.T) {
+		m := base
+		m = update(m, keyMsg("o"))
+		for n := rapid.IntRange(1, 12).Draw(t, "n"); n > 0; n-- {
+			switch rapid.IntRange(0, 3).Draw(t, "do") {
+			case 0:
+				m = update(m, tea.WindowSizeMsg{Width: rapid.IntRange(20, 220).Draw(t, "w"), Height: rapid.IntRange(4, 70).Draw(t, "h")})
+			case 1:
+				m = update(m, keyMsg("tab"))
+			case 2:
+				m = update(m, keyMsg(rapid.SampledFrom([]string{"j", "k"}).Draw(t, "key")))
+			case 3:
+				m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
+			}
+			if !m.cockpit.issues {
+				continue
+			}
+			if !m.issuesShown() {
+				t.Fatalf("the issues card has the keyboard but is not shown at %dx%d", m.w, m.h)
+			}
+			if !strings.Contains(ansi.Strip(m.View()), "▸ ") {
+				t.Fatalf("the issues card's cursor is not drawn at %dx%d:\n%s", m.w, m.h, ansi.Strip(m.View()))
+			}
+		}
+	})
+}
+
 // When the entry under the cursor goes, the cursor stays with its
 // session while the session is listed: an issue that closes or links
 // that change move its entries, never the cursor to another session.

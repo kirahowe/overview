@@ -128,9 +128,12 @@ the blocked ones, the next three ready ones by priority, and how many sit
 in the inbox. A
 project's cockpit shows its root and the kind of repository, its
 sessions and terminals, its issues, and its uncommitted changes. A card
-the window has no room for is left out, from the bottom up.
+the window has no room for is left out, from the bottom up. Each group
+of the issues card lists a few issues and says how many more it has,
+and the issue's card lists six of its criteria at most.
 
-`tab` moves the keyboard into the issues card and back. There, `j` and
+`tab` moves the keyboard into the issues card and back, while the
+window has room to show the card. There, `j` and
 `k` move between the issues, and `enter` starts a session on the
 selected one, with the first prompt `Work on <project>#<n>: <title>`, as
 `c` does on a workstream. The cockpit closes, and the new session shows

@@ -185,7 +185,7 @@ func cockpitListWidth(want, w int) int {
 func (m model) cockpitBody() []string {
 	h := m.listHeight()
 	lw := cockpitListWidth(m.width.want, m.w)
-	cw := m.w
+	cw, _ := m.cardsSize()
 	var left []string
 	if lw > 0 {
 		lm := m
@@ -196,7 +196,6 @@ func (m model) cockpitBody() []string {
 				left[i] = lm.plain("")
 			}
 		}
-		cw = m.w - lw - 1
 	}
 	cards := m.cockpitCards(cw, h)
 	out := make([]string, h)
@@ -209,6 +208,35 @@ func (m model) cockpitBody() []string {
 		}
 	}
 	return out
+}
+
+// cardsSize is the width and height of the cockpit's cards: the window
+// beside the list and its border, between the header and the footer.
+func (m model) cardsSize() (w, h int) {
+	if lw := cockpitListWidth(m.width.want, m.w); lw > 0 {
+		return m.w - lw - 1, m.listHeight()
+	}
+	return m.w, m.listHeight()
+}
+
+// issuesShown says whether the cockpit has room for the target's issues
+// card, the only card that takes the keyboard. layoutCards drops cards
+// from the end, so it is shown when fewer cards come before it than are
+// shown.
+func (m model) issuesShown() bool {
+	rows := m.cockpitRows(m.target())
+	w, h := m.cardsSize()
+	_, shown := layoutCards(rows, w, h)
+	before := 0
+	for _, r := range rows {
+		for _, c := range r {
+			if c.keys {
+				return before < shown
+			}
+			before++
+		}
+	}
+	return false
 }
 
 // cockpitCards is the cards for the target, h lines of exactly w cells.
@@ -563,14 +591,15 @@ func (m model) startPicked() (model, tea.Cmd) {
 }
 
 // keepCockpit gives the keyboard back to the list when the cursor has
-// moved to a project with no issues card, and keeps the card's cursor on
+// moved to a project with no issues card, or the window has no room to
+// show it, and keeps the card's cursor on
 // an issue it lists.
 func (m model) keepCockpit() model {
 	if !m.cockpit.open || !m.cockpit.issues {
 		return m
 	}
 	t := m.target()
-	if _, tracked := m.trackers[t.root]; !tracked {
+	if _, tracked := m.trackers[t.root]; !tracked || !m.issuesShown() {
 		m.cockpit.issues, m.cockpit.pick = false, 0
 		return m
 	}

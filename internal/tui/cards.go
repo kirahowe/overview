@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,11 +28,12 @@ const (
 // card is one box of the cockpit: a title and a note set into its top
 // edge, and a body drawn at the width inside the border. right is styled
 // already. accent draws the border in the accent colour, for the header
-// and for a card with the keyboard.
+// and for a card with the keyboard. keys marks the card that can take
+// the keyboard.
 type card struct {
 	title, right string
 	body         func(w int) []string
-	accent       bool
+	accent, keys bool
 }
 
 // render draws c as h lines w wide, its body padded with blank lines or
@@ -253,6 +253,10 @@ func issueSummary(details string) string {
 	return strings.Join(para, " ")
 }
 
+// shownCriteria is how many acceptance criteria the issue card lists
+// before it says how many more there are.
+const shownCriteria = 6
+
 // issueInfo is what the issue card shows, read with issues show.
 type issueInfo struct {
 	loading  bool
@@ -297,12 +301,19 @@ func issueCard(id int, info issueInfo) card {
 			}
 		}
 		out = append(out, heading.Render("acceptance")+"  "+dim.Render(fmt.Sprintf("%d of %d", done, len(info.criteria))))
-		for _, c := range info.criteria {
+		shown := info.criteria
+		if len(shown) > shownCriteria {
+			shown = shown[:shownCriteria]
+		}
+		for _, c := range shown {
 			if c.Done {
 				out = append(out, green.Render("✓")+" "+fg(pal.Text).Render(c.Text))
 			} else {
 				out = append(out, dim.Render("○")+" "+dim.Render(c.Text))
 			}
+		}
+		if more := len(info.criteria) - len(shown); more > 0 {
+			out = append(out, dim.Render(fmt.Sprintf("… %d more", more)))
 		}
 		return out
 	}}
@@ -442,13 +453,24 @@ func reviewCard(s review.Summary) card {
 	}}
 }
 
-// upNext is how many ready issues the issues card offers.
-const upNext = 3
+// issueGroup is one group of the issues card: its label, its colour, the
+// issues it lists, and how many more it has than it lists.
+type issueGroup struct {
+	name   string
+	colour lipgloss.Color
+	shown  []issues.Issue
+	more   int
+}
+
+// groupCaps is the most issues each group of the issues card lists, so
+// the card stays short enough for the cockpit to show it whole.
+var groupCaps = map[string]int{"in review": 3, "in progress": 4, "blocked": 2, "up next": 3}
 
 // issueGroups is what the issues card lists of a project's other open
-// issues: those in review, those in progress, the blocked ones, the first
-// ready ones by priority, and how many are in the inbox.
-func issueGroups(others []issues.Issue) (review, progress, blocked, next []issues.Issue, inbox int) {
+// issues: those in review, those in progress, the blocked ones and the
+// ready ones, each by priority and cut to its cap, and how many are in
+// the inbox.
+func issueGroups(others []issues.Issue) (groups []issueGroup, inbox int) {
 	sorted := append([]issues.Issue(nil), others...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if a, b := issues.PriorityRank(sorted[i].Priority), issues.PriorityRank(sorted[j].Priority); a != b {
@@ -456,52 +478,63 @@ func issueGroups(others []issues.Issue) (review, progress, blocked, next []issue
 		}
 		return sorted[i].ID < sorted[j].ID
 	})
+	groups = []issueGroup{
+		{name: "in review", colour: pal.Blocked},
+		{name: "in progress", colour: pal.Working},
+		{name: "blocked", colour: pal.Asking},
+		{name: "up next", colour: pal.Accent},
+	}
+	of := map[string]int{issues.Review: 0, issues.InProgress: 1, issues.Blocked: 2, issues.Ready: 3}
 	for _, i := range sorted {
-		switch i.Status {
-		case issues.Review:
-			review = append(review, i)
-		case issues.InProgress:
-			progress = append(progress, i)
-		case issues.Blocked:
-			blocked = append(blocked, i)
-		case issues.Ready:
-			if len(next) < upNext {
-				next = append(next, i)
-			}
-		case issues.Inbox:
+		if i.Status == issues.Inbox {
 			inbox++
+			continue
+		}
+		g, ok := of[i.Status]
+		if !ok {
+			continue
+		}
+		if len(groups[g].shown) < groupCaps[groups[g].name] {
+			groups[g].shown = append(groups[g].shown, i)
+		} else {
+			groups[g].more++
 		}
 	}
-	return
+	return groups, inbox
 }
 
-// pickable is the issues the issues card's cursor walks, in its order.
+// pickable is the issues the issues card's cursor walks, in its order:
+// those it lists.
 func pickable(others []issues.Issue) []issues.Issue {
-	r, p, b, n, _ := issueGroups(others)
-	return slices.Concat(r, p, b, n)
+	groups, _ := issueGroups(others)
+	var out []issues.Issue
+	for _, g := range groups {
+		out = append(out, g.shown...)
+	}
+	return out
 }
 
 // issuesCard lists the project's other open issues. linked counts the
 // sessions on each, by number. With the keyboard, pick marks the issue
-// enter starts work on. err is why the last read of them failed, if it
-// did, and the card then lists what the last good read found.
+// enter acts on. err is why the last read of them failed, if it did, and
+// the card then lists what the last good read found.
 func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, err error) card {
-	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), accent: focused, body: func(w int) []string {
+	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), accent: focused, keys: true, body: func(w int) []string {
 		var out []string
 		if err != nil {
 			out = wrap(fg(pal.Asking).Render("issues failed: "+issues.OneLine(err.Error())), w)
 		}
-		rev, prog, blocked, next, inbox := issueGroups(others)
-		if len(rev)+len(prog)+len(blocked)+len(next) == 0 && inbox == 0 {
+		groups, inbox := issueGroups(others)
+		if len(pickable(others)) == 0 && inbox == 0 {
 			return append(out, dim.Render("no other open issues"))
 		}
 		const label = 13
 		n := 0
-		group := func(name string, style lipgloss.Style, is []issues.Issue) {
-			for j, i := range is {
+		for _, g := range groups {
+			for j, i := range g.shown {
 				head := strings.Repeat(" ", label)
 				if j == 0 {
-					head = style.Render(fmt.Sprintf("%-*s", label, name))
+					head = fg(g.colour).Render(fmt.Sprintf("%-*s", label, g.name))
 				}
 				mark := "  "
 				if focused && n == pick {
@@ -518,11 +551,10 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 				out = append(out, mark+head+text)
 				n++
 			}
+			if g.more > 0 {
+				out = append(out, "  "+strings.Repeat(" ", label)+dim.Render(fmt.Sprintf("… %d more", g.more)))
+			}
 		}
-		group("in review", fg(pal.Blocked), rev)
-		group("in progress", fg(pal.Working), prog)
-		group("blocked", fg(pal.Asking), blocked)
-		group("up next", fg(pal.Accent), next)
 		if inbox > 0 {
 			out = append(out, "  "+dim.Render(fmt.Sprintf("inbox %d", inbox)))
 		}

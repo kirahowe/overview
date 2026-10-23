@@ -158,7 +158,11 @@ in the issues card's place that says what `issues` does and that
 `issues init` in the project's root starts it.
 
 A card the window has no room for is dropped, from the bottom up,
-rather than squeezed.
+rather than squeezed. To keep the issues card short enough to show,
+each of its groups lists a few issues (three in review, four in
+progress, two blocked, three up next) and counts the rest, and the
+issue card lists six criteria at most. When the issues card is dropped
+anyway, the keyboard goes back to the list, and `tab` leaves it there.
 
 The cards come from running jj, git and `issues`, which the view never
 does on its own goroutine. Commands run for the selected entry when it
