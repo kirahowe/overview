@@ -27,7 +27,7 @@ func taskKey(root string, id int) string { return root + "#" + strconv.Itoa(id) 
 // tracker is one project's issues as the refreshes read them. A run that
 // failed keeps the issues of the last that worked, and its error.
 type tracker struct {
-	id     string // the project id, from project.edn or the root's name
+	id     string // the project id: the list's, else project.edn's, else the root's name
 	stamp  string // .issues when last read: see issueStamp
 	ran    time.Time
 	issues []issues.Issue // the open ones
@@ -71,20 +71,41 @@ func readTrackers(old trackers, roots []string, run issues.Runner, d deps, now t
 			out[root] = t
 			continue
 		}
-		t.id = filepath.Base(root)
-		if b, err := d.readFile(filepath.Join(root, ".issues", "project.edn")); err == nil {
-			if id, ok := issues.ProjectID(string(b)); ok && id != "" {
-				t.id = id
-			}
-		}
 		t.stamp, t.ran = stamp, now
 		list, err := issues.List(run, root)
 		if t.err = err; err == nil {
+			t.id = listedID(list)
 			t.issues = slices.DeleteFunc(list, func(i issues.Issue) bool { return !issues.Open(i.Status) })
+		}
+		if t.id == "" {
+			t.id = fallbackID(d.readFile, root)
 		}
 		out[root] = t
 	}
 	return out
+}
+
+// listedID is the project id the issues list gives, "" when it has no
+// issue that names one. It is the CLI's own word for the project, so it
+// wins over the fallbacks.
+func listedID(list []issues.Issue) string {
+	for _, i := range list {
+		if i.Project != "" {
+			return i.Project
+		}
+	}
+	return ""
+}
+
+// fallbackID is the project id of a tracker whose list names none, as an
+// empty one does: the :id of its project.edn, or else the root's name.
+func fallbackID(readFile func(string) ([]byte, error), root string) string {
+	if b, err := readFile(filepath.Join(root, ".issues", "project.edn")); err == nil {
+		if id, ok := issues.ProjectID(string(b)); ok && id != "" {
+			return id
+		}
+	}
+	return filepath.Base(root)
 }
 
 // trackerRoots are the roots whose trackers a refresh reads: the known

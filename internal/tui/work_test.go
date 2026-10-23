@@ -465,3 +465,26 @@ func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
 		t.Fatalf("spawned %+v selects %v, want s1's pane", f.spawned, f.selects)
 	}
 }
+
+// The list's project field names the project, whatever project.edn and
+// the root's name say. An empty list falls back to them, and a failed run
+// keeps the id the last good one gave.
+func TestTheListNamesTheProject(t *testing.T) {
+	f := newFakeIssues()
+	f.project("/w/app", "edn-id")
+	f.lists["/w/app"] = `{"issues": [{"id": 6, "ref": "listed#6", "project": "listed", "status": "in-progress", "title": "w"}]}`
+	f.project("/w/empty", "edn-id")
+	f.project("/w/bare", "")
+	d := f.deps()
+	ts := readTrackers(nil, []string{"/w/app", "/w/empty", "/w/bare"}, f.run, d, t0)
+	for root, want := range map[string]string{"/w/app": "listed", "/w/empty": "edn-id", "/w/bare": "bare"} {
+		if got := ts[root].id; got != want {
+			t.Errorf("%s: id %q, want %q", root, got, want)
+		}
+	}
+	f.fail["/w/app"] = true
+	f.mtime["/w/app"] = t0.Add(time.Second)
+	if got := readTrackers(ts, []string{"/w/app"}, f.run, d, t0.Add(time.Minute))["/w/app"]; got.err == nil || got.id != "listed" {
+		t.Errorf("after a failed run: %+v", got)
+	}
+}
