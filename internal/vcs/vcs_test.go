@@ -233,12 +233,19 @@ func TestBaseAtCommands(t *testing.T) {
 	if err != nil || id != "bbb" {
 		t.Fatalf("git BaseAt = %q %v", id, err)
 	}
-	want = [][]string{{"git", "reflog", "show", "--date=unix", "--format=%H %gd", "HEAD"}}
+	want = [][]string{{"git", "reflog", "show", "--date=unix", "--format=%H %gd %gs", "HEAD"}}
 	if !reflect.DeepEqual(f.argv(), want) {
 		t.Errorf("ran %v", f.argv())
 	}
 	if _, err := (Repo{"/g", Git}).BaseAt(f.run, time.Unix(50, 0)); err == nil {
 		t.Error("a time before the reflog should be an error")
+	}
+	f = &fake{replies: map[string]string{
+		"git reflog":      "aaa HEAD@{1500} commit: more\nbbb HEAD@{900} commit (initial): first\n",
+		"git hash-object": "empty\n",
+	}}
+	if id, err := (Repo{"/g", Git}).BaseAt(f.run, time.Unix(50, 0)); err != nil || id != "empty" {
+		t.Errorf("a repository born after t should diff from the empty tree, got %q %v", id, err)
 	}
 	f = &fake{}
 	if _, err := (Repo{"/r", JJ}).BaseAt(f.run, at); err == nil {

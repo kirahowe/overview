@@ -250,7 +250,8 @@ func oneCommit(out, rev string) (string, error) {
 
 // BaseAt returns the commit id to diff from to see what changed since t:
 // the working-copy commit jj had at the last operation ending by t, or
-// the commit git's HEAD named then.
+// the commit git's HEAD named then. A git repository whose first commit
+// came after t is diffed from the empty tree, so all of it counts.
 func (r Repo) BaseAt(run Runner, t time.Time) (string, error) {
 	if r.Kind == JJ {
 		return r.jjBaseAt(run, t)
@@ -259,7 +260,15 @@ func (r Repo) BaseAt(run Runner, t time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sha, ok := ReflogAt(ParseReflog(string(out)), t)
+	entries := ParseReflog(string(out))
+	sha, ok := ReflogAt(entries, t)
+	if !ok && Born(entries) {
+		tree, err := run(r.Root, gitEmptyTreeArgs()...)
+		if err != nil {
+			return "", err
+		}
+		return oneCommit(string(tree), "the empty tree")
+	}
 	if !ok {
 		return "", fmt.Errorf("HEAD has no history from before %s", t.Format(time.RFC3339))
 	}
@@ -311,5 +320,9 @@ func jjOpLogArgs() []string {
 }
 
 func gitReflogArgs() []string {
-	return []string{"git", "reflog", "show", "--date=unix", "--format=%H %gd", "HEAD"}
+	return []string{"git", "reflog", "show", "--date=unix", "--format=%H %gd %gs", "HEAD"}
 }
+
+// gitEmptyTreeArgs print the empty tree's id, which depends on the
+// repository's hash.
+func gitEmptyTreeArgs() []string { return []string{"git", "hash-object", "-t", "tree", "/dev/null"} }

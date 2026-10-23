@@ -43,21 +43,24 @@ func OpIndexAt(ops []Op, t time.Time) (int, bool) {
 type ReflogEntry struct {
 	SHA  string
 	Time time.Time
+	// Subject is what moved HEAD, such as "commit (initial): x".
+	Subject string
 }
 
-// ParseReflog reads lines of "<sha> HEAD@{<unix seconds>}", newest first.
-// A line that does not fit is skipped.
+// ParseReflog reads lines of "<sha> HEAD@{<unix seconds>} <subject>",
+// newest first. A line that does not fit is skipped.
 func ParseReflog(out string) []ReflogEntry {
 	var entries []ReflogEntry
 	for _, line := range strings.Split(out, "\n") {
 		sha, sel, ok := strings.Cut(strings.TrimSpace(line), " ")
+		sel, subject, _ := strings.Cut(sel, " ")
 		_, rest, found := strings.Cut(sel, "@{")
 		secs, closed := strings.CutSuffix(rest, "}")
 		n, err := strconv.ParseInt(secs, 10, 64)
 		if !ok || sha == "" || !found || !closed || err != nil {
 			continue
 		}
-		entries = append(entries, ReflogEntry{sha, time.Unix(n, 0)})
+		entries = append(entries, ReflogEntry{sha, time.Unix(n, 0), subject})
 	}
 	return entries
 }
@@ -70,4 +73,10 @@ func ReflogAt(entries []ReflogEntry, t time.Time) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Born reports whether the reflog reaches back to the repository's first
+// commit, so that nothing older is missing from it.
+func Born(entries []ReflogEntry) bool {
+	return len(entries) > 0 && strings.HasPrefix(entries[len(entries)-1].Subject, "commit (initial)")
 }

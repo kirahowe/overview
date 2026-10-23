@@ -21,8 +21,9 @@ func TestParseOpLog(t *testing.T) {
 }
 
 func TestParseReflog(t *testing.T) {
-	got := ParseReflog("aaa HEAD@{1792634408}\nbbb HEAD@{5}\nnope\nccc HEAD@{x}\nddd HEAD@{7\n")
-	if len(got) != 2 || got[0].SHA != "aaa" || got[0].Time != time.Unix(1792634408, 0) || got[1].SHA != "bbb" {
+	got := ParseReflog("aaa HEAD@{1792634408}\nbbb HEAD@{5} commit (initial): x y\nnope\nccc HEAD@{x}\nddd HEAD@{7\n")
+	if len(got) != 2 || got[0].SHA != "aaa" || got[0].Time != time.Unix(1792634408, 0) || got[1].SHA != "bbb" ||
+		got[1].Subject != "commit (initial): x y" || !Born(got) || Born(got[:1]) {
 		t.Errorf("got %+v", got)
 	}
 }
