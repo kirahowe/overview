@@ -33,6 +33,7 @@ type fakeMux struct {
 	killed  []string // the windows KillWindow closed
 	spawned []spawnCall
 	moves   []string          // the size each move asked for
+	widths  []int             // the widths SetWidth gave the list
 	layouts []string          // the windows whose layout was read
 	set     map[string]string // the layouts set, by window
 	detach  int
@@ -184,9 +185,19 @@ func (f *fakeMux) Move(list, target, size string) error {
 	if err != nil {
 		w = 48 // a share of a window 160 wide
 	}
-	f.panes[i].Session, f.panes[i].Window, f.panes[i].W = f.panes[j].Session, f.panes[j].Window, w
+	f.panes[i].Session, f.panes[i].Window, f.panes[i].W, f.panes[i].WinW = f.panes[j].Session, f.panes[j].Window, w, f.panes[j].WinW
 	f.current[f.panes[j].Session] = f.panes[j].Window
 	f.focus = list // join-pane makes the list the active pane
+	return nil
+}
+
+func (f *fakeMux) SetWidth(pane string, cols int) error {
+	i := f.find(pane)
+	if i < 0 {
+		return errors.New("can't find pane")
+	}
+	f.widths = append(f.widths, cols)
+	f.panes[i].W = cols
 	return nil
 }
 
@@ -611,6 +622,80 @@ func TestTheListKeepsItsWidth(t *testing.T) {
 	pressSettled(t, m, "j")
 	if len(f.moves) != moves+1 || f.moves[moves] != "42" {
 		t.Fatalf("moves %v, want the dragged 42", f.moves)
+	}
+}
+
+// setWinW makes every pane in window win's window w wide.
+func (f *fakeMux) setWinW(win string, w int) {
+	for i := range f.panes {
+		if f.panes[i].Window == win {
+			f.panes[i].WinW = w
+		}
+	}
+}
+
+// Browsing moves the list into windows left at the width the terminal had
+// when they were last shown. tmux snaps each to the terminal's width, which
+// takes the difference out of the list, and before the view kept its width
+// a few moves took it to a column, where the view panicked and its pane
+// closed. The next listing gives the list its width back.
+func TestASqueezedListGetsItsWidthBack(t *testing.T) {
+	f := newFakeMux()
+	for _, p := range f.panes {
+		f.setWinW(p.Window, 283)
+	}
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	// The terminal is 229 wide, and the user dragged the list to 60.
+	f.setWinW(f.stage(), 229)
+	f.panes[f.find("%0")].W = 60
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	if m.width.want != 60 || len(f.widths) != 0 {
+		t.Fatalf("kept %d, resized to %v, after a drag to 60", m.width.want, f.widths)
+	}
+	for _, key := range []string{"j", "k", "j"} {
+		// Every other window was last shown when the terminal was 283 wide.
+		for _, p := range f.panes {
+			if p.Window != f.stage() {
+				f.setWinW(p.Window, 283)
+			}
+		}
+		m = pressSettled(t, m, key)
+		if got := f.moves[len(f.moves)-1]; got != "60" {
+			t.Fatalf("moved %s wide, want 60", got)
+		}
+		// The window snaps from 283 to 229, and tmux takes 54 from the list.
+		f.setWinW(f.stage(), 229)
+		f.panes[f.find("%0")].W = 6
+		m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+		m = settle(t, m, cmd)
+		if w := f.panes[f.find("%0")].W; w != 60 || m.width.want != 60 {
+			t.Fatalf("the list is %d wide, keeping %d, want 60", w, m.width.want)
+		}
+	}
+}
+
+// A list squeezed past listMin by a terminal that narrowed is put back to
+// it, and when the terminal widens again it gets the width it had.
+func TestANarrowedTerminalKeepsTheListUsable(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	f.setWinW(f.stage(), 160)
+	f.panes[f.find("%0")].W = 50
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	f.setWinW(f.stage(), 45)
+	f.panes[f.find("%0")].W = 1
+	m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	if w := f.panes[f.find("%0")].W; w != listMin {
+		t.Fatalf("the list is %d wide in 45, want %d", w, listMin)
+	}
+	f.setWinW(f.stage(), 160)
+	m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	settle(t, m, cmd)
+	if w := f.panes[f.find("%0")].W; w != 50 {
+		t.Fatalf("the list is %d wide in 160 again, want the 50 it had", w)
 	}
 }
 

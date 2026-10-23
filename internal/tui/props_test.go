@@ -504,22 +504,30 @@ func TestPropWindow(t *testing.T) {
 // window. Carried out on the listing, the move puts the list in the wanted
 // pane's window, after which there is nothing left to plan, and the layout
 // fix-up is asked for exactly when the window the list left keeps two or
-// more panes. The list keeps its width when it shared its window, which is
-// a width the user may have dragged it to, and takes listShare when it was
-// alone, and so as wide as the window.
+// more panes. The list goes at the width it keeps, fitted to the window it
+// goes to. Until it keeps one, it goes as wide as it is when it shared its
+// window, a width the user may have dragged it to, and takes listShare
+// when it was alone, and so as wide as the window.
 func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var panes []tmux.Pane
+		winW := map[int]int{}
 		for i := range rapid.IntRange(1, 8).Draw(t, "n") {
+			win := rapid.IntRange(0, 3).Draw(t, "win")
+			if _, ok := winW[win]; !ok {
+				winW[win] = rapid.SampledFrom([]int{0, 20, 80, 229, 283}).Draw(t, "winw")
+			}
 			panes = append(panes, tmux.Pane{
 				ID:     fmt.Sprintf("%%%d", i),
-				Window: fmt.Sprintf("@%d", rapid.IntRange(0, 3).Draw(t, "win")),
+				Window: fmt.Sprintf("@%d", win),
 				W:      rapid.IntRange(1, 200).Draw(t, "w"),
+				WinW:   winW[win],
 			})
 		}
 		self := rapid.SampledFrom(panes).Draw(t, "self")
 		want := rapid.SampledFrom(append(slices.Clone(panes), tmux.Pane{ID: "%99"})).Draw(t, "want")
-		mv, ok := plan(self.ID, want.ID, panes)
+		width := rapid.OneOf(rapid.Just(0), rapid.IntRange(1, 200)).Draw(t, "width")
+		mv, ok := plan(self.ID, want.ID, panes, width)
 		if ok != (want.ID != "%99" && want.Window != self.Window) {
 			t.Fatalf("move %v for want %+v, list %+v", ok, want, self)
 		}
@@ -538,10 +546,19 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		if mv.to != want.ID || mv.from != self.Window || mv.fix != (left >= 2) {
 			t.Fatalf("plan %+v for want %s, list %+v, %d left behind", mv, want.ID, self, left)
 		}
-		if size := strconv.Itoa(self.W); (left > 0 && mv.size != size) || (left == 0 && mv.size != listShare) {
-			t.Fatalf("the list %d wide, with %d beside it, moves %s wide", self.W, left, mv.size)
+		size := listShare
+		switch {
+		case width > 0 && want.WinW > 0:
+			size = strconv.Itoa(fitList(width, want.WinW))
+		case width > 0:
+			size = strconv.Itoa(width)
+		case left > 0:
+			size = strconv.Itoa(self.W)
 		}
-		if again, ok := plan(self.ID, want.ID, after); ok {
+		if mv.size != size {
+			t.Fatalf("the list %d wide, keeping %d, with %d beside it, moves %s wide into %d, want %s", self.W, width, left, mv.size, want.WinW, size)
+		}
+		if again, ok := plan(self.ID, want.ID, after, width); ok {
 			t.Fatalf("after the move, plan asks for %+v", again)
 		}
 	})
@@ -922,6 +939,82 @@ func TestPropViewFitsAnySize(t *testing.T) {
 			if got := ansi.StringWidth(l); got > w {
 				t.Fatalf("line %d is %d wide in a pane %d wide: %q", i, got, w, l)
 			}
+		}
+	})
+}
+
+// Whatever tmux does to it, the list ends up at the width the user last
+// dragged it to, fitted to its window, once the view has seen it and
+// carried out the resize it asked for: a window that narrows, or one the
+// list moves into at a width it was left at, squeezes the list only until
+// the next listing. A squeeze comes with a change of window or window
+// width, and a drag with neither. A list alone in its window fills it and
+// is left be.
+func TestPropTheListKeepsTheWidthDraggedTo(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// A window the list shares is at least 3 wide: the list, a border,
+		// and a column of the pane beside it.
+		list := tmux.Pane{ID: "%0", Window: "@0", WinW: rapid.IntRange(3, 300).Draw(t, "winw")}
+		list.W = rapid.IntRange(1, list.WinW-2).Draw(t, "w")
+		var k listWidth
+		dragged := list.W
+		look := func(alone bool) {
+			var to int
+			k, to = k.seen(list, alone)
+			if to != 0 {
+				list.W = to
+			}
+		}
+		look(false)
+		for range rapid.IntRange(1, 12).Draw(t, "events") {
+			alone := false
+			switch rapid.IntRange(0, 3).Draw(t, "event") {
+			case 0: // the user drags the border, if it moves at all
+				if w := rapid.IntRange(1, list.WinW-2).Draw(t, "drag"); w != list.W {
+					list.W, dragged = w, w
+				}
+			case 1: // the terminal narrows or widens, and tmux squeezes the list
+				list.WinW = rapid.IntRange(3, 300).Filter(func(w int) bool { return w != list.WinW }).Draw(t, "resize")
+				list.W = rapid.IntRange(1, list.WinW-2).Draw(t, "squeezed")
+			case 2: // the list moves into another window, shown at any width
+				list.Window = rapid.SampledFrom([]string{"@0", "@1", "@2"}).Filter(func(w string) bool { return w != list.Window }).Draw(t, "win")
+				list.WinW = rapid.IntRange(3, 300).Draw(t, "movedw")
+				list.W = rapid.IntRange(1, list.WinW-2).Draw(t, "moved")
+			case 3: // the list is alone in its window
+				list.W, alone = list.WinW, true
+			}
+			look(alone)
+			if alone {
+				if list.W != list.WinW {
+					t.Fatalf("a list alone was resized to %d in %d", list.W, list.WinW)
+				}
+				continue
+			}
+			if want := fitList(dragged, list.WinW); list.W != want {
+				t.Fatalf("the list is %d wide in %d, dragged to %d, want %d (%+v)", list.W, list.WinW, dragged, want, k)
+			}
+			if _, again := k.seen(list, false); again != 0 {
+				t.Fatalf("seen again at %d, the list is resized to %d", list.W, again)
+			}
+		}
+	})
+}
+
+// fitList keeps the list at least listMin wide, and leaves besideMin and a
+// border beside it, when the window has room for both; in a smaller one
+// they share it. It never goes outside the window.
+func TestPropFitList(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		want, win := rapid.IntRange(0, 400).Draw(t, "want"), rapid.IntRange(1, 400).Draw(t, "win")
+		got := fitList(want, win)
+		if got > win || got < 1 {
+			t.Fatalf("fitList(%d, %d) = %d, outside the window", want, win, got)
+		}
+		if win >= listMin+besideMin+1 && (got < listMin || win-got-1 < besideMin) {
+			t.Fatalf("fitList(%d, %d) = %d, leaving %d", want, win, got, win-got-1)
+		}
+		if lo := max(min(listMin, max(win-besideMin-1, win/2)), 1); want >= lo && want <= max(win-besideMin-1, lo) && got != want {
+			t.Fatalf("fitList(%d, %d) = %d, though %d fits", want, win, got, want)
 		}
 	})
 }

@@ -139,8 +139,10 @@ The mouse works too. A click selects a session, a double click moves the
 keyboard into it as `enter` does, and the wheel moves through the list and
 scrolls the digests. A click also closes help and cancels a stop. tmux has
 the mouse on, so a click on a pane focuses it, and you can drag the borders
-between panes. The list keeps the width you drag it to. Most terminals,
-Ghostty included, select text when you hold shift.
+between panes. The list keeps the width you drag it to, in every window it
+moves into and when the terminal is resized. It stays at least 24 columns
+wide and leaves 20 beside it, when the window has room for both. Most
+terminals, Ghostty included, select text when you hold shift.
 
 The first run writes overview's tmux settings to `tmux.conf` in overview's
 config directory (`~/.config/overview` unless `--config` names another).

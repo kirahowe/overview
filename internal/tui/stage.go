@@ -31,8 +31,12 @@ const (
 	// that exits leaves the stage within about this long.
 	panesEvery = 500 * time.Millisecond
 	// listShare is the list's width when it has no width of its own to
-	// keep, because it is alone in its window.
+	// keep, because it has not yet shared a window.
 	listShare = "30%"
+	// listMin is the narrowest the list is kept while its window has room,
+	// and besideMin the narrowest it leaves the panes beside it.
+	listMin   = 24
+	besideMin = 20
 )
 
 // multiplexer is the part of tmux.Server the view needs. Tests fake it.
@@ -47,6 +51,7 @@ type multiplexer interface {
 	KillWindow(window string) error
 	KillPane(pane string) error
 	Split(target, dir, size string, env []string, command ...string) (tmux.Pane, error)
+	SetWidth(pane string, cols int) error
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
@@ -153,9 +158,10 @@ type shift struct {
 }
 
 // plan decides how the list, pane self, gets beside pane want, given every
-// pane on the server. It reports false when no move is needed, because want
-// is already in the list's window, or is not listed.
-func plan(self, want string, panes []tmux.Pane) (shift, bool) {
+// pane on the server and the width the list keeps, 0 when it has none yet.
+// It reports false when no move is needed, because want is already in the
+// list's window, or is not listed.
+func plan(self, want string, panes []tmux.Pane, width int) (shift, bool) {
 	var list, target tmux.Pane
 	for _, p := range panes {
 		switch p.ID {
@@ -174,13 +180,94 @@ func plan(self, want string, panes []tmux.Pane) (shift, bool) {
 			n++
 		}
 	}
-	// The list goes as wide as it is, so a width the user dragged it to is
-	// kept, unless it is alone and so as wide as the whole window.
+	// The list keeps its width, fitted to the window it goes to. Until it
+	// has one, it goes as wide as it is, unless it is alone and so as wide
+	// as the whole window.
 	size := listShare
-	if n > 1 && list.W > 0 {
+	switch {
+	case width > 0 && target.WinW > 0:
+		size = strconv.Itoa(fitList(width, target.WinW))
+	case width > 0:
+		size = strconv.Itoa(width)
+	case n > 1 && list.W > 0:
 		size = strconv.Itoa(list.W)
 	}
 	return shift{to: want, from: list.Window, size: size, fix: n > 2}, true
+}
+
+// listWidth is the width the list keeps, and where it was last seen, which
+// tells a width the user dragged it to from one tmux squeezed it to: tmux
+// takes a narrowing window's columns from its leftmost pane, the list, and
+// a window not shown since the terminal narrowed snaps to the terminal's
+// width once the list moves into it.
+type listWidth struct {
+	want   int    // the width the list keeps, 0 until it has shared a window
+	set    int    // the width it was left at when last seen
+	window string // the list's window when last seen
+	winW   int    // and that window's width
+}
+
+// fitList is want in a window win columns wide: no narrower than listMin
+// and no wider than leaves besideMin and a border, or half the window each
+// when it has room for neither, and never no width at all.
+func fitList(want, win int) int {
+	lo := max(min(listMin, max(win-besideMin-1, win/2)), 1)
+	hi := max(win-besideMin-1, lo)
+	return min(max(want, lo), hi)
+}
+
+// seen takes the list's pane from a fresh listing, and whether it is alone
+// in its window, and says what width to resize it to, 0 for none. A change
+// in the same window at the same window width is the user's, and becomes
+// the width kept. Any other is tmux's, and the list gets its width back.
+// A list alone is as wide as its window, which says nothing about the
+// width it keeps.
+func (k listWidth) seen(list tmux.Pane, alone bool) (listWidth, int) {
+	if list.WinW <= 0 {
+		return k, 0
+	}
+	same := list.Window == k.window && list.WinW == k.winW
+	k.window, k.winW = list.Window, list.WinW
+	if alone {
+		k.set = list.W
+		return k, 0
+	}
+	if k.want == 0 || (same && list.W != k.set) {
+		k.want = list.W
+	}
+	k.set = fitList(k.want, list.WinW)
+	if k.set == list.W {
+		return k, 0
+	}
+	return k, k.set
+}
+
+// widthMsg answers a resize of the list.
+type widthMsg struct{ err error }
+
+// keepWidth reads the list's width off the listing just taken, which must
+// be current, and resizes it when tmux has squeezed it. The resize counts
+// as a spawn, so no listing asked for before it lands, with the old width,
+// is taken for a drag.
+func (m model) keepWidth() (model, tea.Cmd) {
+	list, ok := m.pane(m.self)
+	if !ok || m.mux == nil || m.staging {
+		return m, nil
+	}
+	n := 0
+	for _, p := range m.panes {
+		if p.Window == list.Window {
+			n++
+		}
+	}
+	var to int
+	m.width, to = m.width.seen(list, n == 1)
+	if to == 0 {
+		return m, nil
+	}
+	m.spawns++
+	mux, self := m.mux, m.self
+	return m, func() tea.Msg { return widthMsg{mux.SetWidth(self, to)} }
 }
 
 // stageCmd carries out a shift. tmux gives the list's width to the column
@@ -383,7 +470,7 @@ func (m model) restage() (model, tea.Cmd) {
 	}
 	// With the keyboard outside the list, the list stays beside the pane
 	// the user is in, unless an action asked to go somewhere.
-	if mv, ok := plan(m.self, want, m.panes); ok && (!m.blurred || m.entering != "") {
+	if mv, ok := plan(m.self, want, m.panes, m.width.want); ok && (!m.blurred || m.entering != "") {
 		m.staging = true
 		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.landed)
 	}
@@ -449,22 +536,23 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.spawningHolder = true
 			return m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
 		}
+		return m.keepWidth()
 	case stagedMsg:
 		m.staging = false
 		if msg.err != nil {
 			m.failed, m.entering = msg.to, ""
 			m = m.say("could not show the session: " + msg.err.Error())
 		}
+		// The holder may have been resized, so draw it afresh.
+		m.holderShown = ""
 		switch {
 		case msg.panes == nil:
 		case m.current(msg.gen):
-			m = m.setPanes(msg.panes, msg.roots)
+			return m.setPanes(msg.panes, msg.roots).keepWidth()
 		default:
 			// The rest may be stale, but where the list went is not.
 			m.panes = movedSelf(m.panes, msg.panes, m.self)
 		}
-		// The holder may have been resized, so draw it afresh.
-		m.holderShown = ""
 	case spawnedMsg:
 		m.landed++
 		if msg.kind == spawnHolder {
@@ -510,19 +598,23 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
 		m.entering = msg.pane.ID
+	case widthMsg:
+		m.landed++
+		if msg.err != nil {
+			return m.say("could not resize the list: " + msg.err.Error()), nil
+		}
 	case closedMsg:
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
 		}
 		m = m.say(msg.note)
 		if m.current(msg.gen) {
-			m = m.setPanes(msg.panes, msg.roots)
-		} else {
-			// The rest may be stale, but the window is gone and the list
-			// is where it went, so no move aims at a closed pane.
-			gone := slices.DeleteFunc(slices.Clone(m.panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
-			m.panes = movedSelf(gone, msg.panes, m.self)
+			return m.setPanes(msg.panes, msg.roots).keepWidth()
 		}
+		// The rest may be stale, but the window is gone and the list is
+		// where it went, so no move aims at a closed pane.
+		gone := slices.DeleteFunc(slices.Clone(m.panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
+		m.panes = movedSelf(gone, msg.panes, m.self)
 	}
 	return m, nil
 }
@@ -567,12 +659,12 @@ type closedMsg struct {
 // closeCmd closes a terminal's window, and everything that runs in it.
 // When the list is in that window it first goes beside the holder, since
 // closing the window with the list in it would end the view.
-func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t terminal, panes []tmux.Pane, gen int) tea.Cmd {
+func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t terminal, panes []tmux.Pane, width, gen int) tea.Cmd {
 	inside := false
 	for _, p := range panes {
 		inside = inside || (p.ID == self && p.Window == t.Window)
 	}
-	mv, canMove := plan(self, holder, panes)
+	mv, canMove := plan(self, holder, panes, width)
 	return func() tea.Msg {
 		fail := func(err error) tea.Msg {
 			return closedMsg{err: errors.New("could not close " + t.Title + ": " + err.Error())}

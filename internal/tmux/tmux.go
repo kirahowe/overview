@@ -39,12 +39,12 @@ const ViewOption = "@overview-view"
 
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
-const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{" + ListOption + "}" +
+const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 14
+const paneFields = 15
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -53,6 +53,7 @@ type Pane struct {
 	Session string
 	Window  string // "@2"
 	W, H    int
+	WinW    int    // the width of the pane's window
 	List    bool   // the view runs here
 	Command string // what runs in the foreground: "zsh", "node"
 	Path    string // the foreground process's directory
@@ -140,13 +141,14 @@ func ParsePanes(out string) []Pane {
 		}
 		w, err1 := strconv.Atoi(f[4])
 		h, err2 := strconv.Atoi(f[5])
-		if err1 != nil || err2 != nil {
+		ww, err3 := strconv.Atoi(f[6])
+		if err1 != nil || err2 != nil || err3 != nil {
 			continue
 		}
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
-			W: w, H: h, List: f[6] == "1",
-			Command: f[7], Project: f[8], Attach: f[9], Holder: f[10] == "1", View: f[11], Review: f[12], Path: f[13],
+			W: w, H: h, WinW: ww, List: f[7] == "1",
+			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Path: f[14],
 		})
 	}
 	return panes
@@ -246,6 +248,13 @@ func (s Server) Split(target, dir, size string, env []string, command ...string)
 // Resize makes pane size tall, as Split takes it.
 func (s Server) Resize(pane, size string) error {
 	_, err := s.run("resize-pane", "-t", pane, "-y", size)
+	return err
+}
+
+// SetWidth makes pane cols columns wide, taking the columns from or giving
+// them to the panes beside it.
+func (s Server) SetWidth(pane string, cols int) error {
+	_, err := s.run("resize-pane", "-t", pane, "-x", strconv.Itoa(cols))
 	return err
 }
 

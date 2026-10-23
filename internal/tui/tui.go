@@ -133,10 +133,13 @@ type model struct {
 	// fails, so it never focuses a pane the user has since left.
 	entering string
 	// spawns counts the panes asked for, which all get options set, and
-	// landed those whose Cmd has come back. A listing is taken only when
-	// none is pending and it was asked for after the latest one landed:
-	// any other may show a pane before its options were set.
+	// the list's resizes, and landed those whose Cmd has come back. A
+	// listing is taken only when none is pending and it was asked for after
+	// the latest one landed: any other may show a pane before its options
+	// were set, or the list at a width it no longer has.
 	spawns, landed int
+	// width is the list's width, as keepWidth keeps it.
+	width listWidth
 	// pins counts the writes to the pinned projects asked for, and
 	// pinsLanded those done. A refresh that read the file before the
 	// latest write landed is not taken for the pins.
@@ -650,7 +653,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.unblur()
 	case tea.BlurMsg:
 		m.blurred = true
-	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg:
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		// Input that reaches the list proves the user is there, whether or
@@ -790,7 +793,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.landed)
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.width.want, m.landed)
 			}
 		}
 		for _, r := range m.rows {

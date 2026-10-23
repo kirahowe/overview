@@ -17,17 +17,17 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t\tzsh\t\t\t\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
-		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, List: true, Command: "overview",
+		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, List: true, Command: "overview",
 			View: `"--theme" "x"`, Path: "/w"},
-		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24,
+		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80,
 			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -46,6 +46,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Window:  fmt.Sprintf("@%d", rapid.IntRange(0, 99).Draw(t, "win")),
 				W:       rapid.IntRange(1, 500).Draw(t, "w"),
 				H:       rapid.IntRange(1, 200).Draw(t, "h"),
+				WinW:    rapid.IntRange(1, 500).Draw(t, "winw"),
 				List:    rapid.Bool().Draw(t, "list"),
 				Command: rapid.SampledFrom([]string{"", "zsh", "node", "claude", "-zsh"}).Draw(t, "cmd"),
 				Project: rapid.SampledFrom([]string{"", "/w/app", "/w/a b"}).Draw(t, "project"),
@@ -64,8 +65,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				}
 				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Path)
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -475,6 +476,31 @@ func TestMoveTakesAPercentOfTheWindow(t *testing.T) {
 	p := byID(t, s)[list]
 	if p.Window != target.Window || p.W < 59 || p.W > 60 {
 		t.Fatalf("the list is %d wide in %s, want 30%% of 200 beside %s", p.W, p.Window, target.ID)
+	}
+}
+
+// A window that narrows takes its lost columns from the leftmost pane, the
+// list, so a window that was wider when last shown squeezes the list moved
+// into it. SetWidth gives the list its width back.
+func TestANarrowingWindowSqueezesTheList(t *testing.T) {
+	s := testServer(t)
+	list := strings.TrimSpace(must(t)(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep", "300")))
+	target, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Move(list, target.ID, "60"); err != nil {
+		t.Fatal(err)
+	}
+	must(t)(s.run("resize-window", "-t", target.Window, "-x", "150"))
+	if p := byID(t, s)[list]; p.WinW != 150 || p.W >= 60 {
+		t.Fatalf("the list is %d wide in a window %d wide, want it squeezed in 150", p.W, p.WinW)
+	}
+	if err := s.SetWidth(list, 60); err != nil {
+		t.Fatal(err)
+	}
+	if p := byID(t, s)[list]; p.W != 60 {
+		t.Fatalf("the list is %d wide after SetWidth 60", p.W)
 	}
 }
 

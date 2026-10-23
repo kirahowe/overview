@@ -256,7 +256,7 @@ func TestStageCmdLeavesTheOldWindowProportional(t *testing.T) {
 		return out
 	}
 	before := width()
-	mv, ok := plan(list, target.ID, slices.Collect(maps.Values(before)))
+	mv, ok := plan(list, target.ID, slices.Collect(maps.Values(before)), 0)
 	if !ok || !mv.fix {
 		t.Fatalf("plan %+v, %v", mv, ok)
 	}
