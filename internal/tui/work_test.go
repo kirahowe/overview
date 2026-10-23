@@ -341,7 +341,7 @@ func TestResolveLinksKeepsTheLatestLast(t *testing.T) {
 	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/app"}, Tasks: []fleet.TaskRef{
 		{Project: "app", ID: 1}, {Project: "app", ID: 2}, {Dir: "/w/app", ID: 1}, {Project: "app", ID: 3},
 	}}
-	got := resolveLinks([]fleet.Row{r}, ts, map[string]bool{"/w/app": true}, func(d string) string { return d })
+	got, _ := resolveLinks([]fleet.Row{r}, ts, map[string]bool{"/w/app": true}, func(d string) string { return d })
 	if want := []string{"/w/app#2", "/w/app#1"}; !slices.Equal(got["s"], want) {
 		t.Fatalf("links %v, want %v", got["s"], want)
 	}

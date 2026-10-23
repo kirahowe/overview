@@ -216,11 +216,13 @@ func resolveTask(ref fleet.TaskRef, own string, ts trackers, known map[string]bo
 
 // resolveLinks is the workstreams each session is linked to, by session
 // ID, oldest first and each once, where it sits as late as it was last
-// linked. own is the root of a session's project.
-func resolveLinks(rows []fleet.Row, ts trackers, known map[string]bool, root func(string) string) map[string][]string {
-	out := map[string][]string{}
+// linked, and when the session first linked to each, as its refs say.
+// own is the root of a session's project.
+func resolveLinks(rows []fleet.Row, ts trackers, known map[string]bool, root func(string) string) (map[string][]string, map[string]map[string]time.Time) {
+	out, at := map[string][]string{}, map[string]map[string]time.Time{}
 	for _, r := range rows {
 		var keys []string
+		when := map[string]time.Time{}
 		for _, ref := range r.Tasks {
 			k := resolveTask(ref, root(r.Cwd), ts, known, root)
 			if k == "" {
@@ -228,12 +230,20 @@ func resolveLinks(rows []fleet.Row, ts trackers, known map[string]bool, root fun
 			}
 			keys = slices.DeleteFunc(keys, func(o string) bool { return o == k })
 			keys = append(keys, k)
+			// Two refs, such as a prompt's and a command's, can name
+			// the same workstream: the earlier link counts.
+			if t := ref.Linked; !t.IsZero() && (when[k].IsZero() || t.Before(when[k])) {
+				when[k] = t
+			}
 		}
 		if len(keys) > 0 {
 			out[r.SessionID] = keys
 		}
+		if len(when) > 0 {
+			at[r.SessionID] = when
+		}
 	}
-	return out
+	return out, at
 }
 
 // tasks is what buildList knows of the projects' issues: the open ones of
@@ -244,6 +254,9 @@ type tasks struct {
 	ids    map[string]string
 	failed map[string]bool
 	links  map[string][]string
+	// linked is when each session first linked each workstream, by
+	// session ID then key, where its refs say.
+	linked map[string]map[string]time.Time
 }
 
 // tasksOf is tasks for the trackers of the known roots, and of the roots
@@ -253,7 +266,8 @@ func tasksOf(ts trackers, known []string, rows []fleet.Row, root func(string) st
 	for _, r := range known {
 		isKnown[r] = true
 	}
-	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, failed: map[string]bool{}, links: resolveLinks(rows, ts, isKnown, root)}
+	links, linked := resolveLinks(rows, ts, isKnown, root)
+	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, failed: map[string]bool{}, links: links, linked: linked}
 	use := func(r string) {
 		if t, ok := ts[r]; ok {
 			tk.open[r], tk.ids[r], tk.failed[r] = t.issues, t.id, t.err != nil

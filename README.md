@@ -116,11 +116,11 @@ and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
 first, then do what they always do.
 
 A workstream's cockpit starts with a header: the issue's reference,
-title, status and priority, how long ago its first session started, and
+title, status and priority, how long ago it was taken on, and
 its sessions and terminals. Then come the issue's details from `issues
 show`, with its acceptance criteria and how many are done. The changes
 and the review sit side by side in a wide window. The changes are the
-files changed since the first session started, most changed first, and
+files changed since the workstream was taken on, most changed first, and
 how many of them are still uncommitted. The review counts the open notes
 across the workstream's sessions and the replies waiting on you. Last
 are the project's other open issues: those in review, those in progress,
@@ -146,8 +146,12 @@ A project that does not track its tasks gets a card in the issues
 card's place. It says what the `issues` tool would add, and that
 `issues init` in the project's root starts it, or that the tool needs
 installing when overview has none. overview reads the changes with git
-or jj when the cockpit opens, every five seconds while it is open, and
-when one of its sessions changes state. It reads an issue's details
+or jj when the cockpit opens and when one of its sessions changes
+state. A workstream was taken on when the first of its sessions linked
+to it, or, for a session whose link has no time, when that session
+started. Once the cockpit has found the commit to count from, it keeps
+it while it is open: a session ending does not move it, and only a
+session that took the work on sooner moves it earlier. It reads an issue's details
 again only when a file in `.issues` changes.
 
 A terminal is a window in overview's tmux that runs no Claude session: a

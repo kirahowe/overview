@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"slices"
 	"strings"
 	"testing"
@@ -336,6 +337,82 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	}
 	if shows != 1 {
 		t.Fatalf("issues show ran %d times with .issues unchanged", shows)
+	}
+}
+
+// A workstream's changes count from when it was first taken on, the
+// earliest link among its sessions, and that base holds: a session ending
+// does not move it later, time passing reads nothing again, and only a
+// session that took it on sooner moves it earlier.
+func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
+	m := taskModel(t, newFakeMux())
+	linked := func(r fleet.Row, at int64) fleet.Row {
+		r.StartedAt = 1_700_000_300_000
+		r.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6, Linked: time.UnixMilli(at)}}
+		return r
+	}
+	s1, s2 := linked(m.rows[0], 1_700_000_000_000), linked(m.rows[1], 1_700_000_200_000)
+	clock := time.Unix(1_700_001_000, 0)
+	m.deps.now = func() time.Time { return clock }
+	reflogs, reads := 0, 0
+	m.deps.exists = func(p string) bool { return p == "/code/app/.git" }
+	m.deps.vcs = func(dir string, args ...string) ([]byte, error) {
+		reads++
+		switch {
+		case slices.Contains(args, "reflog"):
+			reflogs++
+			return []byte("bbb HEAD@{1700000100}\naaa HEAD@{1699999000}\n"), nil
+		case slices.Contains(args, "rev-parse"):
+			return []byte("bbb\n"), nil
+		}
+		return nil, nil
+	}
+	set := func(rows ...fleet.Row) {
+		t.Helper()
+		var cmd tea.Cmd
+		m, cmd = step(m, rowsMsg{rows: rows, ttys: m.ttys})
+		m = settle(t, m, cmd)
+	}
+	set(s1, s2)
+	m = selectKey(t, m, "task:/code/app#6")
+	m = resized(t, m, 150, 40)
+	m = pressSettled(t, m, "o")
+	key := taskPrefix + "/code/app#6"
+	if c := m.changeReads[key]; c.base != "aaa" || c.start != 1_700_000_000_000 || reflogs != 1 {
+		t.Fatalf("base %q start %d after %d reflogs", c.base, c.start, reflogs)
+	}
+	// Time passes with nothing changed: nothing is read.
+	n := reads
+	clock = clock.Add(time.Minute)
+	set(s1, s2)
+	if reads != n {
+		t.Fatalf("read again with nothing changed: %d", reads-n)
+	}
+	// The session that took it on first ends: the base stays.
+	set(s2)
+	if c := m.changeReads[key]; c.base != "aaa" || c.start != 1_700_000_000_000 || reflogs != 1 || reads == n {
+		t.Fatalf("after s1 ended: base %q start %d, %d reflogs, %d reads", c.base, c.start, reflogs, reads-n)
+	}
+	// One that took it on sooner moves it earlier.
+	set(s2, linked(s1, 1_699_999_500_000))
+	if c := m.changeReads[key]; c.start != 1_699_999_500_000 || reflogs != 2 {
+		t.Fatalf("after an earlier link: start %d, %d reflogs", c.start, reflogs)
+	}
+}
+
+func TestStreamStart(t *testing.T) {
+	key := "/w#1"
+	a := fleet.Row{Live: fleet.Live{SessionID: "a", StartedAt: 500}}
+	b := fleet.Row{Live: fleet.Live{SessionID: "b", StartedAt: 300}}
+	linked := map[string]map[string]time.Time{"a": {key: time.UnixMilli(200)}, "b": {"/w#2": time.UnixMilli(100)}}
+	if got := streamStart([]fleet.Row{a, b}, key, linked); got != 200 {
+		t.Fatalf("got %d, want a's link at 200", got)
+	}
+	if got := streamStart([]fleet.Row{b}, key, linked); got != 300 {
+		t.Fatalf("got %d, want b's start, its refs having no time for %s", got, key)
+	}
+	if got := streamStart(nil, key, linked); got != 0 {
+		t.Fatalf("got %d with no rows", got)
 	}
 }
 

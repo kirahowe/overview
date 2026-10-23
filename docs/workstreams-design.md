@@ -149,10 +149,10 @@ For a workstream, in this order:
   terminal).
 - The issue: its details from `issues show`, with the acceptance
   criteria and which are checked.
-- Changes: the diff since the workstream's first session started, as a
-  stat per file, and how much is still uncommitted. Work that subagents
-  do in other worktrees shows only once it reaches the project's
-  checkout.
+- Changes: the diff since the workstream was taken on, the earliest
+  time any of its sessions linked to it, as a stat per file, and how
+  much is still uncommitted. Work that subagents do in other worktrees
+  shows only once it reaches the project's checkout.
 - Review: the open notes across the workstream's sessions, the replies
   waiting on you, and when notes were last sent.
 - The project's other issues: those in review, those in progress with
@@ -175,8 +175,10 @@ anyway, the keyboard goes back to the list, and `tab` leaves it there.
 
 The cards come from running jj, git and `issues`, which the view never
 does on its own goroutine. Commands run for the selected entry when it
-is selected, when a hook event reports a session in its project, and
-every few seconds while the cockpit is open. Their results are cached
+is selected and when a hook event reports a session in its project. No
+timer runs them, since every jj command snapshots the working copy. A
+workstream's base commit is found once for the time it was taken on,
+and found again only when that time moves earlier. Their results are cached
 per project. jj and git sit behind `vcs.Runner`, as the review's
 commands do, and `issues` behind a seam of its own. It is called as
 `issues --dir <root> list --json` and `issues --dir <root> show <n>

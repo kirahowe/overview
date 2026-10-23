@@ -254,11 +254,9 @@ func (m model) inCockpitList(x int) bool {
 
 // The cockpit's reads run in Cmds and land in caches by target: the
 // issue's details, read again when its project's .issues changes, and the
-// changes, read on opening, every changesEvery while open, and when what
-// the target's sessions are doing changes.
-
-// changesEvery is how often the cockpit reads its target's changes again.
-const changesEvery = 5 * time.Second
+// changes, read on opening and when what the target's sessions are doing
+// changes. A timer would run jj, which snapshots the working copy, every
+// few seconds for nothing.
 
 // issueRead is an issue's details as last read, for the .issues stamp
 // they were read at. pending is set while a read is out.
@@ -270,12 +268,13 @@ type issueRead struct {
 
 // changesRead is a target's changes as last read. sig is what its sessions
 // were doing when they were asked for, and base the commit a workstream's
-// changes are read from, found once for its start.
+// changes are read from, found once for its start. fresh says they were
+// asked for since the cockpit opened.
 type changesRead struct {
 	sig     string
 	start   int64
 	base    string
-	asked   time.Time
+	fresh   bool
 	pending bool
 	kind    string // the repository's, "" when there is none
 	info    changeInfo
@@ -331,6 +330,32 @@ func (m model) targetTerms(t target) []terminal {
 	return out
 }
 
+// streamStart is when the workstream key was taken on, in Unix
+// milliseconds: the earliest time any of rows linked to it, or for a
+// session whose refs have no time, when it started. 0 when none says.
+func streamStart(rows []fleet.Row, key string, linked map[string]map[string]time.Time) int64 {
+	var first int64
+	for _, r := range rows {
+		at := r.StartedAt
+		if t := linked[r.SessionID][key]; !t.IsZero() {
+			at = t.UnixMilli()
+		}
+		if at > 0 && (first == 0 || at < first) {
+			first = at
+		}
+	}
+	return first
+}
+
+// targetStart is when the target's work began: a workstream's start, as
+// streamStart has it, or for a project when its first session started.
+func (m model) targetStart(t target, rows []fleet.Row) int64 {
+	if t.task == "" {
+		return started(rows)
+	}
+	return streamStart(rows, t.task, m.tasks().linked)
+}
+
 // started is when the earliest of rows started, in Unix milliseconds, 0
 // when none says.
 func started(rows []fleet.Row) int64 {
@@ -367,8 +392,11 @@ func withRead[V any](mp map[string]V, k string, v V) map[string]V {
 
 // cockpitReads asks for what the open cockpit's target lacks: its issue's
 // details when they are missing or older than its .issues, and its
-// changes when they are missing, older than changesEvery, or from before
-// its sessions last changed.
+// changes when they are missing, not yet read since the cockpit opened,
+// or from before its sessions last changed. A workstream's base is kept
+// once found, and found again only when its start moves earlier, as when
+// a session that took it on sooner is listed: a session ending must not
+// move it later.
 func (m model) cockpitReads() (model, tea.Cmd) {
 	if !m.cockpit.open {
 		return m, nil
@@ -390,24 +418,27 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 			})
 		}
 	}
-	key, now := cockpitKey(t), m.deps.now()
+	key := cockpitKey(t)
 	rows := m.targetRows(t)
-	sig, start := sessionsSig(rows), started(rows)
+	sig, start := sessionsSig(rows), m.targetStart(t, rows)
 	c, ok := m.changeReads[key]
-	if c.pending || (ok && c.sig == sig && now.Sub(c.asked) < changesEvery) {
+	if c.pending || (ok && c.sig == sig && c.fresh) {
 		return m, tea.Batch(cmds...)
 	}
 	stream := t.task != ""
-	if stream && start == 0 {
-		c.sig, c.asked, c.info = sig, now, changeInfo{noStart: true}
+	if stream && start == 0 && c.base == "" {
+		c.sig, c.fresh, c.info = sig, true, changeInfo{noStart: true}
 		m.changeReads = withRead(m.changeReads, key, c)
 		return m, tea.Batch(cmds...)
 	}
 	base := c.base
-	if c.start != start {
+	switch {
+	case base == "" || (start > 0 && start < c.start):
 		base = ""
+	default:
+		start = c.start
 	}
-	c.sig, c.asked, c.pending = sig, now, true
+	c.sig, c.fresh, c.pending = sig, true, true
 	c.info.noStart = false
 	m.changeReads = withRead(m.changeReads, key, c)
 	return m, tea.Batch(append(cmds, changesCmd(key, sig, t.root, start, base, stream, m.deps))...)
@@ -473,11 +504,12 @@ func (m model) landRead(msg tea.Msg) model {
 }
 
 // stale is the changes with every read made old, so opening the cockpit
-// reads its target's again while showing what it read last.
+// reads its target's again while showing what it read last. A new
+// cockpit finds each workstream's base afresh.
 func stale(mp map[string]changesRead) map[string]changesRead {
 	out := make(map[string]changesRead, len(mp))
 	for k, v := range mp {
-		v.asked = time.Time{}
+		v.fresh, v.base, v.start = false, "", 0
 		out[k] = v
 	}
 	return out
@@ -521,6 +553,15 @@ func (m model) others(t target) ([]issues.Issue, map[int]int) {
 	return out, linked
 }
 
+// changeStart is when the target's changes are counted from: the start
+// its base was found for, once it has one, and else its start now.
+func (m model) changeStart(t target, rows []fleet.Row) int64 {
+	if c := m.changeReads[cockpitKey(t)]; c.base != "" && c.start > 0 {
+		return c.start
+	}
+	return m.targetStart(t, rows)
+}
+
 // cockpitRows is the cards for target t, in rows from the top.
 func (m model) cockpitRows(t target) [][]card {
 	rows, terms := m.targetRows(t), m.targetTerms(t)
@@ -553,7 +594,7 @@ func (m model) cockpitRows(t target) [][]card {
 		}
 	}
 	since := ""
-	if s := started(rows); s > 0 {
+	if s := m.changeStart(t, rows); s > 0 {
 		since = Ago(time.UnixMilli(s))
 	}
 	ir, ok := m.issueReads[t.task]
