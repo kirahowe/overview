@@ -729,6 +729,7 @@ func genPanes(t *rapid.T) []tmux.Pane {
 			Path:    rapid.SampledFrom([]string{"/w/a", "/w/a/sub", "/w/b", ""}).Draw(t, "path"),
 			Project: rapid.SampledFrom([]string{"", "", "/w/p"}).Draw(t, "project"),
 			Attach:  rapid.SampledFrom([]string{"", "", "", "bg1"}).Draw(t, "attach"),
+			Task:    rapid.SampledFrom([]string{"", "", "/w/p#6"}).Draw(t, "task"),
 		}
 	}
 	return panes
@@ -793,7 +794,7 @@ func TestPropTerminals(t *testing.T) {
 			if wantProject == "" {
 				wantProject = root(first.Path)
 			}
-			if tm.Pane != first.ID || tm.Path != first.Path || tm.Project != wantProject || tm.Title != termTitle(ps) {
+			if tm.Pane != first.ID || tm.Path != first.Path || tm.Project != wantProject || tm.Task != first.Task || tm.Title != termTitle(ps) {
 				t.Fatalf("terminal %+v from panes %+v", tm, ps)
 			}
 		}

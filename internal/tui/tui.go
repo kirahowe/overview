@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -54,7 +55,9 @@ type (
 		// written is when each row's transcript was last written, by path.
 		written map[string]time.Time
 		reviews map[string]review.Summary
-		err     error
+		// trackers are the issues of the projects that have them.
+		trackers trackers
+		err      error
 	}
 	digestMsg struct {
 		d   fleet.Digest
@@ -73,7 +76,11 @@ type model struct {
 	home fleet.Home
 	llm  string
 	// issues runs the issues CLI, nil when overview was started without one.
-	issues issues.Runner
+	// trackers holds what it said of each project, as the latest refresh
+	// read it, and goes into every refresh so an unchanged project is not
+	// read again.
+	issues   issues.Runner
+	trackers trackers
 
 	rows    []fleet.Row
 	ttys    map[int]string
@@ -251,6 +258,9 @@ type deps struct {
 	recentTurns func(path string, n int) []fleet.Turn
 	// reviews reads the reviews of rows' sessions, by session ID.
 	reviews func(home fleet.Home, rows []fleet.Row) map[string]review.Summary
+	glob    func(pattern string) []string // the paths that match pattern
+	// readFile reads a file whole.
+	readFile func(path string) ([]byte, error)
 }
 
 // roots finds the project roots of dirs.
@@ -258,7 +268,13 @@ func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve
 
 func systemDeps() deps {
 	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
-		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns, reviews: readReviews}
+		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns, reviews: readReviews,
+		glob: glob, readFile: os.ReadFile}
+}
+
+func glob(pattern string) []string {
+	out, _ := filepath.Glob(pattern)
+	return out
 }
 
 func modTime(path string) time.Time {
@@ -337,12 +353,16 @@ func (m model) refresh() tea.Msg {
 }
 
 // rowsMsg is a refresh of rows, with the roots of the directories it
-// names: the sessions', the pinned projects' and the one overview was
-// started in. It reads the disk, so it runs in a Cmd.
+// names: the sessions', their task refs', the pinned projects' and the one
+// overview was started in. It reads the disk and runs the issues CLI, so
+// it runs in a Cmd.
 func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host, pinned []string) rowsMsg {
 	dirs := append(slices.Clone(pinned), m.cwd)
 	for _, r := range rows {
 		dirs = append(dirs, r.Cwd)
+		for _, ref := range r.Tasks {
+			dirs = append(dirs, ref.Dir)
+		}
 	}
 	written := map[string]time.Time{}
 	for _, r := range rows {
@@ -350,7 +370,12 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host
 			written[r.Transcript] = m.deps.modTime(r.Transcript)
 		}
 	}
-	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, m.deps.roots(dirs...), written, m.deps.reviews(m.home, rows), nil}
+	rs := m.deps.roots(dirs...)
+	fresh := m
+	fresh.rows, fresh.pinned, fresh.rowRoots = rows, pinned, rs
+	known := trackerRoots(fresh.knownRoots(), rows, fresh.root)
+	ts := readTrackers(m.trackers, known, m.issues, m.deps, m.deps.now())
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), ts, nil}
 }
 
 // turnsKey names a transcript as it was when written at a moment.
@@ -704,7 +729,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.rows, m.ttys, m.hosts, m.rowRoots, m.written, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, msg.written, true
-		m.reviews = msg.reviews
+		m.reviews, m.trackers = msg.reviews, msg.trackers
 		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
 			m.pinned = msg.pinned
 		}

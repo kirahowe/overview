@@ -262,6 +262,7 @@ type terminal struct {
 	Project string // the project's root
 	Title   string // "node", or the shell's name when only shells run
 	Path    string // the first pane's directory
+	Task    string // the workstream it was opened for, its window's TaskOption
 }
 
 // shells are the commands a terminal's title skips over, since a shell is
@@ -304,7 +305,7 @@ func terminals(panes []tmux.Pane, session, self, opened string, claude map[strin
 		if project == "" {
 			project = root(first.Path)
 		}
-		out = append(out, terminal{Window: w, Pane: first.ID, Project: project, Title: termTitle(ps), Path: first.Path})
+		out = append(out, terminal{Window: w, Pane: first.ID, Project: project, Title: termTitle(ps), Path: first.Path, Task: first.Task})
 	}
 	sort.Slice(out, func(i, j int) bool { return windowLess(out[i].Window, out[j].Window) })
 	return out

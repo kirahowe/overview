@@ -19,6 +19,10 @@ const ListOption = "@overview-list"
 // started for, its root directory. Every pane in the window reads it.
 const ProjectOption = "@overview-project"
 
+// TaskOption is the window option that names the workstream a terminal was
+// opened for: its project root and issue number, "/w/app#6".
+const TaskOption = "@overview-task"
+
 // AttachOption is the pane option set on a pane that runs claude attach,
 // holding the background session's ID. It is a pane option, not a window
 // one, so a split beside the attach is not taken for it.
@@ -41,10 +45,10 @@ const ViewOption = "@overview-view"
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
-	"\t#{" + ReviewOption + "}\t#{pane_current_path}"
+	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 15
+const paneFields = 16
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -62,6 +66,7 @@ type Pane struct {
 	Holder  bool   // the pane's HolderOption is set
 	View    string // the pane's ViewOption, "" when unset
 	Review  string // the pane's ReviewOption, "" when unset
+	Task    string // the window's TaskOption, "" when unset
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -148,7 +153,7 @@ func ParsePanes(out string) []Pane {
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, List: f[7] == "1",
-			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Path: f[14],
+			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Path: f[15],
 		})
 	}
 	return panes

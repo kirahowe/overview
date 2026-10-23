@@ -86,7 +86,7 @@ func (f *fakeMux) add(session, tty string) tmux.Pane {
 func (f *fakeMux) split(id string) tmux.Pane {
 	beside := f.panes[f.find(id)]
 	p := tmux.Pane{ID: fmt.Sprintf("%%%d", f.next), TTY: fmt.Sprintf("ttys%d", 300+f.next), Session: beside.Session, Window: beside.Window, W: 80, H: 40,
-		Command: "zsh", Path: beside.Path, Project: beside.Project}
+		Command: "zsh", Path: beside.Path, Project: beside.Project, Task: beside.Task}
 	f.next++
 	f.panes = append(f.panes, p)
 	return p
@@ -105,7 +105,7 @@ func (f *fakeMux) Spawn(session, dir string, env []string, command ...string) (t
 }
 
 func (f *fakeMux) SetWindowOption(target, name, value string) error {
-	if name != tmux.ProjectOption {
+	if name != tmux.ProjectOption && name != tmux.TaskOption {
 		return fmt.Errorf("unexpected window option %s", name)
 	}
 	w := f.window(target)
@@ -116,8 +116,10 @@ func (f *fakeMux) SetWindowOption(target, name, value string) error {
 		return errors.New("can't find window " + target)
 	}
 	for i, p := range f.panes {
-		if p.Window == w {
+		if p.Window == w && name == tmux.ProjectOption {
 			f.panes[i].Project = value
+		} else if p.Window == w {
+			f.panes[i].Task = value
 		}
 	}
 	return nil
@@ -315,6 +317,8 @@ func fakeDeps(f *fakeMux) deps {
 	d.resolve = path.Clean
 	d.modTime = func(string) time.Time { return time.Time{} }
 	d.recentTurns = func(string, int) []fleet.Turn { return nil }
+	d.glob = func(string) []string { return nil }
+	d.readFile = func(p string) ([]byte, error) { return nil, errors.New(p + ": no files in tests") }
 	if f != nil {
 		d.writeTTY = f.draw
 	} else {
