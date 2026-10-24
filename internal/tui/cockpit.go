@@ -138,7 +138,7 @@ func (m model) zoomLost() (model, tea.Cmd) {
 // those that show another pane or take the list pane for something else.
 func closesCockpit(v verb) bool {
 	switch v {
-	case open, newSession, newTerminal, openReview, addProject, toggleScreen, showScreen:
+	case open, newSession, newTerminal, openReview, addProject, startTask, toggleScreen, showScreen:
 		return true
 	}
 	return false

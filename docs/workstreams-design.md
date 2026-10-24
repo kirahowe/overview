@@ -121,6 +121,17 @@ in it. This replaces the "needs you" section at the top of today's
 list. A session can appear twice, once in each half, and the cursor
 moves through both.
 
+`s` on any entry of a tracked project opens a task picker in the
+list's place, styled like the add-project picker. It lists the project's
+open issues: ready first, then the inbox, then the rest in issues' own
+order, and by priority within each. Typing narrows them by words, on
+the reference and the title. `enter` on an issue that sessions already
+work on moves the cursor to its workstream, and on any other issue
+starts claude on it with the opening prompt. This is how a pinned
+project with a backlog and nothing running gets its first workstream.
+The picker's rows and what `enter` does are pure functions of the
+tracker, the links and the query.
+
 The look changes along the way:
 
 - A header line above the list: the home's name, the counts that sit in

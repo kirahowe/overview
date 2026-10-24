@@ -112,7 +112,7 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 		l("⠋ list squeeze", "#6"),
 		l("○ rss feed", "website"),
 		l("○ digest prompt tweaks", "overview"),
-		l("orchestrator off  enter type • c claude", ""),
+		l("orchestrator off  enter type • s task", ""),
 	)
 	if len(got) != len(want) {
 		t.Errorf("%d lines, want %d", len(got), len(want))

@@ -659,7 +659,9 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 // claude with the opening prompt that names the issue. Once overview hook
 // reads that prompt, the session is listed under the workstream. t opens
 // a terminal that is listed under it, and an issues start that the hook
-// reads moves the other session there too.
+// reads moves the other session there too. Last, s on a tracked project
+// pinned with nothing running opens the task picker, and enter on the
+// issue typed for starts claude on it.
 func TestWorkstreams(t *testing.T) {
 	r := launchWith(t, "w", func(r *rig) string {
 		for _, d := range []string{".jj", ".issues"} {
@@ -672,9 +674,25 @@ func TestWorkstreams(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		// zbacklog is a second tracked project, with nothing running,
+		// that the test pins at the end.
+		backlog := filepath.Join(r.dir, "zbacklog")
+		for _, d := range []string{".jj", ".issues"} {
+			if err := os.MkdirAll(filepath.Join(backlog, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, text := range map[string]string{"project.edn": `{:id "zbacklog"}`, "3-add-threads.edn": `{:id 3}`, "4-fix-scroll.edn": `{:id 4}`} {
+			if err := os.WriteFile(filepath.Join(backlog, ".issues", name), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
 		fake := filepath.Join(r.dir, "issues")
 		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "in-progress", "title": "keep width", "priority": "p1"}]}`
-		if err := os.WriteFile(fake, []byte("#!/bin/sh\necho '"+list+"'\n"), 0o755); err != nil {
+		blist := `{"issues": [{"id": 3, "ref": "zbacklog#3", "status": "ready", "title": "add threads", "priority": "p2"},` +
+			`{"id": 4, "ref": "zbacklog#4", "status": "inbox", "title": "fix scroll", "priority": "p1"}]}`
+		script := fmt.Sprintf("#!/bin/sh\nif [ \"$2\" = %q ]; then echo '%s'; else echo '%s'; fi\n", backlog, blist, list)
+		if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		return "issues = " + fake + "\n"
@@ -746,6 +764,46 @@ func TestWorkstreams(t *testing.T) {
 		a, b := strings.Index(s, "e2e-0"), strings.Index(s, "e2e-1")
 		return i >= 0 && a > i && b > i && term > a && term > b, s
 	})
+
+	// A tracked project pinned with nothing running offers s, and the
+	// task picker starts a session on the issue typed for.
+	backlog := filepath.Join(r.dir, "zbacklog")
+	if err := os.MkdirAll(filepath.Join(r.home, "overview"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.home, "overview", "projects"), []byte(backlog+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the tracked placeholder", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "+ s task · c claude · t terminal"), s
+	})
+	r.press("/")
+	r.ov.must("send-keys", "-t", r.list.id, "-l", "zbacklog")
+	r.press("Enter")
+	waitFor(t, "the placeholder selected", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "▌+ s task · c claude · t terminal"), s
+	})
+	r.press("s")
+	waitFor(t, "the task picker", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "start a task in") && strings.Contains(s, "#3 add threads") && strings.Contains(s, "#4 fix scroll"), s
+	})
+	r.ov.must("send-keys", "-t", r.list.id, "-l", "thr")
+	waitFor(t, "the picker narrowed", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "#3 add threads") && !strings.Contains(s, "#4 fix scroll"), s
+	})
+	before = r.ov.panes()
+	r.press("Enter")
+	picked := r.fresh(t, "a session on the picked task", before, isSleep)
+	if got := r.ov.must("display-message", "-p", "-t", picked.id, "#{pane_start_command}"); !strings.Contains(got, "Work on zbacklog#3: add threads") {
+		t.Fatalf("the picked session started as %q", got)
+	}
+	if got := r.ov.must("display-message", "-p", "-t", picked.id, "#{pane_current_path}"); got != backlog {
+		t.Fatalf("the picked session started in %q, want %q", got, backlog)
+	}
 }
 
 // hook runs overview hook on a payload, as Claude Code would.

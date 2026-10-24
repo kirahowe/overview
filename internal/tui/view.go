@@ -70,7 +70,7 @@ func (m model) View() string {
 	switch {
 	case m.screen == digestScreen:
 		body = m.digestView()
-	case m.cockpit.open && !m.pick.open:
+	case m.cockpit.open && !m.pick.open && !m.taskPick.open:
 		body = m.cockpitBody()
 	default:
 		body = m.sessionsView()
@@ -92,6 +92,10 @@ func (m model) View() string {
 func (m model) sessionsView() []string {
 	if m.pick.open {
 		return m.pickerView()
+	}
+	if m.taskPick.open {
+		lines, _ := m.taskPickLines()
+		return lines
 	}
 	secs := m.sections()
 	e, _, _ := m.selected(flatten(secs))
@@ -130,6 +134,57 @@ func (m model) pickerView() []string {
 		}
 	}
 	return lines
+}
+
+// taskPickLines is the task picker in the list's place: the query, then
+// its note and the issues, scrolled to keep the selected one shown, with
+// the row each line shows, -1 for none, for clicks.
+func (m model) taskPickLines() (lines []string, owners []int) {
+	w, h := m.contentWidth(), m.listHeight()
+	l := m.taskList()
+	add := func(s string, owner int) {
+		lines, owners = append(lines, s), append(owners, owner)
+	}
+	add(m.plain(heading.Render("› ")+fg(pal.Text).Render(m.taskPick.query)+dim.Render("▏")), -1)
+	add(m.plain(""), -1)
+	if l.note != "" {
+		for _, s := range wrap(dim.Render(l.note), w) {
+			add(m.plain(s), -1)
+		}
+	}
+	if len(l.rows) == 0 {
+		return lines, owners
+	}
+	sel := m.taskSel(l)
+	room := max(h-len(lines), 1)
+	start := window(0, sel, sel+1, len(l.rows), room)
+	for i := start; i < min(start+room, len(l.rows)); i++ {
+		add(m.taskLine(l.rows[i], i == sel), i)
+	}
+	return lines, owners
+}
+
+// taskLine is one issue in the task picker: its number and title, then
+// its status, the sessions on it and its priority.
+func (m model) taskLine(r taskRow, selected bool) string {
+	i := r.issue
+	status := dim
+	switch i.Status {
+	case issues.Review:
+		status = fg(pal.Blocked)
+	case issues.Blocked:
+		status = fg(pal.Asking)
+	}
+	right := []seg{{i.Status + " ", status}}
+	switch {
+	case r.sessions == 1:
+		right = append(right, seg{"· 1 session ", dim})
+	case r.sessions > 1:
+		right = append(right, seg{"· " + strconv.Itoa(r.sessions) + " sessions ", dim})
+	}
+	right = append(right, seg{i.Priority, dim})
+	left := []seg{{"  #" + strconv.Itoa(i.ID) + " ", dim}, {i.Title, fg(pal.Text)}}
+	return m.line(left, right, false, selected)
 }
 
 // box draws a bordered pane with the title set into its top edge and an
@@ -466,7 +521,11 @@ func (m model) entryLine(e entry, selected bool) string {
 		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
 		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
 	case projectEntry:
-		return m.line([]seg{{"+ ", dim}, {"c claude · t terminal", dim}}, nil, false, selected)
+		offer := "c claude · t terminal"
+		if _, tracked := m.trackers[e.project]; tracked {
+			offer = "s task · " + offer
+		}
+		return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, selected)
 	}
 	r := e.row
 	mark, markStyle, word, age, wordStyle := m.stateMark(r)
@@ -748,13 +807,18 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	if !ok {
 		return []hint{c, t, {"a", "add"}, help}
 	}
+	// s goes after enter and before c in a project that tracks its tasks.
+	var s []hint
+	if _, tracked := m.trackers[m.rootOf(e, ok)]; tracked {
+		s = []hint{{"s", "task"}}
+	}
 	switch e.kind {
 	case workstreamEntry:
-		return []hint{{"enter", "type"}, c, t, {"n", "next"}, help}
+		return slices.Concat([]hint{{"enter", "type"}}, s, []hint{c, t, {"n", "next"}, help})
 	case terminalEntry:
-		return []hint{{"enter", "type"}, c, t, {"x", "close"}, help}
+		return slices.Concat([]hint{{"enter", "type"}}, s, []hint{c, t, {"x", "close"}, help})
 	case projectEntry:
-		return []hint{c, t, {"x", "unpin"}, {"a", "add"}, help}
+		return slices.Concat(s, []hint{c, t, {"x", "unpin"}, {"a", "add"}, help})
 	}
 	enter := hint{"enter", "type"}
 	if _, away := m.hostOf(e.row); away {
@@ -762,7 +826,7 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	} else if e.row.Background() && m.paneOf(e.row) == "" {
 		enter = hint{"enter", "attach"}
 	}
-	hs := []hint{enter, c, t, {"v", "review"}}
+	hs := slices.Concat([]hint{enter}, s, []hint{c, t, {"v", "review"}})
 	if e.row.Background() {
 		hs = append(hs, hint{"x", "stop"})
 	}
@@ -811,6 +875,13 @@ func (m model) footer() string {
 	case m.pick.open:
 		lead = append(lead, heading.Render("add project"))
 		hints = []hint{{"enter", "pin"}, {"tab", "complete"}, {"esc", "cancel"}}
+	case m.taskPick.open:
+		lead = append(lead, heading.Render("start a task in "+m.name(m.taskPick.root)))
+		enter := hint{"enter", "start"}
+		if l := m.taskList(); m.taskSel(l) >= 0 && taskGoes(l.rows[m.taskSel(l)]) {
+			enter.label = "go to"
+		}
+		hints = []hint{enter, {"↑↓", "move"}, {"esc", "cancel"}}
 	case m.filtering:
 		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		hints = []hint{{"enter", "open"}, {"↑↓", "move"}, {"esc", "clear"}}
@@ -860,6 +931,7 @@ func (m model) helpBox() []string {
 		entry{"c", "new session in project"},
 		entry{"t", "new terminal in project"},
 		entry{"v", "review its changes"},
+		entry{"s", "start a task in project"},
 		entry{"a", "add a project"},
 	)...)
 	left = append(left, section("on a task",

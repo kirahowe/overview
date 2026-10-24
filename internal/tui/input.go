@@ -49,6 +49,13 @@ const (
 	pickTab     // complete the query to the selected match
 	pickEnter   // pin the selected match
 	pickCancel  // close the picker
+	startTask   // open the task picker for the selected entry's project
+	taskType    // add text to the task picker's query
+	taskBack    // backspace in the task picker
+	taskMove    // n issues down the task picker, negative for up
+	taskEnter   // start or go to the selected issue
+	taskCancel  // close the task picker
+	taskClick   // a click on the nth issue at time at; a second one soon after acts on it
 	openReview  // review the selected session's changes in a split above it
 	toCockpit   // open the cockpit for the selected entry
 	outCockpit  // close the cockpit
@@ -75,6 +82,25 @@ func doN(v verb, n int) []action { return []action{{do: v, n: n}} }
 // keyActions translates a key press.
 func (m model) keyActions(msg tea.KeyMsg) []action {
 	k := msg.String()
+	if m.taskPick.open {
+		switch msg.Type {
+		case tea.KeyEsc:
+			return do(taskCancel)
+		case tea.KeyEnter:
+			return do(taskEnter)
+		case tea.KeyUp, tea.KeyCtrlP:
+			return doN(taskMove, -1)
+		case tea.KeyDown, tea.KeyCtrlN:
+			return doN(taskMove, 1)
+		case tea.KeyBackspace:
+			return do(taskBack)
+		case tea.KeyRunes, tea.KeySpace:
+			return []action{{do: taskType, text: printable(string(msg.Runes))}}
+		case tea.KeyCtrlC:
+			return do(quit)
+		}
+		return nil
+	}
 	if m.pick.open {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -212,6 +238,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(openReview)
 	case "a":
 		return do(addProject)
+	case "s":
+		return do(startTask)
 	case "o":
 		return do(toCockpit)
 	}
@@ -273,6 +301,19 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 	}
 	if m.pick.open {
 		return nil // the picker is keys only
+	}
+	if m.taskPick.open {
+		switch {
+		case step != 0:
+			return doN(taskMove, step)
+		case msg.Y > m.listHeight():
+			return nil // the footer
+		}
+		_, owners := m.taskPickLines()
+		if line := msg.Y - 1; line >= 0 && line < len(owners) && owners[line] >= 0 {
+			return []action{{do: taskClick, n: owners[line], at: at}}
+		}
+		return nil
 	}
 	if m.screen == digestScreen {
 		if step == 0 {

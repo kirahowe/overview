@@ -965,6 +965,13 @@ func TestPropViewFitsAnySize(t *testing.T) {
 		rows, ttys, ts := workRows(t)
 		m.trackers = ts
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
+		// With the issues tool, s opens the task picker, and it may be
+		// open on any project, tracked or not, with any query.
+		m.issues = func(...string) ([]byte, error) { return nil, errors.New("not run") }
+		if rapid.Bool().Draw(t, "taskpick") {
+			m.taskPick = taskPick{open: true, root: rapid.SampledFrom(append(trackedRoots, "/w/Beta")).Draw(t, "taskroot"),
+				query: phrase(t, "taskquery"), sel: rapid.IntRange(-1, 8).Draw(t, "tasksel")}
+		}
 		for _, k := range rapid.SliceOfN(rapid.SampledFrom(keys), 0, 4).Draw(t, "keys") {
 			m = update(m, keyMsg(k))
 		}
@@ -1715,6 +1722,63 @@ func TestPropOpeningRoundTrips(t *testing.T) {
 		plain := id != "" && !strings.ContainsFunc(id, func(c rune) bool { return c == '#' || unicode.IsSpace(c) })
 		if got := opens(opening(id, i), id, i); got != plain {
 			t.Fatalf("opening(%q, #%d %q) reads back %v", id, i.ID, i.Title, got)
+		}
+	})
+}
+
+// pickKey is where the task picker puts an issue, stated apart from the
+// code: ready, then inbox, then review, in progress and blocked, then by
+// priority p0 to p3 and anything else last, then by number.
+func pickKey(i issues.Issue) []int {
+	group := slices.Index([]string{issues.Ready, issues.Inbox, issues.Review, issues.InProgress, issues.Blocked}, i.Status)
+	prio := slices.Index([]string{"p0", "p1", "p2", "p3"}, i.Priority)
+	if prio < 0 {
+		prio = 4
+	}
+	return []int{group, prio, i.ID}
+}
+
+// The task picker offers only open issues, each once, in its order, and
+// exactly those that match every word of the query.
+func TestPropTaskRows(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		var list []issues.Issue
+		for _, id := range rapid.SliceOfDistinct(rapid.IntRange(1, 30), rapid.ID[int]).Draw(t, "ids") {
+			list = append(list, issues.Issue{ID: id, Title: phrase(t, "title"),
+				Status:   rapid.SampledFrom(statuses).Draw(t, "status"),
+				Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", "", "px"}).Draw(t, "priority")})
+		}
+		sessions := rapid.MapOf(rapid.IntRange(1, 30), rapid.IntRange(0, 3)).Draw(t, "sessions")
+		words := rapid.SliceOfN(rapid.OneOf(rapid.SampledFrom([]string{"fix", "THE", "li", "app#", "#1", "#2"}),
+			rapid.Custom(func(t *rapid.T) string { return phrase(t, "word") })), 0, 3).Draw(t, "query")
+		query := strings.Join(words, " ")
+		rows := taskRows(list, "app", sessions, query)
+		terms := strings.Fields(strings.ToLower(query))
+		seen := map[int]bool{}
+		for k, r := range rows {
+			if seen[r.issue.ID] || !slices.ContainsFunc(list, func(i issues.Issue) bool { return reflect.DeepEqual(i, r.issue) }) {
+				t.Fatalf("row %+v is not one of the issues, or twice", r)
+			}
+			seen[r.issue.ID] = true
+			if !issues.Open(r.issue.Status) {
+				t.Fatalf("a %s issue is offered", r.issue.Status)
+			}
+			if r.sessions != sessions[r.issue.ID] {
+				t.Fatalf("#%d has %d sessions, want %d", r.issue.ID, r.sessions, sessions[r.issue.ID])
+			}
+			for _, w := range terms {
+				if !matchFields([]string{w}, "#"+strconv.Itoa(r.issue.ID), "app#"+strconv.Itoa(r.issue.ID), r.issue.Title) {
+					t.Fatalf("#%d %q does not match %q", r.issue.ID, r.issue.Title, w)
+				}
+			}
+			if k > 0 && slices.Compare(pickKey(r.issue), pickKey(rows[k-1].issue)) < 0 {
+				t.Fatalf("#%d is after #%d", r.issue.ID, rows[k-1].issue.ID)
+			}
+		}
+		for _, i := range list {
+			if issues.Open(i.Status) && taskMatches(terms, "app", i) && !seen[i.ID] {
+				t.Fatalf("#%d %q matches %q but is not offered", i.ID, i.Title, query)
+			}
 		}
 	})
 }

@@ -164,6 +164,8 @@ type model struct {
 
 	// pick is the add-project picker, open while it takes the list pane.
 	pick picker
+	// taskPick is the task picker, open while it takes the list pane.
+	taskPick taskPick
 
 	// cockpit is the cockpit, as cockpit.go describes. zooming is set while
 	// a Cmd that zooms the list or puts it back is out, and rezoom when the
@@ -1098,6 +1100,32 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m.say("adding " + path + "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
 	case pickCancel:
 		m.pick = picker{}
+	case startTask:
+		return m.openTasks(m.rootOf(e, ok)), nil
+	case taskType, taskBack:
+		q := m.taskPick.query
+		if a.do == taskType {
+			q += a.text
+		} else if r := []rune(q); len(r) > 0 {
+			q = string(r[:len(r)-1])
+		}
+		m.taskPick.query, m.taskPick.sel = q, 0
+	case taskMove:
+		n := len(m.taskList().rows)
+		m.taskPick.sel = max(0, min(m.taskPick.sel+a.n, n-1))
+	case taskEnter:
+		return m.taskEnter()
+	case taskCancel:
+		m.taskPick = taskPick{}
+	case taskClick:
+		id := "taskpick:" + strconv.Itoa(a.n)
+		double := id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
+		m.clickID, m.clickAt = id, a.at
+		m.taskPick.sel = a.n
+		if double {
+			m.clickID = ""
+			return m.taskEnter()
+		}
 	case toCockpit:
 		return m.openCockpit()
 	case outCockpit:
@@ -1253,6 +1281,9 @@ func (m model) act(e entry) (model, tea.Cmd) {
 		}
 		return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one."), nil
 	case projectEntry:
+		if _, tracked := m.trackers[e.project]; tracked {
+			return m.say("Nothing runs in " + m.name(e.project) + " yet. s starts a task, c Claude, t a terminal."), nil
+		}
 		return m.say("Nothing runs in " + m.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
 	case terminalEntry:
 		if m.mux == nil {

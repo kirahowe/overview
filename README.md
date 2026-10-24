@@ -114,7 +114,7 @@ filter on the list. So does going to another pane, since tmux ends
 the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
 fills it without a zoom. While the cockpit is open the list stays in its window,
-and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
+and the cards follow the cursor. `enter`, `c`, `s`, `t` and `v` close it
 first, then do what they always do.
 
 A workstream's cockpit starts with a header: the issue's reference,
@@ -229,8 +229,25 @@ or the path you typed when nothing matches. A path that ends in `/`, as
 `tab` leaves it, selects nothing until you press `down`, so `enter` pins
 that directory's project. `esc` closes the picker. A
 pinned project stays in the list when nothing runs in it, on a row of its
-own that offers `c` and `t`, and either starts something in it. `x` on that row unpins
+own that offers `c` and `t`, and either starts something in it. In a
+project that tracks its tasks the row offers `s` too. `x` on that row unpins
 the project. The pinned projects are kept in `<home>/overview/projects`.
+
+`s` starts work on one of a project's tasks. On any entry of a project
+that tracks its tasks, a picker takes the list's place and lists the
+project's open issues, and the footer names the project. Ready issues
+come first, then the inbox, then those in review, in progress and
+blocked, and by priority within each. A line shows the issue's number
+and title, its status and priority, and how many sessions work on it.
+Typing words narrows the list as search does, on the issue's reference,
+such as `#6` or `overview#6`, and its title. `up` and `down`, or `ctrl+p`
+and `ctrl+n`, move. On an issue that sessions already work on, `enter`
+moves the list's cursor to its workstream. On any other issue it starts
+a session at the project's root with the first prompt `Work on
+<project>#<n>: <title>`, as `c` does on a workstream, and shows it beside
+the list. A click selects an issue, a double click acts on it, and `esc`
+closes the picker. In a project without `.issues`, `s` says how to start
+tracking its tasks.
 
 The mouse works too. A click selects a session, a double click moves the
 keyboard into it as `enter` does, and the wheel moves through the list and
