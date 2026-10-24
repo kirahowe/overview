@@ -93,7 +93,9 @@ type model struct {
 
 	screen    screen
 	sel       string // the key of the entry under the cursor, kept across refreshes
-	listTop   int    // first list line shown, kept so clicks do not shift it
+	listTop   int    // first line of the projects shown, kept so clicks do not shift it
+	agentsTop int    // and of the agents
+	nav       nav    // the panel selected, and whether the keys are in it, as nav.go describes
 	filter    string
 	filtering bool
 	confirm   string // the key of a session to stop or a terminal to close, waiting on a yes
@@ -161,6 +163,12 @@ type model struct {
 	// blurred is set while the focus is in another pane. The list then
 	// stays where it is, and the cursor follows its window.
 	blurred bool
+	// framed is what the rules of the session's panes were last asked to
+	// show, by pane, as frame.go describes. framing is set while that Cmd
+	// is out, and frameStale after one failed, until a listing shows the
+	// panes as they are now.
+	framed              map[string]paneFrame
+	framing, frameStale bool
 
 	// pick is the add-project picker, open while it takes the list pane.
 	pick picker
@@ -240,6 +248,9 @@ func Run(v View) error {
 		return err
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
+	if err := srv.Frame(session, frameColours(v.Theme)); err != nil {
+		return err
+	}
 	focused, err := srv.Focused(self)
 	if err != nil {
 		return err
@@ -770,15 +781,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m = m.keepCursor(before)
 	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
-		e, _, _ := m.selected(m.ordered())
-		_, owners := m.listLines(m.sections(), e.key(), m.listHeight())
-		m.listTop = m.listStart(owners, e.key(), m.listHeight())
+		col := m.shownColumn()
+		m.listTop, m.agentsTop = col.projTop, col.agentsTop
 	}
 	m, stage := m.restage()
 	m, turns := m.askTurns()
-	m = m.keepCockpit()
+	m = m.keepNav().keepCockpit()
 	m, reads := m.cockpitReads()
-	return m, tea.Batch(cmd, stage, turns, reads)
+	m, frame := m.reframe()
+	return m, tea.Batch(cmd, stage, turns, reads, frame)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -786,19 +797,21 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 	case tea.FocusMsg:
-		m = m.unblur()
+		return m.handle(do(keysBack))
 	case tea.BlurMsg:
-		m.blurred = true
-	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg:
+		return m.handle(do(keysLeft))
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg, framedMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
-		// Input that reaches the list proves the user is there, whether or
-		// not tmux said so: a wheel over the list leaves the focus where it
-		// was, and a focus event can go missing.
-		return m.unblur().handle(m.keyActions(msg))
+		// A key that reaches the list proves the keyboard is back, whether
+		// or not tmux said so, since a focus event can go missing.
+		return m.input(keysBack, func(m model) []action { return m.keyActions(msg) })
 	case tea.MouseMsg:
 		// The input's time is read here, at the door, so apply stays pure.
-		return m.unblur().handle(m.mouseActions(msg, m.deps.now()))
+		// The mouse proves the user is at the list, but a wheel over it
+		// leaves the keyboard where it was.
+		at := m.deps.now()
+		return m.input(pointerHere, func(m model) []action { return m.mouseActions(msg, at) })
 	case noteMsg:
 		m = m.say(string(msg))
 	case frameMsg:
@@ -886,7 +899,16 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handle translates one input into actions and applies them in order.
+// input applies arrival, what an input says of where the user is, and
+// then the actions translate makes of the input for the model that
+// results, in order.
+func (m model) input(arrival verb, translate func(model) []action) (tea.Model, tea.Cmd) {
+	m, first := m.apply(action{do: arrival})
+	next, rest := m.handle(translate(m))
+	return next, tea.Batch(first, rest)
+}
+
+// handle applies actions in order.
 func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, a := range actions {
@@ -903,7 +925,7 @@ func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 func (m model) apply(a action) (model, tea.Cmd) {
 	// An o waiting for the list's move is cancelled by what would close
 	// an open cockpit, by esc, and by another o.
-	if m.cockpitSoon && (closesCockpit(a.do) || a.do == clearFilter || a.do == toCockpit || a.do == outCockpit) {
+	if m.cockpitSoon && (closesCockpit(a.do) || a.do == clearFilter || a.do == toCockpit || a.do == outCockpit || a.do == navOut) {
 		m.cockpitSoon = false
 		if a.do == toCockpit {
 			return m, nil
@@ -918,6 +940,12 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	e, i, ok := m.selected(es)
 	row, isSession := e.session()
 	switch a.do {
+	case keysBack:
+		return m.backFrom().unblur(), nil
+	case keysLeft:
+		m.blurred = true
+	case pointerHere:
+		return m.unblur(), nil
 	case quit:
 		return m, tea.Quit
 	case detach:
@@ -980,7 +1008,12 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		for d := 1; d <= len(es); d++ {
 			j := ((i+a.n*d)%len(es) + len(es)) % len(es)
 			if needy(es[j]) {
-				return m.moveTo(es, j), nil
+				m = m.moveTo(es, j)
+				if !m.nav.inside && !m.cockpit.open {
+					// So enter goes straight to it.
+					m.nav = nav{panel: stagePanel, prev: m.navAt()}
+				}
+				return m, nil
 			}
 		}
 		return m.say("nothing needs you"), nil
@@ -1029,6 +1062,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				m = m.moveTo(es, j)
 			}
 		}
+		// A click puts the keys in the list, on the panel clicked.
+		m.nav = nav{panel: m.cursorPanel(), prev: m.navAt(), inside: true}
 		if double {
 			m.clickID = ""
 			return m.apply(action{do: open})
@@ -1131,13 +1166,23 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case outCockpit:
 		return m.closeCockpit()
 	case cockpitTab:
-		if _, tracked := m.trackers[m.target().root]; !tracked && !m.cockpit.issues {
+		if m.inIssues() {
+			m.nav = nav{panel: m.cursorPanel(), prev: issuesPanel, inside: true}
+			return m, nil
+		}
+		if _, tracked := m.trackers[m.target().root]; !tracked {
 			return m.say("this project does not track its issues"), nil
 		}
-		if !m.cockpit.issues && !m.issuesShown() {
+		if !m.issuesShown() {
 			return m.say("the window has no room for the issues card"), nil
 		}
-		m.cockpit.issues = !m.cockpit.issues
+		m.nav = nav{panel: issuesPanel, prev: m.navAt(), inside: true}
+	case navMove:
+		return m.navMove(direction(a.n)), nil
+	case navIn:
+		return m.navEnter()
+	case navOut:
+		m.nav.inside = false
 	case cockpitMove:
 		others, _ := m.others(m.target())
 		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(others))-1))

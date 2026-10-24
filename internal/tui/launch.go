@@ -37,11 +37,11 @@ set -s set-clipboard on
 set -g allow-passthrough on
 set -g history-limit 50000
 
-# ctrl+[ moves from the list to the session beside it, and back to the list
-# from any pane, however split. The list is always the top-left pane. A
-# terminal that cannot send extended keys sends Esc for it instead, which
-# goes to the pane.
-bind -n C-[ if -F "#{@overview-list}" "select-pane -R" "select-pane -t '{top-left}'"
+# ctrl+[ goes back: from any pane, however split, to the list, which is
+# always the top-left pane, and in the list out to its panels, as esc
+# does. A terminal that cannot send extended keys sends Esc for it
+# instead, which goes to the pane.
+bind -n C-[ if -F "#{@overview-list}" "send-keys Escape" "select-pane -t '{top-left}'"
 
 # Splits open in the directory of the pane they split.
 bind % split-window -h -c "#{pane_current_path}"

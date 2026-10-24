@@ -960,6 +960,7 @@ func TestPropViewFitsAnySize(t *testing.T) {
 	keys := []string{"?", "/", "a", "x", "j", "k", "g", "G", "esc", "tab", "enter", "s"}
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
+		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys, ts := workRows(t)
@@ -1456,6 +1457,7 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
+		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(3, 40).Draw(t, "h")})
 		rows, ttys, ts := workRows(t)
@@ -1568,14 +1570,34 @@ func genCards(t *rapid.T) [][]card {
 
 // The cockpit's cards fill exactly the space they are given, whatever it
 // is and whatever they hold, and those that do not fit are the last ones,
-// dropped whole.
+// dropped whole. Each card is placed where it is drawn: inside the area,
+// on no other, with its rule on its first line.
 func TestPropCockpitCardsFitAndDropTheLast(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows := genCards(t)
 		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
-		lines, shown := layoutCards(rows, w, h)
-		if len(lines) != h {
-			t.Fatalf("%d lines, want %d", len(lines), h)
+		sel := rapid.SampledFrom([]panelID{"", headerPanel, issuesPanel}).Draw(t, "sel")
+		lines, rules, places := layoutCards(rows, w, h, sel)
+		shown := len(places)
+		if len(lines) != h || len(rules) != h {
+			t.Fatalf("%d lines and %d rules, want %d", len(lines), len(rules), h)
+		}
+		starts := map[int]bool{}
+		for i, p := range places {
+			if p.r.x < 0 || p.r.y < 0 || p.r.x+p.r.w > w || p.r.y+p.r.h > h || p.r.h < 1 {
+				t.Fatalf("card %d at %+v, outside %dx%d", i, p.r, w, h)
+			}
+			for _, q := range places[:i] {
+				if p.r.x < q.r.x+q.r.w && q.r.x < p.r.x+p.r.w && p.r.y < q.r.y+q.r.h && q.r.y < p.r.y+p.r.h {
+					t.Fatalf("cards at %+v and %+v overlap", p.r, q.r)
+				}
+			}
+			starts[p.r.y] = true
+		}
+		for i, r := range rules {
+			if r != starts[i] {
+				t.Fatalf("line %d: rule %v, but a card starts there %v", i, r, starts[i])
+			}
 		}
 		for i, l := range lines {
 			if lw := ansi.StringWidth(l); lw != w {
@@ -1610,7 +1632,9 @@ func TestPropCockpitFitsAnySize(t *testing.T) {
 		m := base
 		es := m.ordered()
 		m = m.moveTo(es, rapid.IntRange(0, len(es)-1).Draw(t, "sel"))
-		m.cockpit.issues = rapid.Bool().Draw(t, "issues")
+		if rapid.Bool().Draw(t, "issues") {
+			m.nav = nav{panel: issuesPanel, inside: true}
+		}
 		m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
 		w, h := rapid.IntRange(1, 220).Draw(t, "w"), rapid.IntRange(1, 70).Draw(t, "h")
 		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
@@ -1648,7 +1672,7 @@ func TestPropTheFocusedCardIsShown(t *testing.T) {
 				m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
 				m = update(m, tea.WindowSizeMsg{Width: m.w, Height: m.h})
 			}
-			if !m.cockpit.issues {
+			if !m.inIssues() {
 				continue
 			}
 			if !m.issuesShown() {
@@ -1779,6 +1803,75 @@ func TestPropTaskRows(t *testing.T) {
 			if issues.Open(i.Status) && taskMatches(terms, "app", i) && !seen[i.ID] {
 				t.Fatalf("#%d %q matches %q but is not offered", i.ID, i.Title, query)
 			}
+		}
+	})
+}
+
+// A move between panels lands on a panel wholly that way, never on the one
+// it left, and finds one whenever there is one. Of those, it never passes
+// over one that faces it for one that does not.
+func TestPropNavStepGoesThatWay(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		n := rapid.IntRange(1, 6).Draw(t, "n")
+		ps := make([]panel, n)
+		for i := range ps {
+			ps[i] = panel{panelID(fmt.Sprintf("%%%d", i)), rect{
+				rapid.IntRange(0, 100).Draw(t, "x"), rapid.IntRange(0, 50).Draw(t, "y"),
+				rapid.IntRange(1, 60).Draw(t, "w"), rapid.IntRange(1, 30).Draw(t, "h")}}
+		}
+		from := ps[rapid.IntRange(0, n-1).Draw(t, "from")]
+		d := direction(rapid.IntRange(0, 3).Draw(t, "d"))
+		prev := ps[rapid.IntRange(0, n-1).Draw(t, "prev")].id
+		got, ok := navStep(ps, from.id, d, prev)
+		var any, facing bool
+		for _, p := range ps {
+			if p.id == from.id {
+				continue
+			}
+			if _, overlap, way := beyond(from.r, p.r, d); way {
+				any, facing = true, facing || overlap > 0
+			}
+		}
+		if ok != any {
+			t.Fatalf("ok %v, but a panel lies that way: %v", ok, any)
+		}
+		if !ok {
+			return
+		}
+		for _, p := range ps {
+			if p.id != got {
+				continue
+			}
+			_, overlap, way := beyond(from.r, p.r, d)
+			if !way || p.id == from.id {
+				t.Fatalf("moved %d from %+v to %+v", d, from.r, p.r)
+			}
+			if facing && overlap <= 0 {
+				t.Fatalf("moved %d from %+v to %+v, which does not face it, past one that does", d, from.r, p.r)
+			}
+		}
+	})
+}
+
+// The list's lines are shared out whole: the projects, and the agents
+// with their rule, fill exactly the height, and the agents get all they
+// need when both fit, and never more.
+func TestPropSplitListSharesTheHeight(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		p, a, h := rapid.IntRange(0, 80).Draw(t, "p"), rapid.IntRange(0, 40).Draw(t, "a"), rapid.IntRange(1, 80).Draw(t, "h")
+		proj, agents := splitList(p, a, h)
+		used := proj
+		if agents > 0 {
+			used += agents + 1
+		}
+		if used != h || proj < 1 || agents > a || agents < 0 {
+			t.Fatalf("splitList(%d, %d, %d) = %d, %d", p, a, h, proj, agents)
+		}
+		if a > 0 && h >= 3 && max(p, 1)+1+a <= h && agents != a {
+			t.Fatalf("splitList(%d, %d, %d) = %d, %d: both fit", p, a, h, proj, agents)
+		}
+		if a > 0 && h >= 3 && agents == 0 {
+			t.Fatalf("splitList(%d, %d, %d) left the agents out", p, a, h)
 		}
 	})
 }

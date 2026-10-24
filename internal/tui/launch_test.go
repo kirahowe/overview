@@ -179,7 +179,7 @@ func TestWriteConfOnlyWhenMissing(t *testing.T) {
 }
 
 // ctrl+[ from a pane deep in the splits of a session's window goes to the
-// list, and from the list to the right. tmux runs the binding's command as
+// list, and in the list stays there. tmux runs the binding's command as
 // it would for the key.
 func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 	dir := t.TempDir()
@@ -223,9 +223,11 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 		if got := focused(); got != list {
 			t.Fatalf("ctrl+[ from %s went to %s, not the list %s", from, got, list)
 		}
+		// From the list it stays there: the list takes it as esc, and
+		// comes out to its panels.
 		run("source-file", key)
-		if got := focused(); got == list {
-			t.Fatal("ctrl+[ from the list stayed there")
+		if got := focused(); got != list {
+			t.Fatalf("ctrl+[ from the list went to %s", got)
 		}
 	}
 }

@@ -56,6 +56,8 @@ type multiplexer interface {
 	Detach() error
 	SetWindowOption(target, name, value string) error
 	SetPaneOption(pane, name, value string) error
+	SetPaneOptions(sets []tmux.PaneSet) error
+	SetFrame(pane string, on bool) error
 	SetZoom(pane string, on bool) error
 }
 
@@ -556,9 +558,10 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if !m.current(msg.gen) {
 			return m, nil // it may show a spawned pane without its options
 		}
-		// A move that failed is tried again once tmux has been reread.
+		// A move that failed is tried again once tmux has been reread, and
+		// so are the rules.
 		m = m.setPanes(msg.panes, msg.roots)
-		m.failed = ""
+		m.failed, m.frameStale = "", false
 		m, zoom := m.zoomLost()
 		var cmd tea.Cmd
 		if m.holder() == "" && !m.spawningHolder {
@@ -632,6 +635,19 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		if m.rezoom {
 			return m.syncZoom()
+		}
+	case framedMsg:
+		m.framing = false
+		if msg.err != nil {
+			m.framed, m.frameStale = nil, true
+		}
+		if msg.window != "" && msg.err == nil {
+			m.panes = slices.Clone(m.panes)
+			for i, p := range m.panes {
+				if p.Window == msg.window {
+					m.panes[i].Framed = msg.on
+				}
+			}
 		}
 	case widthMsg:
 		m.landed++

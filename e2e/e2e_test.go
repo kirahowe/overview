@@ -99,7 +99,7 @@ func waitFor(t *testing.T, what string, cond func() (bool, string)) {
 }
 
 // beside reports whether the list sits in the window of pane id, leftmost,
-// full height, w wide (w 0 for any width).
+// full height under the rule along its top, w wide (w 0 for any width).
 func beside(ps []pane, id string, w int) (bool, string) {
 	var list, with pane
 	for _, p := range ps {
@@ -111,7 +111,7 @@ func beside(ps []pane, id string, w int) (bool, string) {
 		}
 	}
 	ok := list.id != "" && with.id != "" && list.window == with.window &&
-		list.left == 0 && list.top == 0 && list.h == list.winH && (w == 0 || list.w == w)
+		list.left == 0 && list.top <= 1 && list.top+list.h == list.winH && (w == 0 || list.w == w)
 	return ok, fmt.Sprintf("list %+v, %s %+v", list, id, with)
 }
 
@@ -276,6 +276,15 @@ func TestOverviewInTmux(t *testing.T) {
 		}
 		return a >= 0 && b >= 0, screen
 	})
+	// Each pane has a rule along its top, with its title in it: the
+	// list's names the home, a session's its name and state.
+	waitFor(t, "the panes' rules", func() (bool, string) {
+		status := ov.must("display-message", "-p", "-t", list.id, "#{pane-border-status}")
+		mine := ov.must("show-options", "-pqv", "-t", list.id, "@overview-title")
+		theirs := ov.must("show-options", "-pqv", "-t", sessions[0].id, "@overview-title")
+		return strings.TrimSpace(status) == "top" && strings.Contains(mine, "◆ ") && strings.Contains(theirs, "e2e-") && strings.Contains(theirs, "idle"),
+			fmt.Sprintf("status %q, list %q, session %q", status, mine, theirs)
+	})
 	// g puts the cursor on the first session.
 	ov.must("send-keys", "-t", list.id, "g")
 	waitFor(t, "the list beside the first session", func() (bool, string) { return beside(ov.panes(), first.id, 0) })
@@ -296,7 +305,10 @@ func TestOverviewInTmux(t *testing.T) {
 		return ""
 	}
 	window := inWindow(first.id)
-	ov.must("send-keys", "-t", list.id, "j")
+	// Back from the session the keys are out on the panels, with the
+	// session selected: h selects the list, enter goes into it, and j
+	// moves its cursor.
+	ov.must("send-keys", "-t", list.id, "h", "Enter", "j")
 	waitFor(t, "the list beside the second session, as wide", func() (bool, string) {
 		return beside(ov.panes(), second.id, 57)
 	})
@@ -570,7 +582,7 @@ func TestTerminalsAndProjects(t *testing.T) {
 	waitFor(t, "its placeholder, selected, with the holder", func() (bool, string) {
 		s := r.screen()
 		ok, say := beside(r.ov.panes(), r.holder, 0)
-		return ok && strings.Count(s, "+ c claude · t terminal") == 1 && strings.Contains(s, "zother") && strings.Contains(s, "x unpin"), say + "\n" + s
+		return ok && strings.Count(s, "+ c claude · t terminal") == 1 && strings.Contains(s, "zother") && strings.Contains(s, "▌+ c claude · t terminal"), say + "\n" + s
 	})
 }
 
@@ -856,4 +868,10 @@ func TestCockpit(t *testing.T) {
 		f := strings.Fields(zoomed())
 		return ok && len(f) == 3 && f[0] == "0" && !strings.Contains(r.screen(), "Uncommitted"), zoomed() + " " + say
 	})
+}
+
+// atoi reads a number tmux printed, 0 when it is none.
+func atoi(s string) int {
+	v, _ := strconv.Atoi(strings.TrimSpace(s))
+	return v
 }

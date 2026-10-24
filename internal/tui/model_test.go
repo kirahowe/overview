@@ -25,6 +25,7 @@ func row(id, name, title string, pid int) fleet.Row {
 func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
+	m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 	m.deps = fakeDeps(nil)
 	ttys := map[int]string{}
 	for _, r := range rows {
@@ -185,11 +186,13 @@ func wheel(m model, x, y int, down bool) model {
 
 // screenY is the screen line of a session's first list line, or -1.
 func screenY(m model, id string) int {
-	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.key())
-	for i, o := range owners {
+	off := 0
+	if m.cockpit.open {
+		off = 1 // the cockpit draws the list's rule
+	}
+	for i, o := range m.shownColumn().owners {
 		if o == id {
-			return i + 1
+			return i + off
 		}
 	}
 	return -1
@@ -215,9 +218,9 @@ func TestSlowSecondClickOnlySelects(t *testing.T) {
 func TestClickOffARowDoesNothing(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	before := m.sel
-	// The header, the rule, the blank lines above the agents list, its
-	// rule, a line past the end, and the footer.
-	for _, y := range []int{0, 1, 4, 20, 26, 29} {
+	// A project's rule, the blank lines above the agents panel, its
+	// rule, and the footer. The rule along the top is tmux's.
+	for _, y := range []int{0, 3, 5, 20, 26, 29} {
 		m, _ = mouseClick(m, 5, y)
 		if m.sel != before {
 			t.Fatalf("click at line %d moved the cursor to %q", y, m.sel)

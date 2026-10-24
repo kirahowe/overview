@@ -481,6 +481,8 @@ func TestTOpensATerminalForTheTask(t *testing.T) {
 
 func TestKeysForASessionSayWhereToGoOnAWorkstream(t *testing.T) {
 	m := selectKey(t, taskModel(t, newFakeMux()), "task:/code/app#6")
+	m, cmd := step(m, noteMsg("")) // the rules show the new cursor
+	m = settle(t, m, cmd)
 	for _, k := range []string{"x", "v", "y"} {
 		m2, cmd := press(m, k)
 		if cmd != nil || m2.confirm != "" || !strings.Contains(m2.note, "move to one under #6") {

@@ -82,8 +82,8 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	rule := func(title, note string) string {
 		return l(title+" "+strings.Repeat("─", 42-ansi.StringWidth(title)-ansi.StringWidth(note)-2), note)
 	}
+	// tmux draws the rule above, with the list's title in it.
 	want := []string{
-		l("◆ "+m.home.Name(), "! 3  ● 2  ○ 2"),
 		rule("overview", "3 tasks"),
 		l("#4 show session cost", "review p2"),
 		l("   no sessions", ""),
@@ -100,12 +100,13 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 		l("○ rss feed", "idle 20m"),
 		l("$ npm", "website"),
 	}
-	// The agents list sits at the bottom of the list's 26 lines.
+	// The agents panel sits at the bottom of the list's 27 lines, under a
+	// rule of its own, drawn as tmux draws one.
 	for len(want) < 20 {
 		want = append(want, l("", ""))
 	}
 	want = append(want,
-		rule("agents", "priority"),
+		"── agents "+strings.Repeat("─", 44-10-12)+" priority ──",
 		l("? reply on view.go note", "#5"),
 		l("! deploy blog post", "website"),
 		l("⠋ squeeze e2e", "#6"),
@@ -181,9 +182,10 @@ func TestTheFooterDropsWholeHints(t *testing.T) {
 
 func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 	m := workModel(t, 44, 12)
-	lines, owners := m.listLines(m.sections(), m.sel, m.listHeight())
-	i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), "agents ──") })
-	if i < 2 || strings.TrimSpace(ansi.Strip(lines[i-1])) != "" || strings.TrimSpace(ansi.Strip(lines[i-2])) == "" || len(owners) != len(lines) {
+	col := m.listView(m.sections(), m.sel)
+	lines := col.lines
+	i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), "── agents ──") })
+	if i != col.rule || col.agentsH < 1 || col.projH+1+col.agentsH != m.listHeight() || len(col.owners) != len(lines) {
 		t.Fatalf("agents at line %d of\n%s", i, strings.Join(lines, "\n"))
 	}
 	// The cursor at the end scrolls the list so the agents list shows.

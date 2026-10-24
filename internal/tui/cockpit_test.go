@@ -31,7 +31,8 @@ func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 	if m.sel != m.ordered()[1].key() || f.stage() != stage || !m.cockpit.open || len(f.moves) != moves {
 		t.Fatalf("after j: sel %s, list in %s (was %s), open %v, moves %v", m.sel, f.stage(), stage, m.cockpit.open, f.moves)
 	}
-	m = pressSettled(t, m, "esc")
+	// esc comes out of the list to the panels, then closes the cockpit.
+	m = pressSettled(t, m, "esc", "esc")
 	second := paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
 	if m.cockpit.open || f.zoomed("%0") || len(f.zooms) != 2 {
 		t.Fatalf("after esc: open %v zoomed %v zooms %v", m.cockpit.open, f.zoomed("%0"), f.zooms)
@@ -225,8 +226,8 @@ func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
 	}
 }
 
-// esc in the cockpit clears a filter applied to the list first, and
-// closes the cockpit on the next press.
+// esc in the cockpit clears a filter applied to the list first, then
+// comes out of the list, and closes the cockpit on the next press.
 func TestEscClearsTheFilterBeforeClosingTheCockpit(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
@@ -239,8 +240,12 @@ func TestEscClearsTheFilterBeforeClosingTheCockpit(t *testing.T) {
 		t.Fatalf("after esc: filter %q open %v", m.filter, m.cockpit.open)
 	}
 	m = pressSettled(t, m, "esc")
+	if m.nav.inside || !m.cockpit.open {
+		t.Fatalf("after the second esc: inside %v open %v", m.nav.inside, m.cockpit.open)
+	}
+	m = pressSettled(t, m, "esc")
 	if m.cockpit.open {
-		t.Fatal("the second esc left the cockpit open")
+		t.Fatal("the third esc left the cockpit open")
 	}
 }
 
@@ -281,7 +286,7 @@ func TestTheCockpitOutsideTmuxOnlyDraws(t *testing.T) {
 	if body := ansi.Strip(lines[2]); []rune(body)[cockpitList] != '│' {
 		t.Fatalf("no border after the list: %q", body)
 	}
-	m, _ = press(m, "esc")
+	m, _ = press(m, "esc", "esc")
 	if m.cockpit.open {
 		t.Fatal("esc left it open")
 	}
@@ -323,8 +328,8 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	m = pressSettled(t, m, "o", "tab")
 	// The first issue listed has no session working on it, so enter would
 	// start one.
-	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
-		t.Fatalf("after tab: issues %v, footer %q", m.cockpit.issues, ansi.Strip(m.footer()))
+	if !m.inIssues() || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
+		t.Fatalf("after tab: issues %v, footer %q", m.inIssues(), ansi.Strip(m.footer()))
 	}
 	// j moves the card's cursor, not the list's, and stops at the end.
 	m = pressSettled(t, m, "j", "j", "j")
@@ -335,8 +340,8 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 		t.Fatalf("the cursor is not on #6:\n%s", ansi.Strip(m.View()))
 	}
 	m = pressSettled(t, m, "k", "tab")
-	if m.cockpit.issues || m.cockpit.pick != 0 || !strings.Contains(ansi.Strip(m.footer()), "tab issues") {
-		t.Fatalf("after k tab: issues %v pick %d footer %q", m.cockpit.issues, m.cockpit.pick, ansi.Strip(m.footer()))
+	if m.inIssues() || m.cockpit.pick != 0 || !strings.Contains(ansi.Strip(m.footer()), "esc back") {
+		t.Fatalf("after k tab: issues %v pick %d footer %q", m.inIssues(), m.cockpit.pick, ansi.Strip(m.footer()))
 	}
 	m = pressSettled(t, m, "j")
 	if m.sel == "s2" {
@@ -386,8 +391,8 @@ func TestEnterOnAnIssueInProgressGoesToItsWorkstream(t *testing.T) {
 	if len(f.spawned) != 0 {
 		t.Fatalf("started a session on #6: %+v", f.spawned)
 	}
-	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.cockpit.issues || m.target().task != "/code/app#6" {
-		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.cockpit.issues, m.target())
+	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.inIssues() || m.target().task != "/code/app#6" {
+		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.inIssues(), m.target())
 	}
 }
 
@@ -401,7 +406,7 @@ func TestTheProjectCockpitWithoutIssues(t *testing.T) {
 			t.Errorf("lacks %q:\n%s", want, text)
 		}
 	}
-	if m, _ = press(m, "tab"); m.cockpit.issues {
+	if m, _ = press(m, "tab"); m.inIssues() {
 		t.Fatal("tab went to an issues card that is not there")
 	}
 	// With the tool, it says how to start.
@@ -442,7 +447,8 @@ func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
 	m := newTestModel(t, bg)
 	m.cockpit.open = true
-	hs := m.cockpitHints()
+	m.nav = nav{panel: headerPanel}
+	hs := m.panelHints()
 	if i := slices.IndexFunc(hs, func(h hint) bool { return h.key == "enter" }); i < 0 || hs[i].label != "attach" {
 		t.Fatalf("hints %v, want enter attach for a background session with no pane", hs)
 	}

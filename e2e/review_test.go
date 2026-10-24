@@ -66,7 +66,7 @@ func TestReview(t *testing.T) {
 		sessionTop := r.ov.must("display-message", "-p", "-t", session.id, "#{pane_top}")
 		for _, line := range strings.Split(out, "\n") {
 			f := strings.Fields(line)
-			if len(f) == 4 && f[1] == "s-0" && f[2] == r.windowOf(session.id) && f[3] == "0" && sessionTop != "0" {
+			if len(f) == 4 && f[1] == "s-0" && f[2] == r.windowOf(session.id) && atoi(f[3]) < atoi(sessionTop) {
 				rev = f[0]
 				return true, ""
 			}

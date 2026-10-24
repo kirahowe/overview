@@ -29,15 +29,14 @@ const (
 	cockpitCardsMin = 50
 )
 
-// cockpit is the cockpit's state. issues says the issues card has the
-// keyboard, and pick is its cursor there. panes is how many panes the
+// cockpit is the cockpit's state. pick is the issues card's cursor, which
+// moves while the card has the keyboard. panes is how many panes the
 // list's window had when a listing last showed the cockpit as it should
 // be, so zoomLost can tell the user leaving from a pane going away.
 type cockpit struct {
-	open   bool
-	issues bool
-	pick   int
-	panes  int
+	open  bool
+	pick  int
+	panes int
 }
 
 // zoomedMsg answers zoomCmd.
@@ -180,38 +179,44 @@ func cockpitListWidth(want, w int) int {
 	return want
 }
 
-// cockpitBody is the cockpit's lines between the header and the footer:
-// the list at its kept width and a border, then the cards.
+// cockpitBody is the cockpit's lines above the footer: the list at its
+// kept width, under a rule with its title, a line, then the cards. Where
+// a rule meets the line between them, they join.
 func (m model) cockpitBody() []string {
 	h := m.listHeight()
 	lw := cockpitListWidth(m.width.want, m.w)
 	cw, _ := m.cardsSize()
-	var left []string
-	if lw > 0 {
-		lm := m
-		lm.w = lw
-		left = pad(lm.sessionsView(), h)
-		for i, l := range left {
-			if l == "" {
-				left[i] = lm.plain("")
-			}
-		}
+	cards, rules, _ := layoutCards(m.cockpitRows(m.target()), cw, h, m.navAt())
+	if lw == 0 {
+		return cards
 	}
-	cards := m.cockpitCards(cw, h)
+	lm := m
+	lm.w = lw
+	secs := m.sections()
+	e, _, _ := m.selected(flatten(secs))
+	col := lm.column(secs, e.key(), h-1)
+	left := append([]string{panelRule(m.titleText(m.listTitle(), m.lit(projectsPanel)), "", lw, m.lit(projectsPanel))}, col.lines...)
 	out := make([]string, h)
-	edge := fg(pal.Border).Render("│")
 	for i := range out {
-		if lw > 0 {
-			out[i] = left[i] + edge + cards[i]
-		} else {
-			out[i] = cards[i]
+		leftRule := i == 0 || i == col.rule+1
+		join := "│"
+		switch {
+		case i == 0:
+			join = "┬"
+		case leftRule && rules[i]:
+			join = "┼"
+		case leftRule:
+			join = "┤"
+		case rules[i]:
+			join = "├"
 		}
+		out[i] = left[i] + fg(pal.Border).Render(join) + cards[i]
 	}
 	return out
 }
 
 // cardsSize is the width and height of the cockpit's cards: the window
-// beside the list and its border, between the header and the footer.
+// beside the list and the line after it, above the footer.
 func (m model) cardsSize() (w, h int) {
 	if lw := cockpitListWidth(m.width.want, m.w); lw > 0 {
 		return m.w - lw - 1, m.listHeight()
@@ -220,29 +225,11 @@ func (m model) cardsSize() (w, h int) {
 }
 
 // issuesShown says whether the cockpit has room for the target's issues
-// card, the only card that takes the keyboard. layoutCards drops cards
-// from the end, so it is shown when fewer cards come before it than are
-// shown.
+// card, the card whose cursor takes the keyboard.
 func (m model) issuesShown() bool {
-	rows := m.cockpitRows(m.target())
 	w, h := m.cardsSize()
-	_, shown := layoutCards(rows, w, h)
-	before := 0
-	for _, r := range rows {
-		for _, c := range r {
-			if c.keys {
-				return before < shown
-			}
-			before++
-		}
-	}
-	return false
-}
-
-// cockpitCards is the cards for the target, h lines of exactly w cells.
-func (m model) cockpitCards(w, h int) []string {
-	lines, _ := layoutCards(m.cockpitRows(m.target()), w, h)
-	return lines
+	_, _, places := layoutCards(m.cockpitRows(m.target()), w, h, "")
+	return slices.ContainsFunc(places, func(p placed) bool { return p.id == issuesPanel })
 }
 
 // inCockpitList says whether a click at column x lands on the list in the
@@ -574,7 +561,7 @@ func (m model) cockpitRows(t target) [][]card {
 	_, tracked := m.trackers[t.root]
 	others, linked := m.others(t)
 	pick := max(0, min(m.cockpit.pick, len(pickable(others))-1))
-	issuesRow := []card{issuesCard(others, linked, m.cockpit.issues, pick, m.trackers[t.root].err)}
+	issuesRow := []card{issuesCard(others, linked, m.inIssues(), pick, m.trackers[t.root].err)}
 	if !tracked {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}
@@ -642,7 +629,8 @@ func (m model) startPicked() (model, tea.Cmd) {
 	if j >= 0 {
 		m = m.moveTo(es, j)
 	}
-	m.cockpit.issues, m.cockpit.pick = false, 0
+	m.cockpit.pick = 0
+	m.nav = nav{panel: m.cursorPanel(), prev: issuesPanel, inside: true}
 	return m, nil
 }
 
@@ -672,20 +660,12 @@ func (m model) picked() (target, issues.Issue, bool) {
 	return t, ps[max(0, min(m.cockpit.pick, len(ps)-1))], true
 }
 
-// keepCockpit gives the keyboard back to the list when the cursor has
-// moved to a project with no issues card, or the window has no room to
-// show it, and keeps the card's cursor on
-// an issue it lists.
+// keepCockpit keeps the issues card's cursor on an issue it lists.
 func (m model) keepCockpit() model {
-	if !m.cockpit.open || !m.cockpit.issues {
+	if !m.inIssues() {
 		return m
 	}
-	t := m.target()
-	if _, tracked := m.trackers[t.root]; !tracked || !m.issuesShown() {
-		m.cockpit.issues, m.cockpit.pick = false, 0
-		return m
-	}
-	others, _ := m.others(t)
+	others, _ := m.others(m.target())
 	m.cockpit.pick = max(0, min(m.cockpit.pick, len(pickable(others))-1))
 	return m
 }

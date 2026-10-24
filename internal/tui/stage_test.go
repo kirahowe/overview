@@ -45,6 +45,9 @@ type fakeMux struct {
 
 	zooms []string // the zooms SetZoom was asked for, "%0 true"
 
+	// The rules' titles and selection, by pane, as SetPaneOptions set them.
+	titles, selected map[string]string
+
 	moveErr error
 }
 
@@ -56,7 +59,7 @@ type spawnCall struct {
 // newFakeMux holds the view's pane %0, alone in its window, and a holder
 // %1 in a window of its own, both in session ov.
 func newFakeMux() *fakeMux {
-	f := &fakeMux{drawn: map[string]string{}, set: map[string]string{},
+	f := &fakeMux{drawn: map[string]string{}, set: map[string]string{}, titles: map[string]string{}, selected: map[string]string{},
 		current: map[string]string{"ov": "@0"}, next: 2}
 	f.panes = []tmux.Pane{
 		{ID: "%0", TTY: "ttys900", Session: "ov", Window: "@0", W: 160, H: 40, List: true},
@@ -65,7 +68,38 @@ func newFakeMux() *fakeMux {
 	return f
 }
 
-func (f *fakeMux) Panes() ([]tmux.Pane, error) { return slices.Clone(f.panes), nil }
+// Panes lists the panes, the one the keyboard is in active.
+func (f *fakeMux) Panes() ([]tmux.Pane, error) {
+	out := slices.Clone(f.panes)
+	for i := range out {
+		out[i].Active = out[i].ID == f.focus
+	}
+	return out, nil
+}
+
+// lay places the panes of window w as tmux would: the list down the left,
+// and the others beside it, one above another in the order they came.
+func (f *fakeMux) lay(w string) {
+	lw, n := 0, 0
+	for _, p := range f.panes {
+		if p.Window == w && p.List {
+			lw = p.W + 1
+		} else if p.Window == w {
+			n++
+		}
+	}
+	k := 0
+	for i, p := range f.panes {
+		switch {
+		case p.Window != w:
+		case p.List:
+			f.panes[i].X, f.panes[i].Y = 0, 0
+		default:
+			f.panes[i].X, f.panes[i].Y, f.panes[i].H = lw, k*(40/n), 40/n-1
+			k++
+		}
+	}
+}
 
 func (f *fakeMux) find(id string) int {
 	for i, p := range f.panes {
@@ -92,7 +126,8 @@ func (f *fakeMux) split(id string) tmux.Pane {
 		Command: "zsh", Path: beside.Path, Project: beside.Project, Task: beside.Task}
 	f.next++
 	f.panes = append(f.panes, p)
-	return p
+	f.lay(beside.Window)
+	return f.panes[len(f.panes)-1]
 }
 
 func (f *fakeMux) Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error) {
@@ -141,6 +176,41 @@ func (f *fakeMux) SetPaneOption(pane, name, value string) error {
 		return fmt.Errorf("unexpected pane option %s on %s", name, pane)
 	}
 	return nil
+}
+
+// SetPaneOptions sets the rules' options in order, stopping at the first
+// pane that is not there, as tmux does.
+func (f *fakeMux) SetPaneOptions(sets []tmux.PaneSet) error {
+	for _, ps := range sets {
+		switch {
+		case f.find(ps.Pane) < 0:
+			return errors.New("can't find pane " + ps.Pane)
+		case ps.Name == tmux.TitleOption:
+			f.titles[ps.Pane] = ps.Value
+		case ps.Name == tmux.SelectOption:
+			f.selected[ps.Pane] = ps.Value
+		default:
+			return fmt.Errorf("unexpected pane option %s on %s", ps.Name, ps.Pane)
+		}
+	}
+	return nil
+}
+
+// SetFrame turns the rules of pane's window on or off.
+func (f *fakeMux) SetFrame(pane string, on bool) error {
+	if f.find(pane) < 0 {
+		return errors.New("can't find pane " + pane)
+	}
+	f.setFrame(f.window(pane), on)
+	return nil
+}
+
+func (f *fakeMux) setFrame(w string, on bool) {
+	for i, p := range f.panes {
+		if p.Window == w {
+			f.panes[i].Framed = on
+		}
+	}
 }
 
 func (f *fakeMux) KillWindow(window string) error {
@@ -196,6 +266,7 @@ func (f *fakeMux) Move(list, target, size string) error {
 	f.panes[i].Session, f.panes[i].Window, f.panes[i].W, f.panes[i].WinW = f.panes[j].Session, f.panes[j].Window, w, f.panes[j].WinW
 	f.current[f.panes[j].Session] = f.panes[j].Window
 	f.focus = list // join-pane makes the list the active pane
+	f.lay(f.panes[j].Window)
 	return nil
 }
 
@@ -273,6 +344,7 @@ func (f *fakeMux) SetZoom(pane string, on bool) error {
 	if w := f.window(pane); f.inWindow(w) > 1 {
 		f.setZoom(w, on)
 	}
+	f.setFrame(f.window(pane), !on)
 	return nil
 }
 
@@ -372,6 +444,7 @@ func fakeDeps(f *fakeMux) deps {
 // claude runs in a window of its own, on the row's tty.
 func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
+	m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 	m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 	m.deps = fakeDeps(f)
 	ttys := map[int]string{}
@@ -852,6 +925,7 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 			rows = append(rows, r)
 		}
 		m := newModel(caseHome(t, root), "")
+		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
 		m.deps = fakeDeps(f)
 		m = m.setPanes(f.panes, nil)
@@ -1002,6 +1076,7 @@ func TestPropHolderTextFillsThePane(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, ttys := genStateRows(t)
 		m := newModel(caseHome(t, root), "")
+		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		w := rapid.IntRange(3, 200).Draw(t, "w")
 		h := rapid.IntRange(1, 60).Draw(t, "h")
@@ -1564,6 +1639,7 @@ func TestATerminalClosedMidSpawnLeavesNoDeadPanes(t *testing.T) {
 // When the first refresh fails, the holder says why instead of waiting.
 func TestTheHolderShowsAFirstRefreshThatFailed(t *testing.T) {
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
+	m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 	m.deps = fakeDeps(nil)
 	m = update(m, rowsMsg{err: errors.New("claude agents --json: not found")})
 	text := ansi.Strip(m.holderText(60, 10))

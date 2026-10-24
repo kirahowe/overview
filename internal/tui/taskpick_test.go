@@ -191,8 +191,8 @@ func TestTaskPickerKeysAndMouse(t *testing.T) {
 	if m.taskPick.sel != 1 {
 		t.Fatalf("wheel: sel %d", m.taskPick.sel)
 	}
-	// Lines: header, query, blank, then #3, #8, #4.
-	y := 1 + 2 + 2
+	// Lines: query, blank, then #3, #8, #4, under the rule tmux draws.
+	y := 2 + 2
 	m, _ = step(m, tea.MouseMsg{X: 5, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.taskPick.sel != 2 || len(f.spawned) != 0 {
 		t.Fatalf("a click: sel %d, spawned %v", m.taskPick.sel, f.spawned)

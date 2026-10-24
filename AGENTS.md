@@ -14,8 +14,10 @@ See README.md for behaviour and docs/ for design notes.
 - `scripts/e2e` builds the binary and drives it in pairs of private tmux
   servers (`ovtest-e2e-<tag><pid>` and `ovtest-e2e-term-<tag><pid>`, the
   second holding the terminals overview is launched in). It covers launch
-  and the holder; `c` and the list moving into a session's window; splits
-  staying with their window and the list keeping its dragged width; a
+  and the holder; the rule along each pane's top and its title; `c` and
+  the list moving into a session's window; splits staying with their
+  window and the list keeping its dragged width; `h`, `enter` and `j`
+  going from a session's panel into the list; a
   relaunch restarting the view for new flags, a theme given as a relative
   path and a changed config file, and only attaching otherwise; `t`, a
   terminal's place in the list and the keyboard moving into it; a session

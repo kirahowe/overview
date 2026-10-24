@@ -15,8 +15,10 @@ import (
 )
 
 // The cockpit's cards are built from plain data by pure functions: each
-// card's body is a function of the width inside its border, and
-// layoutCards stacks them into the lines the cockpit shows.
+// card's body is a function of the width inside it, and layoutCards tiles
+// them into the lines the cockpit shows. A card is drawn as every panel
+// is: a rule along its top with its title in it, and a single line
+// between it and the card beside it.
 
 // pairMin is the narrowest the cards area shows two cards side by side,
 // and pairShare the left one's share of it, in percent.
@@ -25,53 +27,35 @@ const (
 	pairShare = 58
 )
 
-// card is one box of the cockpit: a title and a note set into its top
-// edge, and a body drawn at the width inside the border. right is styled
-// already. accent draws the border in the accent colour, for the header
-// and for a card with the keyboard. keys marks the card that can take
-// the keyboard.
+// card is one panel of the cockpit: a title and a note set into its top
+// rule, and a body drawn at the width inside it. right is styled already.
+// id names the card as a panel when it can be selected, "" when not.
 type card struct {
 	title, right string
 	body         func(w int) []string
-	accent, keys bool
+	id           panelID
 }
 
-// render draws c as h lines w wide, its body padded with blank lines or
-// cut to fit. A card narrower than a border and a cell of title is blank.
-func (c card) render(body []string, w, h int) []string {
-	if w < 6 || h < 2 {
+// render draws c as h lines w wide, its rule lit when it is selected, and
+// its body padded with blank lines or cut to fit. cuts are where a
+// divider above meets its rule.
+func (c card) render(body []string, w, h int, lit bool, cuts ...int) []string {
+	if w < 6 || h < 1 {
 		return blanks(w, h)
 	}
-	edge, name := fg(pal.Border), fg(pal.Text).Bold(true)
-	if c.accent {
-		edge, name = fg(pal.Accent), heading
+	name := fg(pal.Text)
+	if lit {
+		name = heading
 	}
-	inner := w - 2
-	right := c.right
-	// The top edge is "┌─ title ", dashes, then " right ─┐" when right fits.
-	if right != "" && ansi.StringWidth(right)+ansi.StringWidth(c.title)+8 > inner {
-		right = ""
-	}
-	room := inner - 3
-	if right != "" {
-		room -= ansi.StringWidth(right) + 3
-	}
-	title := ansi.Truncate(c.title, max(room-1, 1), "…")
-	top := edge.Render("┌─ ") + name.Render(title) + " "
-	if right != "" {
-		top += edge.Render(strings.Repeat("─", max(room-ansi.StringWidth(title), 0))) + " " + right + " " + edge.Render("─┐")
-	} else {
-		top += edge.Render(strings.Repeat("─", max(room-ansi.StringWidth(title), 0)) + "┐")
-	}
-	out := []string{fit(top, w)}
-	for i := 0; i < h-2; i++ {
+	out := []string{panelRule(name.Render(c.title), c.right, w, lit, cuts...)}
+	for i := 0; i < h-1; i++ {
 		l := ""
 		if i < len(body) {
 			l = body[i]
 		}
-		out = append(out, edge.Render("│")+" "+fit(l, max(inner-2, 0))+" "+edge.Render("│"))
+		out = append(out, " "+fit(l, cardInner(w))+" ")
 	}
-	return append(out, edge.Render("└"+strings.Repeat("─", inner)+"┘"))
+	return out
 }
 
 // blanks is h blank lines w wide.
@@ -84,14 +68,22 @@ func blanks(w, h int) []string {
 }
 
 // cardInner is the width a card w wide draws its body at.
-func cardInner(w int) int { return max(w-4, 0) }
+func cardInner(w int) int { return max(w-2, 0) }
 
-// layoutCards stacks rows of cards from the top, h lines of exactly w
-// cells, and says how many cards it showed. A row of two goes side by
-// side when w has room, and else becomes two rows. A row that does not fit
-// the height left is dropped, with every row after it, so what is dropped
-// is always the last cards, never a squeezed one.
-func layoutCards(rows [][]card, w, h int) (lines []string, shown int) {
+// placed is where layoutCards put a card, in the cards' area.
+type placed struct {
+	id panelID
+	r  rect
+}
+
+// layoutCards tiles rows of cards from the top, h lines of exactly w
+// cells, and says which lines are the top rules of cards and where each
+// card went. A row of two goes side by side when w has room, with a line
+// between them, and else becomes two rows. A row that does not fit the
+// height left is dropped, with every row after it, so what is dropped is
+// always the last cards, never a squeezed one. The card that is sel is
+// drawn lit.
+func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []bool, places []placed) {
 	var flat [][]card
 	for _, r := range rows {
 		if len(r) == 2 && w < pairMin {
@@ -100,6 +92,8 @@ func layoutCards(rows [][]card, w, h int) (lines []string, shown int) {
 			flat = append(flat, r)
 		}
 	}
+	edge := fg(pal.Border).Render
+	divider := -1 // the column of the line between the cards of the row above
 	for _, r := range flat {
 		widths := []int{w}
 		if len(r) == 2 {
@@ -110,25 +104,50 @@ func layoutCards(rows [][]card, w, h int) (lines []string, shown int) {
 		tall := 0
 		for i, c := range r {
 			bodies[i] = c.body(cardInner(widths[i]))
-			tall = max(tall, len(bodies[i])+2)
+			tall = max(tall, len(bodies[i])+1)
 		}
 		if len(lines)+tall > h {
 			break
 		}
-		drawn := make([][]string, len(r))
+		lit := func(c card) bool { return c.id != "" && c.id == sel }
+		var drawn [][]string
+		if len(r) == 1 {
+			var cuts []int
+			if divider >= 0 {
+				cuts = []int{divider}
+			}
+			drawn = [][]string{r[0].render(bodies[0], w, tall, lit(r[0]), cuts...)}
+		} else {
+			drawn = [][]string{r[0].render(bodies[0], widths[0], tall, lit(r[0])), r[1].render(bodies[1], widths[1], tall, lit(r[1]))}
+		}
+		x := 0
 		for i, c := range r {
-			drawn[i] = c.render(bodies[i], widths[i], tall)
+			places = append(places, placed{c.id, rect{x, len(lines), widths[i], tall}})
+			x += widths[i] + 1
 		}
 		for j := 0; j < tall; j++ {
 			l := drawn[0][j]
 			if len(r) == 2 {
-				l += " " + drawn[1][j]
+				join := "│"
+				if j == 0 {
+					join = "┬"
+					if divider == widths[0] {
+						join = "┼"
+					}
+				}
+				l += edge(join) + drawn[1][j]
 			}
-			lines = append(lines, l)
+			lines, rules = append(lines, l), append(rules, j == 0)
 		}
-		shown += len(r)
+		divider = -1
+		if len(r) == 2 {
+			divider = widths[0]
+		}
 	}
-	return append(lines, blanks(w, h-len(lines))...), shown
+	for len(lines) < h {
+		lines, rules = append(lines, strings.Repeat(" ", max(w, 0))), append(rules, false)
+	}
+	return lines, rules, places
 }
 
 // spread puts left at the left of w cells and right at the right, cutting
@@ -197,7 +216,7 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 			right = append(right, s)
 		}
 	}
-	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), accent: true, body: func(w int) []string {
+	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), id: headerPanel, body: func(w int) []string {
 		when := ""
 		if started != "" {
 			when = dim.Render("started " + agoPhrase(started))
@@ -217,7 +236,7 @@ func projectHeader(name, root, kind string, open int, ms []member) card {
 	if open >= 0 {
 		right = strconv.Itoa(open) + " open"
 	}
-	return card{title: name, right: dim.Render(right), accent: true, body: func(w int) []string {
+	return card{title: name, right: dim.Render(right), id: headerPanel, body: func(w int) []string {
 		return []string{
 			spread(fg(pal.Text).Render(root), dim.Render(kind), w),
 			membersLine(ms),
@@ -530,7 +549,7 @@ func pickable(others []issues.Issue) []issues.Issue {
 // enter acts on. err is why the last read of them failed, if it did, and
 // the card then lists what the last good read found.
 func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, err error) card {
-	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), accent: focused, keys: true, body: func(w int) []string {
+	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel, body: func(w int) []string {
 		var out []string
 		if err != nil {
 			out = wrap(fg(pal.Asking).Render("issues failed: "+issues.OneLine(err.Error())), w)

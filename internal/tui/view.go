@@ -51,12 +51,13 @@ func pill(text string, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Background(bg).Foreground(pal.PillFg).Bold(true).Padding(0, 1).Render(text)
 }
 
-// Layout. The first line is the header and the last the footer, and the
-// list takes the lines between. Every line is exactly as wide as the pane:
-// column 0 holds the cursor's bar, the content follows, and one blank
-// column ends it.
+// Layout. tmux draws the rule along the top of the pane, with the list's
+// title in it, so the list starts on the pane's first line. The last line
+// is the footer. Every line is exactly as wide as the pane: column 0
+// holds the cursor's bar, the content follows, and one blank column ends
+// it.
 
-func (m model) listHeight() int { return max(m.h-2, 1) }
+func (m model) listHeight() int { return max(m.h-1, 1) }
 
 // contentWidth is the width of a line's content, between the bar's column
 // and the blank one at the end.
@@ -78,7 +79,7 @@ func (m model) View() string {
 	for len(body) < m.listHeight() {
 		body = append(body, m.plain(""))
 	}
-	screen := append([]string{m.header()}, body[:m.listHeight()]...)
+	screen := slices.Clone(body[:m.listHeight()])
 	switch {
 	case m.help:
 		screen = centre(screen, m.helpBox(), m.w)
@@ -99,8 +100,7 @@ func (m model) sessionsView() []string {
 	}
 	secs := m.sections()
 	e, _, _ := m.selected(flatten(secs))
-	lines, _ := m.listView(secs, e.key())
-	return lines
+	return m.listView(secs, e.key()).lines
 }
 
 // pickerView is the add-project picker in the list's place: the query,
@@ -294,7 +294,7 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 	if selected {
 		bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
 		edge := pal.CursorBg
-		if m.blurred {
+		if !m.listHasKeys() {
 			edge = pal.Border
 		}
 		bar = fg(edge).Render("▌")
@@ -347,15 +347,12 @@ func (m model) rule(title string, style lipgloss.Style, note string) string {
 	return m.plain(s)
 }
 
-// sectionNote is what a section's rule says on the right: how many tasks
+// sectionNote is what a project's rule says on the right: how many tasks
 // a tracked project has under way, or how many issues are open when none
-// is, or that reading them failed; how many entries an untracked one has;
-// and for the agents list its order.
+// is, or that reading them failed; and how many entries an untracked one
+// has.
 func sectionNote(sec section) string {
-	switch {
-	case sec.Agents:
-		return "priority"
-	case sec.Failed:
+	if sec.Failed {
 		return "issues failed"
 	}
 	n, tasks := 0, 0
@@ -381,11 +378,10 @@ func sectionNote(sec section) string {
 	return strconv.Itoa(tasks) + " tasks"
 }
 
-// listLines renders the whole list, unscrolled, for a list area h lines
-// high, with the key of the entry each line belongs to ("" for headings,
-// gaps and messages). Clicks read the owners. When everything fits, blank
-// lines push the agents list to the bottom of the area.
-func (m model) listLines(secs []section, sel string, h int) (lines, owners []string) {
+// projectLines renders the projects, unscrolled, with the key of the
+// entry each line belongs to ("" for headings, gaps and messages). Clicks
+// read the owners.
+func (m model) projectLines(secs []section, sel string) (lines, owners []string) {
 	add := func(owner string, ls ...string) {
 		lines = append(lines, ls...)
 		for range ls {
@@ -407,47 +403,82 @@ func (m model) listLines(secs []section, sel string, h int) (lines, owners []str
 		add("", m.plain(dim.Render(msg)))
 		return lines, owners
 	}
-	var agents []string
-	var agentOwners []string
-	for i, sec := range secs {
-		var ls, ows []string
-		put := func(owner, l string) { ls, ows = append(ls, l), append(ows, owner) }
-		style := heading
-		if sec.Away || sec.Agents {
-			style = dim.Bold(true)
-		}
-		put("", m.rule(sec.Title, style, sectionNote(sec)))
-		for j, e := range sec.Entries {
-			put(e.key(), m.entryLine(e, e.key() == sel))
-			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].task != e.task) {
-				put(e.key(), m.plain(dim.Render("   no sessions")))
-			}
-		}
+	first := true
+	for _, sec := range secs {
 		if sec.Agents {
-			agents, agentOwners = ls, ows
 			continue
 		}
-		if i > 0 {
+		if !first {
 			add("", m.plain(""))
 		}
-		lines, owners = append(lines, ls...), append(owners, ows...)
-	}
-	if agents != nil {
-		gap := 1
-		if n := len(lines) + 1 + len(agents); n < h {
-			gap += h - n
+		first = false
+		style := heading
+		if sec.Away {
+			style = dim.Bold(true)
 		}
-		for range gap {
-			add("", m.plain(""))
+		add("", m.rule(sec.Title, style, sectionNote(sec)))
+		for j, e := range sec.Entries {
+			add(e.key(), m.entryLine(e, e.key() == sel))
+			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].task != e.task) {
+				add(e.key(), m.plain(dim.Render("   no sessions")))
+			}
 		}
-		lines, owners = append(lines, agents...), append(owners, agentOwners...)
 	}
 	return lines, owners
 }
 
-// listStart is the first list line shown: the last one, moved just enough
-// to show the cursor's row whole.
-func (m model) listStart(owners []string, sel string, h int) int {
+// agentEntries are the entries of the agents list, nil when it has none.
+func agentEntries(secs []section) []entry {
+	for _, sec := range secs {
+		if sec.Agents {
+			return sec.Entries
+		}
+	}
+	return nil
+}
+
+// column is the list as its pane shows it, h lines: the projects, then,
+// when there are sessions, the agents panel, a rule and its lines. Each
+// part scrolls on its own, as little as its cursor needs, from projTop
+// and agentsTop. owners holds the key of each line's entry, "" for
+// others, and rule the line of the agents panel's rule, -1 for none.
+type column struct {
+	lines, owners      []string
+	projTop, agentsTop int
+	projH, agentsH     int
+	rule               int
+}
+
+// column lays the list out in h lines, with sel under the cursor.
+func (m model) column(secs []section, sel string, h int) column {
+	plines, powners := m.projectLines(secs, sel)
+	var alines, aowners []string
+	for _, e := range agentEntries(secs) {
+		alines, aowners = append(alines, m.entryLine(e, e.key() == sel)), append(aowners, e.key())
+	}
+	c := column{rule: -1}
+	c.projH, c.agentsH = splitList(len(plines), len(alines), h)
+	c.projTop = scrollTo(m.listTop, powners, sel, c.projH)
+	c.agentsTop = scrollTo(m.agentsTop, aowners, sel, c.agentsH)
+	show := func(lines, owners []string, top, n int) {
+		end := min(top+n, len(lines))
+		c.lines, c.owners = append(c.lines, lines[top:end]...), append(c.owners, owners[top:end]...)
+		for i := end - top; i < n; i++ {
+			c.lines, c.owners = append(c.lines, m.plain("")), append(c.owners, "")
+		}
+	}
+	show(plines, powners, c.projTop, c.projH)
+	if c.agentsH > 0 {
+		c.rule = len(c.lines)
+		c.lines, c.owners = append(c.lines, panelRule(m.titleText([]titleSeg{{text: agentsTitle}}, m.lit(agentsPanel)), dim.Render("priority"), m.w, m.lit(agentsPanel))), append(c.owners, "")
+		show(alines, aowners, c.agentsTop, c.agentsH)
+	}
+	return c
+}
+
+// scrollTo is the first of owners' lines shown in h: top, moved just
+// enough to show the lines of sel whole, when they are there.
+func scrollTo(top int, owners []string, sel string, h int) int {
 	selTop, selBottom := 0, 0
 	for i, o := range owners {
 		if o == sel && sel != "" {
@@ -457,7 +488,7 @@ func (m model) listStart(owners []string, sel string, h int) int {
 			selBottom = i + 1
 		}
 	}
-	return window(m.listTop, selTop, selBottom, len(owners), h)
+	return window(top, selTop, selBottom, len(owners), h)
 }
 
 // window keeps a window of h lines over n as close to top as it can while
@@ -471,13 +502,9 @@ func window(top, selTop, selBottom, n, h int) int {
 	return max(min(top, selTop), 0)
 }
 
-// listView is the shown part of the list and its owners.
-func (m model) listView(secs []section, sel string) (lines, owners []string) {
-	h := m.listHeight()
-	lines, owners = m.listLines(secs, sel, h)
-	start := m.listStart(owners, sel, h)
-	end := min(start+h, len(lines))
-	return lines[start:end], owners[start:end]
+// listView is the list as its pane shows it.
+func (m model) listView(secs []section, sel string) column {
+	return m.column(secs, sel, m.listHeight())
 }
 
 // stateMark is how a session's state shows: its mark and the mark's
@@ -719,85 +746,119 @@ func (m model) digestView() []string {
 	return out
 }
 
-// header is the first line: the home's name, bright while the list has
-// the keyboard, and the counts of what needs you, what works and what is
-// idle, as many as fit.
-func (m model) header() string {
-	name := heading
-	if m.blurred {
-		name = dim
-	}
-	left := []seg{{"◆ " + m.home.Name(), name}}
+// titleSeg is a run of a panel's title in one colour, "" for the colour
+// of the title itself, which is the accent while the panel is lit.
+type titleSeg struct {
+	text   string
+	colour lipgloss.Color
+}
+
+// listTitle is the title of the list's panel: the home's name, then how
+// many sessions need you, how many work, and how many are idle.
+func (m model) listTitle() []titleSeg {
 	need, working, idle := m.counts()
-	if m.cockpit.open && m.screen == sessionsScreen {
-		return m.cockpitHeader(left, need, working, idle)
-	}
-	var right []seg
+	segs := []titleSeg{{text: "◆ " + m.home.Name()}}
 	if need > 0 {
-		right = append(right, seg{fmt.Sprintf("! %d  ", need), red})
+		segs = append(segs, titleSeg{"  ! " + strconv.Itoa(need), pal.Blocked})
 	}
 	if working > 0 {
-		right = append(right, seg{fmt.Sprintf("● %d  ", working), green})
+		segs = append(segs, titleSeg{"  ● " + strconv.Itoa(working), pal.Working})
 	}
-	right = append(right, seg{fmt.Sprintf("○ %d", idle), dim})
-	for len(right) > 1 && segsWidth(left)+segsWidth(right)+1 > m.contentWidth() {
-		right = right[1:]
-	}
-	return m.line(left, right, false, false)
+	return append(segs, titleSeg{"  ○ " + strconv.Itoa(idle), pal.Muted})
 }
 
-// cockpitHeader is the header across the cockpit: the counts in full
-// after the home's name, and on the right how old the digest is and how
-// the orchestrator is, as much as fits.
-func (m model) cockpitHeader(left []seg, need, working, idle int) string {
-	left = append(left, seg{"   ", dim})
-	if need > 0 {
-		left = append(left, seg{fmt.Sprintf("! %d need you  ", need), red})
+// titleText renders a title as the view draws it into a rule: accent and
+// bold while lit, as tmux draws the rules of its panes.
+func (m model) titleText(segs []titleSeg, lit bool) string {
+	base := fg(pal.Text)
+	if lit {
+		base = heading
 	}
-	if working > 0 {
-		left = append(left, seg{fmt.Sprintf("● %d working  ", working), green})
+	var b strings.Builder
+	for _, sg := range segs {
+		st := base
+		if sg.colour != "" {
+			st = fg(sg.colour)
+		}
+		b.WriteString(st.Render(sg.text))
 	}
-	left = append(left, seg{fmt.Sprintf("○ %d idle", idle), dim})
-	if n := len(m.terminals()); n > 0 {
-		left = append(left, seg{fmt.Sprintf("  $ %d terminals", n), codeFg})
-	}
-	var right []seg
-	if !m.digestAt.IsZero() {
-		right = append(right, seg{"digest " + Ago(m.digestAt) + " ago · ", dim})
-	}
-	switch h := m.home.HealthOf(m.rows); {
-	case !m.loaded:
-	case !h.Running:
-		right = append(right, seg{"orchestrator off", red})
-	case h.Stale:
-		right = append(right, seg{"orchestrator silent " + Ago(h.LastCheck), red})
-	default:
-		right = append(right, seg{"orchestrator ok", dim})
-	}
-	if segsWidth(left)+segsWidth(right)+1 > m.contentWidth() {
-		right = nil
-	}
-	return m.line(left, right, false, false)
+	return b.String()
 }
 
-// cockpitHints are the footer's keys in the cockpit, for where the
-// keyboard is.
-func (m model) cockpitHints() []hint {
-	if m.cockpit.issues {
+// panelRule is the rule along the top of a panel the view draws, as tmux
+// draws its panes': "── title ────── right ──", w cells, in the accent
+// colour when lit. title and right are styled already; right goes when
+// it does not fit beside the whole title. Each column in cuts that
+// falls on the dashes between them becomes a ┴, where a divider above
+// ends.
+func panelRule(title, right string, w int, lit bool, cuts ...int) string {
+	if w < 6 {
+		return strings.Repeat(" ", max(w, 0))
+	}
+	edge := fg(pal.Border)
+	if lit {
+		edge = fg(pal.Accent)
+	}
+	rw := ansi.StringWidth(right)
+	if right != "" && ansi.StringWidth(title)+rw+9 > w {
+		right, rw = "", 0
+	}
+	// "── " title " " dashes, then " " right " ──" when there is one.
+	room := w - 4
+	if right != "" {
+		room -= rw + 4
+	}
+	title = ansi.Truncate(title, max(room-1, 1), "…")
+	from := 3 + ansi.StringWidth(title) + 1
+	dashes := []rune(strings.Repeat("─", max(room-ansi.StringWidth(title), 0)))
+	for _, c := range cuts {
+		if i := c - from; i >= 0 && i < len(dashes) {
+			dashes[i] = '┴'
+		}
+	}
+	out := edge.Render("── ") + title + " " + edge.Render(string(dashes))
+	if right != "" {
+		out += " " + right + " " + edge.Render("──")
+	}
+	return fit(out, w)
+}
+
+// panelHints are the footer's keys for where the keyboard is: in the
+// cockpit's issues card, in the list, where the keys that act on the
+// cursor's entry and esc to come out are, or on the panels, where hjkl
+// moves and enter does what it does on the selected panel. In the cockpit
+// o closes it first.
+func (m model) panelHints() []hint {
+	help := hint{"?", "help"}
+	if m.inIssues() {
 		enter := hint{"enter", "start"}
 		if !m.pickStarts() {
 			enter.label = "go to"
 		}
-		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, {"?", "help"}}
+		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "back"}, help}
 	}
-	// enter does what it does in the list, so it says the same.
+	e, _, ok := m.selected(m.ordered())
+	hs := m.entryHints(e, ok)
+	hs = hs[:len(hs)-1] // help goes last, after what is added here
+	var out []hint
+	if m.cockpit.open {
+		out = append(out, hint{"o", "close"})
+	}
+	if m.nav.inside {
+		return append(append(out, hs...), hint{"esc", "back"}, help)
+	}
 	enter := hint{"enter", "type"}
-	if e, _, ok := m.selected(m.ordered()); ok {
-		if hs := m.entryHints(e, ok); hs[0].key == "enter" {
-			enter = hs[0]
-		}
+	if len(hs) > 0 && hs[0].key == "enter" {
+		enter, hs = hs[0], hs[1:]
 	}
-	return []hint{{"o", "close"}, {"tab", "issues"}, enter, {"c", "claude"}, {"t", "term"}, {"v", "review"}, {"?", "help"}}
+	switch at := m.navAt(); {
+	case at.listPanel() || at == issuesPanel:
+		enter.label = "focus"
+	case at.isPane():
+		enter.label = "type"
+	}
+	// The entry's own keys before hjkl: the footer drops hints from the end.
+	return append(append(append(out, enter), hs...), hint{"hjkl", "move"}, help)
 }
 
 // hint is a key and what it does, as the footer shows it.
@@ -901,11 +962,7 @@ func (m model) footer() string {
 		if m.filter != "" {
 			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		}
-		e, _, ok := m.selected(m.ordered())
-		hints = m.entryHints(e, ok)
-		if m.cockpit.open {
-			hints = m.cockpitHints()
-		}
+		hints = m.panelHints()
 	}
 	return m.plain(hintLine(lead, hints, m.contentWidth()))
 }
@@ -921,14 +978,19 @@ func (m model) helpBox() []string {
 		}
 		return append(out, "")
 	}
-	left := append(section("sessions",
+	left := append(section("panels",
+		entry{"h j k l", "move between panels"},
+		entry{"enter", "go into the panel"},
+		entry{"esc", "back out to the panels"},
+		entry{"ctrl+[", "back from a session"},
+	), section("in the list",
 		entry{"j k", "move"},
 		entry{"n N", "next / previous waiting"},
 		entry{"g G", "first / last"},
 		entry{"/", "search, esc clears"},
-	), section("act",
+	)...)
+	left = append(left, section("act",
 		entry{"enter", "type into the session"},
-		entry{"ctrl+[", "back to the list"},
 		entry{"x", "stop, close or unpin"},
 		entry{"y", "copy attach command"},
 		entry{"c", "new session in project"},

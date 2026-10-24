@@ -53,8 +53,15 @@ another `--theme` or from the config file, or overview has been rebuilt, the
 view restarts with them in the same pane, and the session beside it keeps
 running.
 
-The list starts with a header: the home's name, then how many sessions
-need you (`!`), how many work (`●`) and how many are idle (`○`). Below it
+The window is made of panels, and each has a rule along its top with its
+title in it: the list, the agents, the session beside them and any split
+of its window, and the cockpit's cards. tmux draws the rules of its panes,
+and the view draws the same rule for the panels it draws itself. The
+panel that is selected, or that has the keyboard, has its rule in the
+accent colour.
+
+The list's title is the home's name, then how many sessions need you
+(`!`), how many work (`●`) and how many are idle (`○`). In the list
 each project has a section, headed by a rule with its name. A project is
 the nearest parent directory with a `.jj` or `.git` in it, or the session's
 own directory when there is none, and projects are in alphabetical order.
@@ -70,13 +77,15 @@ in a section of its own, "in other apps", dimmed and named after the app
 that runs it. When the entry under the cursor goes away, the cursor moves
 to the one after it, or to the one before it when it was last.
 
-The agents list comes last. It holds every session in the list once more,
-in order of priority: those that need you first, longest wait first, then
-the working ones, then the idle ones. A session there acts exactly as it
-does in its project, and its row names its project, or the task it works
-on as `#6`. When the whole list fits, the agents list sits at the bottom of
-the pane; otherwise it follows the projects. The footer shows the keys for
-the selected entry, or a note when overview has something to say.
+The agents are a panel of their own, under the projects. They hold every
+session in the list once more, in order of priority: those that need you
+first, longest wait first, then the working ones, then the idle ones. A
+session there acts exactly as it does in its project, and its row names
+its project, or the task it works on as `#6`. When both fit, the agents
+sit at the bottom of the list's pane. Otherwise they take up to two
+fifths of it, and the projects and the agents each scroll on their own.
+The footer shows the keys for where the keyboard is, or a note when
+overview has something to say.
 
 A project that tracks its work with the `issues` tool, in a `.issues`
 directory, groups its sessions by task. A task, or workstream, is an open
@@ -109,7 +118,8 @@ is one or sits under one, and otherwise for its project. The list's pane
 zooms to fill its window, so the session beside it keeps running out of
 sight and comes back as it was. The list stays down the left at its
 usual width, and cards about the workstream or project take the rest.
-When the window is too narrow for both, only the cards show. `o` closes the cockpit, and so does `esc`, once it has cleared any
+When the window is too narrow for both, only the cards show. `o` closes
+the cockpit, and so does `esc` out on the panels, once it has cleared any
 filter on the list. So does going to another pane, since tmux ends
 the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
@@ -134,11 +144,14 @@ the window has no room for is left out, from the bottom up. Each group
 of the issues card lists a few issues and says how many more it has,
 and the issue's card lists six of its criteria at most.
 
-`tab` moves the keyboard into the issues card and back, while the
-window has room to show the card. There, `j` and
-`k` move between the issues. On an issue that a session already works
-on, `enter` moves the list's cursor to that workstream, and the cockpit
-stays open on it. On any other issue, `enter` starts a session with the
+The cockpit's header and its issues card are panels the keyboard can
+go to, and the other cards only show. `enter` on the header does what it
+does on the entry in the list. `enter` on the issues card, or `tab` from
+anywhere in the cockpit, moves the keyboard into it while the window has
+room to show the card, and `tab` again moves it into the list. There,
+`j` and `k` move between the issues. On an issue that a session already
+works on, `enter` moves the list's cursor to that workstream, and the
+cockpit stays open on it. On any other issue, `enter` starts a session with the
 first prompt `Work on <project>#<n>: <title>`, as `c` does on a
 workstream. That includes an issue in progress, in review or blocked
 whose sessions have all ended, so a paused task picks up again. The cockpit closes, and the new session shows beside the
@@ -175,8 +188,8 @@ waiting on, and its last few turns from the transcript.
 You can split the right side as you would any tmux window. The prefix is
 tmux's default `ctrl+b`, and `ctrl+b %` and `ctrl+b "` split the current pane
 in its own directory. The splits belong to the session's window, so they go
-when you move to another session and come back with it. `ctrl+[` returns to
-the list from any of them.
+when you move to another session and come back with it. Each is a panel,
+and `ctrl+[` returns to the list from any of them.
 
 While the keyboard is in a pane on the right, the list stays where it is,
 beside you. The cursor follows the window you are typing in: when Claude
@@ -187,8 +200,21 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
-Keys: `j`/`k` move, `n` jumps to the next session that needs you or
-workstream in review, and `/` searches. Search looks at the project,
+Keys. The keyboard starts out on the panels. `h`, `j`, `k` and `l`, or
+the arrows, select the nearest panel that way, and `enter` goes into the
+selected one: into the list or the agents, where the keys move the
+cursor, or into a pane, where they go to what runs there. On the pane
+that shows the cursor's entry, `enter` does what it does on the entry
+in the list. `esc` comes back out to the panels. In a pane on the right,
+where `esc` belongs to the program, `ctrl+[` does that instead, and
+however the keyboard comes back to the list, the pane it was in is the
+one selected. The keys that act on the cursor's entry, such as `c`, `t`,
+`v` or `o`, work out on the panels too, and `n` there also selects the
+pane of the entry it goes to, so `enter` goes straight into it.
+
+In the list, `j`/`k` move, and walk on from the projects into the agents.
+`n` jumps to the next session that needs you or workstream in review,
+and `/` searches. Search looks at the project,
 title, last prompt and name, and the app's name for a session in another
 app, ignoring case. A workstream matches on its reference, such as
 `overview#6` or `#6`, its title and its project, and when it matches,
@@ -196,8 +222,7 @@ everything under it shows. Each space-separated word has to match one of
 those fields, and a word never matches across two of them. The cursor
 moves to the first match, `up` and `down` step through the matches, and
 `esc` clears the search. `enter` (or `tab`) moves the keyboard into the
-selected session, and `ctrl+[` brings it back to the list from any pane on
-the right. On a background session, `enter` first attaches to it in a
+selected session. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
 workstream, `enter` does what it does on the entry shown beside it: the
@@ -249,8 +274,9 @@ the list. A click selects an issue, a double click acts on it, and `esc`
 closes the picker. In a project without `.issues`, `s` says how to start
 tracking its tasks.
 
-The mouse works too. A click selects a session, a double click moves the
-keyboard into it as `enter` does, and the wheel moves through the list and
+The mouse works too. A click selects a session and puts the keyboard in
+the list, a double click moves the keyboard into the session as `enter`
+does, and the wheel moves through the list and
 scrolls the digests. A click also closes help and cancels a stop. tmux has
 the mouse on, so a click on a pane focuses it, and you can drag the borders
 between panes. The list keeps the width you drag it to, in every window it
@@ -263,7 +289,16 @@ config directory (`~/.config/overview` unless `--config` names another).
 From then on the file is yours to change, and overview never writes it
 again. tmux reads it when the server starts. To apply an edit to the
 running server, press `ctrl+b :` inside overview and run `source-file`
-with the file's path. The `ctrl+[` binding and the splits live there.
+with the file's path. The `ctrl+[` binding and the splits live there. The
+rules along the panes' tops are not in the file: the view sets them up
+each time it starts, in its theme's colours. A `tmux.conf` written before
+the panels sends `ctrl+[` in the list to the session beside it. To make
+it come out to the panels instead, change the binding to:
+
+```
+bind -n C-[ if -F "#{@overview-list}" "send-keys Escape" "select-pane -t '{top-left}'"
+```
+
 tmux can only tell `ctrl+[` from Esc when the terminal sends extended
 keys. A terminal that does not sends a plain Esc, which goes
 to the session. Sessions started from overview get `CLAUDE_CONFIG_DIR`
@@ -382,10 +417,10 @@ base   = revdiff
 accent = #c678dd
 ```
 
-The keys are `accent` (headings, the home's name, keys in the footer and
-the help), `border` (rules, and the cursor's bar while the keyboard is
-elsewhere), `text`, `muted`, `cursor-bg` (the cursor's bar while the list
-has the keyboard), `cursor-dim-bg` (the background of the selected row),
+The keys are `accent` (headings, the rule of the selected panel, keys in
+the footer and the help), `border` (rules, and the cursor's bar while the
+keyboard is elsewhere), `text` (and the titles in rules), `muted`,
+`cursor-bg` (the cursor's bar while the keyboard is in the list), `cursor-dim-bg` (the background of the selected row),
 `status-fg` and `status-bg` (the review's bottom bar),
 `pill-fg` (text on the state badge beside a session's details), `blocked`,
 `asking`, `working`,

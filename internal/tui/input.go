@@ -6,18 +6,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Input works in two steps. Every key and mouse event arrives through
-// Update, one at a time, and is first translated into actions: what the
-// user asked for, whichever device asked. Translation reads the model's
-// mode (searching, an overlay, the screen) and changes nothing. apply then carries out each action, and is the only place
-// behaviour lives, so enter and a double click, or j and the wheel, do
-// exactly the same thing.
+// Input works in two steps. Every key, mouse and focus event arrives
+// through Update, one at a time, and is first translated into actions:
+// what the user asked for, whichever device asked. Translation reads the
+// model's mode (searching, an overlay, the screen, the panel the keys are
+// in) and changes nothing. apply then carries out each action, and is the
+// only place behaviour lives, so enter and a double click, or j and the
+// wheel, do exactly the same thing. It runs nothing itself: what reaches
+// tmux or the disk comes back as a Cmd. A key or a click first says where
+// the user is, as an action of its own, and is translated for the model
+// that results.
 
 type verb int
 
 const (
-	quit   verb = iota
-	detach      // leave the view running in tmux and close this terminal's view of it
+	keysBack    verb = iota // the keyboard is back in the view, from the pane it was in
+	keysLeft                // the keyboard has gone to another pane
+	pointerHere             // the mouse is over the view, wherever the keyboard is
+	quit
+	detach // leave the view running in tmux and close this terminal's view of it
 	openHelp
 	dismiss     // close the overlay; a pending stop is cancelled
 	confirmStop // say yes to the pending stop
@@ -62,6 +69,9 @@ const (
 	cockpitTab  // move the keyboard between the list and the cockpit's issues card
 	cockpitMove // n issues down the issues card, negative for up
 	cockpitPick // start a workstream on the issue under the issues card's cursor
+	navMove     // select the nearest panel in direction n
+	navIn       // go into the selected panel
+	navOut      // come out of the panel the keys are in, to choose another
 )
 
 type action struct {
@@ -207,6 +217,20 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return as
 		}
 	}
+	if !m.nav.inside {
+		switch k {
+		case "h", "left":
+			return doN(navMove, int(leftward))
+		case "l", "right":
+			return doN(navMove, int(rightward))
+		case "k", "up":
+			return doN(navMove, int(upward))
+		case "j", "down":
+			return doN(navMove, int(downward))
+		case "enter":
+			return do(navIn)
+		}
+	}
 	switch k {
 	case "j", "down":
 		return doN(move, 1)
@@ -217,6 +241,9 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 	case "G", "end":
 		return doN(moveTo, end)
 	case "esc":
+		if m.filter == "" && m.nav.inside {
+			return do(navOut)
+		}
 		return do(clearFilter)
 	case "n":
 		return doN(nextNeedy, 1)
@@ -248,14 +275,17 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 
 // cockpitKeys translates the keys that mean something else while the
 // cockpit is open, nil for the others: o closes it, and so does esc once
-// no filter is applied to the list, tab moves the keyboard between the
-// list and the issues card, and in that card the arrows move its cursor
-// and enter acts on its issue.
+// no filter is applied to the list and the keyboard is out on the panels,
+// tab moves the keyboard between the list and the issues card, and in
+// that card the arrows move its cursor and enter acts on its issue.
 func (m model) cockpitKeys(k string) []action {
 	switch k {
 	case "esc":
-		if m.filter != "" {
+		switch {
+		case m.filter != "":
 			return do(clearFilter)
+		case m.nav.inside:
+			return do(navOut)
 		}
 		return do(outCockpit)
 	case "o":
@@ -263,7 +293,7 @@ func (m model) cockpitKeys(k string) []action {
 	case "tab":
 		return do(cockpitTab)
 	}
-	if !m.cockpit.issues {
+	if !m.inIssues() {
 		return nil
 	}
 	switch k {
@@ -306,11 +336,11 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		switch {
 		case step != 0:
 			return doN(taskMove, step)
-		case msg.Y > m.listHeight():
+		case msg.Y >= m.listHeight():
 			return nil // the footer
 		}
 		_, owners := m.taskPickLines()
-		if line := msg.Y - 1; line >= 0 && line < len(owners) && owners[line] >= 0 {
+		if line := msg.Y; line >= 0 && line < len(owners) && owners[line] >= 0 {
 			return []action{{do: taskClick, n: owners[line], at: at}}
 		}
 		return nil
@@ -324,17 +354,32 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 
 	lh := m.listHeight()
 	switch {
-	case msg.Y > lh:
+	case msg.Y >= lh:
 		return nil // the footer
 	case m.cockpit.open && !m.inCockpitList(msg.X):
 		return nil // the cards
-	case step != 0:
+	}
+	if step != 0 {
 		return doN(move, step)
 	}
-	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.key())
-	if line := msg.Y - 1; line >= 0 && line < min(len(owners), lh) && owners[line] != "" {
-		return []action{{do: click, id: owners[line], at: at}}
+	col, line := m.shownColumn(), msg.Y
+	if m.cockpit.open {
+		line-- // under the rule the cockpit draws
+	}
+	if line >= 0 && line < len(col.owners) && col.owners[line] != "" {
+		return []action{{do: click, id: col.owners[line], at: at}}
 	}
 	return nil
+}
+
+// shownColumn is the list's column as the screen shows it, where clicks land.
+func (m model) shownColumn() column {
+	secs := m.sections()
+	cur, _, _ := m.selected(flatten(secs))
+	if m.cockpit.open {
+		lm := m
+		lm.w = cockpitListWidth(m.width.want, m.w)
+		return lm.column(secs, cur.key(), m.listHeight()-1)
+	}
+	return m.column(secs, cur.key(), m.listHeight())
 }

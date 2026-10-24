@@ -18,7 +18,7 @@ import (
 var keyPool = []string{
 	"j", "k", "g", "G", "n", "N", "/", "esc", "enter", "x", "y", "d", "1", "2", "?",
 	"tab", "l", "h", "r", "D", "ctrl+d", "ctrl+u", " ", "backspace", "down", "up",
-	"[", "]", "c", "t", "a", "z",
+	"[", "]", "c", "t", "a", "z", "o", "left", "right",
 }
 
 var typeable = []string{"a", "e", "o", "r", "b", "f", "w", "x", "A", " ", "u"}
@@ -45,6 +45,13 @@ func genStateRows(t *rapid.T) ([]fleet.Row, map[int]string) {
 }
 
 func checkInvariants(t *rapid.T, m model) {
+	// The keys are always on a panel that is there.
+	if !m.hasPanel(m.navAt()) {
+		t.Fatalf("the keys are on %q, which is not there (cockpit %v)", m.navAt(), m.cockpit.open)
+	}
+	if m.nav.inside && m.navAt().listPanel() && m.navAt() != m.cursorPanel() {
+		t.Fatalf("the keys are in %s, the cursor in %s", m.navAt(), m.cursorPanel())
+	}
 	rows := m.ordered()
 	if len(rows) > 0 {
 		found := false
@@ -100,11 +107,13 @@ func mouseAt(m model, b tea.MouseButton, x, y int, at time.Time) model {
 
 // shownLine is the screen line of a session's first list line, or -1.
 func shownLine(m model, id string) int {
-	cur, _, _ := m.selected(m.ordered())
-	_, owners := m.listView(m.sections(), cur.key())
-	for i, o := range owners {
+	off := 0
+	if m.cockpit.open {
+		off = 1 // the cockpit draws the list's rule
+	}
+	for i, o := range m.shownColumn().owners {
 		if o == id {
-			return i + 1
+			return i + off
 		}
 	}
 	return -1
@@ -114,6 +123,7 @@ func TestStateMachine(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
+		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys := genStateRows(t)
@@ -160,7 +170,7 @@ func TestStateMachine(t *testing.T) {
 				case before.confirm != "" || before.help:
 					// A click closes an overlay as esc does.
 					ref, _ = press(before, "esc")
-				case before.screen == digestScreen, y > lh, before.pick.open:
+				case before.screen == digestScreen, y >= lh, before.pick.open:
 					ref = before
 				case before.cockpit.open && !before.inCockpitList(x):
 					ref = before // a click on the cockpit's cards
@@ -168,9 +178,10 @@ func TestStateMachine(t *testing.T) {
 					// A click on a row is the cursor moved there, and a second
 					// one on it is enter.
 					ref = before
-					cur, _, _ := before.selected(before.ordered())
-					_, owners := before.listView(before.sections(), cur.key())
-					line := y - 1
+					owners, line := before.shownColumn().owners, y
+					if before.cockpit.open {
+						line--
+					}
 					if line < 0 || line >= min(len(owners), lh) || owners[line] == "" {
 						break
 					}
@@ -181,6 +192,7 @@ func TestStateMachine(t *testing.T) {
 							ref = ref.moveTo(rows, j)
 						}
 					}
+					ref.nav = nav{panel: ref.cursorPanel(), prev: before.navAt(), inside: true}
 					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys, pinned: ref.pinned, err: ref.rowsErr}) // settles listTop
 					if m.sel != id {
 						t.Fatalf("click on %s left the cursor on %s", id, m.sel)
@@ -210,7 +222,7 @@ func TestStateMachine(t *testing.T) {
 				ref := before
 				switch {
 				case before.confirm != "" || before.help, before.pick.open && before.screen == sessionsScreen,
-					before.screen == sessionsScreen && y > before.listHeight(),
+					before.screen == sessionsScreen && y >= before.listHeight(),
 					before.screen == sessionsScreen && before.cockpit.open && !before.inCockpitList(x):
 				case before.screen == digestScreen:
 					ref, _ = press(ref, "j", "j", "j")
@@ -218,7 +230,11 @@ func TestStateMachine(t *testing.T) {
 						ref, _ = press(before, "k", "k", "k")
 					}
 				default:
+					// The wheel moves the cursor as the arrows do inside the
+					// list, and leaves the keys where they were.
+					ref.nav.inside = true
 					ref, _ = press(ref, step)
+					ref.nav = before.nav
 				}
 				sameAs(t, fmt.Sprintf("wheel at %d,%d", x, y), m, ref)
 			},

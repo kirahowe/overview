@@ -21,7 +21,7 @@ import (
 func drawn(c card, w int) []string {
 	body := c.body(cardInner(w))
 	var out []string
-	for _, l := range c.render(body, w, len(body)+2) {
+	for _, l := range c.render(body, w, len(body)+1, false) {
 		out = append(out, ansi.Strip(l))
 	}
 	return out
@@ -42,15 +42,14 @@ func TestStreamHeaderCard(t *testing.T) {
 	ms := []member{{name: "list squeeze", word: "working", age: "3m", style: green}, {name: "go", term: true}}
 	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms), 60)
 	wantLines(t, "header", got, []string{
-		"┌─ overview#6 ────────────────────────── in-progress · p1 ─┐",
-		"│ keep the list's width                     started 2h ago │",
-		"│ ● list squeeze working 3m   $ go                         │",
-		"│  enter  attach   v  review   c  claude   t  term         │",
-		"└──────────────────────────────────────────────────────────┘",
+		"── overview#6 ────────────────────────── in-progress · p1 ──",
+		" keep the list's width                       started 2h ago",
+		" ● list squeeze working 3m   $ go",
+		"  enter  attach   v  review   c  claude   t  term",
 	})
 	// No sessions yet, and no start.
 	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil), 40)
-	if got[1] != "│ show cost                            │" || !strings.Contains(got[2], "no sessions") {
+	if strings.TrimSpace(got[1]) != "show cost" || !strings.Contains(got[2], "no sessions") {
 		t.Fatalf("empty header: %q", got)
 	}
 }
@@ -58,13 +57,12 @@ func TestStreamHeaderCard(t *testing.T) {
 func TestProjectHeaderCard(t *testing.T) {
 	got := drawn(projectHeader("website", "~/code/website", "jj", -1, nil), 50)
 	wantLines(t, "untracked", got, []string{
-		"┌─ website ────────────────────────── no issues ─┐",
-		"│ ~/code/website                              jj │",
-		"│ no sessions                                    │",
-		"│  c  claude   t  term                           │",
-		"└────────────────────────────────────────────────┘",
+		"── website ────────────────────────── no issues ──",
+		" ~/code/website                                jj",
+		" no sessions",
+		"  c  claude   t  term",
 	})
-	if got := drawn(projectHeader("app", "/w/app", "git", 3, nil), 50); !strings.HasSuffix(got[0], " 3 open ─┐") {
+	if got := drawn(projectHeader("app", "/w/app", "git", 3, nil), 50); !strings.HasSuffix(got[0], " 3 open ──") {
 		t.Fatalf("tracked: %q", got[0])
 	}
 }
@@ -88,16 +86,15 @@ func TestIssueCard(t *testing.T) {
 		criteria: []issues.Criterion{{Text: "keeps its width", Done: true}, {Text: "e2e covers it"}}}
 	got := drawn(issueCard(6, info), 50)
 	wantLines(t, "issue", got, []string{
-		"┌─ Issue ──────────────────────── issues show 6 ─┐",
-		"│ Keep the list at the width it was dragged to.  │",
-		"│                                                │",
-		"│ acceptance  1 of 2                             │",
-		"│ ✓ keeps its width                              │",
-		"│ ○ e2e covers it                                │",
-		"└────────────────────────────────────────────────┘",
+		"── Issue ──────────────────────── issues show 6 ──",
+		" Keep the list at the width it was dragged to.",
+		"",
+		" acceptance  1 of 2",
+		" ✓ keeps its width",
+		" ○ e2e covers it",
 	})
 	long := issueInfo{summary: strings.Repeat("word ", 80)}
-	if got := drawn(issueCard(6, long), 30); len(got) != issueSummaryLines+2 || !strings.Contains(got[issueSummaryLines], "…") {
+	if got := drawn(issueCard(6, long), 30); len(got) != issueSummaryLines+1 || !strings.Contains(got[issueSummaryLines], "…") {
 		t.Fatalf("long summary: %q", got)
 	}
 	if got := drawn(issueCard(6, issueInfo{loading: true}), 30); !strings.Contains(got[1], "reading…") {
@@ -125,19 +122,18 @@ func TestChangesCard(t *testing.T) {
 		{path: "internal/tui/stage.go", add: 40, del: 30}}
 	got := drawn(changesCard("Changes", "2h", changeInfo{files: files, uncommitted: 2}), 50)
 	wantLines(t, "changes", got, []string{
-		"┌─ Changes ─────────────────────────── since 2h ─┐",
-		"│ +163 −35 in 3 files              2 uncommitted │",
-		"│ internal/tui/view.go                  +120 − 4 │",
-		"│ internal/tui/stage.go                 + 40 −30 │",
-		"│ README.md                             +  3 − 1 │",
-		"└────────────────────────────────────────────────┘",
+		"── Changes ─────────────────────────── since 2h ──",
+		" +163 −35 in 3 files                2 uncommitted",
+		" internal/tui/view.go                    +120 − 4",
+		" internal/tui/stage.go                   + 40 −30",
+		" README.md                               +  3 − 1",
 	})
 	var many []fileStat
 	for i := range 9 {
 		many = append(many, fileStat{path: string(rune('a'+i)) + ".go", add: 10 - i})
 	}
 	got = drawn(changesCard("Uncommitted", "", changeInfo{files: many, uncommitted: -1}), 40)
-	if len(got) != 2+1+shownFiles || got[len(got)-2] != "│ … 4 more files                       │" || strings.Contains(got[1], "uncommitted") {
+	if len(got) != 1+1+shownFiles || strings.TrimSpace(got[len(got)-1]) != "… 4 more files" || strings.Contains(got[1], "uncommitted") {
 		t.Fatalf("many: %q", got)
 	}
 	for _, c := range []struct {
@@ -159,12 +155,11 @@ func TestChangesCard(t *testing.T) {
 func TestReviewCard(t *testing.T) {
 	got := drawn(reviewCard(review.Summary{Open: 3, Waiting: 1}), 40)
 	wantLines(t, "review", got, []string{
-		"┌─ Review ─────────────────────────────┐",
-		"│ 3 open                1 replies wait │",
-		"│  v  open                             │",
-		"└──────────────────────────────────────┘",
+		"── Review ──────────────────────────────",
+		" 3 open                  1 replies wait",
+		"  v  open",
 	})
-	if got := drawn(reviewCard(review.Summary{}), 40); !strings.Contains(got[1], "no notes") || len(got) != 3 {
+	if got := drawn(reviewCard(review.Summary{}), 40); !strings.Contains(got[1], "no notes") || len(got) != 2 {
 		t.Fatalf("no notes: %q", got)
 	}
 }
@@ -183,16 +178,15 @@ func TestIssuesCard(t *testing.T) {
 	}
 	got := drawn(issuesCard(others, map[int]int{7: 2}, true, 2, nil), 50)
 	wantLines(t, "issues", got, []string{
-		"┌─ Issues ────────────────────────────── 9 open ─┐",
-		"│   in review    #4 show cost                    │",
-		"│   in progress  #7 tidy · 2 sessions            │",
-		"│ ▸ blocked      #14 stuck                       │",
-		"│   up next      #9 urgent                       │",
-		"│                #5 threads                      │",
-		"│                #10 later                       │",
-		"│                … 1 more                        │",
-		"│   inbox 2                                      │",
-		"└────────────────────────────────────────────────┘",
+		"── Issues ────────────────────────────── 9 open ──",
+		"   in review    #4 show cost",
+		"   in progress  #7 tidy · 2 sessions",
+		" ▸ blocked      #14 stuck",
+		"   up next      #9 urgent",
+		"                #5 threads",
+		"                #10 later",
+		"                … 1 more",
+		"   inbox 2",
 	})
 	ids := []int{}
 	for _, i := range pickable(others) {
@@ -259,19 +253,34 @@ func TestLayoutCardsDropsWhatDoesNotFit(t *testing.T) {
 	rows := [][]card{{box("a", 1)}, {box("b", 2)}, {box("c", 1), box("d", 3)}, {box("e", 1)}}
 	for _, c := range []struct{ w, h, shown int }{
 		{80, 40, 5},
-		{80, 7, 2},  // a 3, b 4, then c and d need 5
-		{80, 12, 4}, // c and d side by side, 5 high; e needs 3 more
-		{60, 15, 4}, // stacked: c 3, d 5
-		{60, 2, 0},
+		{80, 7, 2},  // a 2, b 3, then c and d need 4
+		{80, 10, 4}, // c and d side by side, 4 high; e needs 2 more
+		{60, 10, 3}, // stacked: c 2, then d needs 4
+		{60, 1, 0},
 	} {
-		lines, shown := layoutCards(rows, c.w, c.h)
-		if shown != c.shown || len(lines) != c.h {
-			t.Errorf("%dx%d: shown %d in %d lines, want %d", c.w, c.h, shown, len(lines), c.shown)
+		lines, rules, places := layoutCards(rows, c.w, c.h, "")
+		if len(places) != c.shown || len(lines) != c.h || len(rules) != c.h {
+			t.Errorf("%dx%d: shown %d in %d lines, want %d", c.w, c.h, len(places), len(lines), c.shown)
 		}
 	}
-	lines, _ := layoutCards(rows, 80, 40)
-	if l := ansi.Strip(lines[7]); !strings.HasPrefix(l, "┌─ c ") || !strings.Contains(l, "┐ ┌─ d ") {
+	lines, rules, places := layoutCards(rows, 80, 40, "")
+	if l := ansi.Strip(lines[5]); !strings.HasPrefix(l, "── c ") || !strings.Contains(l, "┬── d ") {
 		t.Fatalf("c and d are not side by side: %q", l)
+	}
+	if l := ansi.Strip(lines[9]); !strings.HasPrefix(l, "── e ") || []rune(l)[80*pairShare/100] != '┴' {
+		t.Fatalf("the line between c and d does not end on e's rule: %q", l)
+	}
+	var at []int
+	for i, r := range rules {
+		if r {
+			at = append(at, i)
+		}
+	}
+	if want := []int{0, 2, 5, 9}; !slices.Equal(at, want) {
+		t.Fatalf("rules at %v, want %v", at, want)
+	}
+	if d := places[3]; d.r != (rect{80*pairShare/100 + 1, 5, 80 - 80*pairShare/100 - 1, 4}) {
+		t.Fatalf("d is at %+v", d.r)
 	}
 }
 
