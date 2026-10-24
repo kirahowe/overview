@@ -207,3 +207,14 @@ func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
 		t.Fatalf("note %q with no room, want only the ref", got)
 	}
 }
+
+func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
+	idle := section{Title: "backlog", Tracked: true, Open: 4, Entries: []entry{{kind: projectEntry, project: "/code/backlog"}}}
+	if got := sectionNote(idle); got != "4 open" {
+		t.Errorf("idle tracked project: %q, want 4 open", got)
+	}
+	busy := section{Title: "app", Tracked: true, Open: 4, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry}}}
+	if got := sectionNote(busy); got != "1 task" {
+		t.Errorf("project with a workstream: %q, want 1 task", got)
+	}
+}

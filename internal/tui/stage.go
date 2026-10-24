@@ -755,7 +755,11 @@ func (m model) holderText(w, h int) string {
 	case !ok:
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
 	case e.kind == projectEntry:
-		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+". c starts Claude here, t a terminal, x unpins it."), cw)
+		hint := ". c starts Claude here, t a terminal, x unpins it."
+		if _, tracked := m.trackers[e.project]; tracked {
+			hint = ". s starts one of its tasks, c Claude, t a terminal, and x unpins it."
+		}
+		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+hint), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
 	case e.kind == workstreamEntry:

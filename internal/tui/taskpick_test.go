@@ -266,3 +266,15 @@ func TestSClosesTheCockpit(t *testing.T) {
 		t.Fatalf("the picker is not shown:\n%s", ansi.Strip(m.View()))
 	}
 }
+
+func TestTheHolderOfAnIdleTrackedProjectOffersS(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, pinnedTasksModel(t, f), "project:/code/todo")
+	if got := ansi.Strip(m.holderText(80, 10)); !strings.Contains(got, "s starts one of its tasks") {
+		t.Errorf("holder for a tracked project:\n%s", got)
+	}
+	m = selectKey(t, m, "project:/code/plain")
+	if got := ansi.Strip(m.holderText(80, 10)); strings.Contains(got, "s starts") || !strings.Contains(got, "c starts Claude here") {
+		t.Errorf("holder for an untracked project:\n%s", got)
+	}
+}
