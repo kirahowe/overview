@@ -41,14 +41,24 @@ const ReviewOption = "@overview-review"
 // of date.
 const ViewOption = "@overview-view"
 
+// TitleOption is the pane option holding the title set into the rule along
+// a pane's top, tmux styles and all, and SelectOption marks the pane the
+// view has selected, whose rule is drawn in the accent colour. Frame says
+// how they are drawn.
+const (
+	TitleOption  = "@overview-title"
+	SelectOption = "@overview-select"
+)
+
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
-	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_current_path}"
+	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
+	"\t#{pane-border-status}\t#{pane_current_path}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 17
+const paneFields = 21
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -68,6 +78,9 @@ type Pane struct {
 	Review  string // the pane's ReviewOption, "" when unset
 	Task    string // the window's TaskOption, "" when unset
 	Zoomed  bool   // one pane of the window fills it, as Zoom does
+	X, Y    int    // where the pane is in its window, its top-left cell
+	Active  bool   // the pane is its window's active one
+	Framed  bool   // the window draws a rule along the top of each pane
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -148,13 +161,16 @@ func ParsePanes(out string) []Pane {
 		w, err1 := strconv.Atoi(f[4])
 		h, err2 := strconv.Atoi(f[5])
 		ww, err3 := strconv.Atoi(f[6])
-		if err1 != nil || err2 != nil || err3 != nil {
+		x, err4 := strconv.Atoi(f[16])
+		y, err5 := strconv.Atoi(f[17])
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 			continue
 		}
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, List: f[7] == "1",
-			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1", Path: f[16],
+			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
+			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Path: f[20],
 		})
 	}
 	return panes
@@ -275,13 +291,85 @@ func (s Server) Zoom(pane string) error {
 // when not, whatever it was before. tmux reads the window's zoom and acts
 // on it in one command, so no listing taken in between can make it toggle
 // the wrong way. A pane alone in its window cannot be zoomed, and then the
-// window stays as it was.
+// window stays as it was. The zoomed pane draws its own frame, so the
+// window's rules go while it is zoomed, as SetFrame has it, and come back
+// with the zoom's end.
 func (s Server) SetZoom(pane string, on bool) error {
 	then, otherwise := "", "resize-pane -Z -t "+pane
 	if !on {
 		then, otherwise = otherwise, ""
 	}
-	_, err := s.run("if-shell", "-F", "-t", pane, "#{window_zoomed_flag}", then, otherwise)
+	_, err := s.run(append([]string{"if-shell", "-F", "-t", pane, "#{window_zoomed_flag}", then, otherwise, ";"}, frameArgs(pane, !on)...)...)
+	return err
+}
+
+// SetFrame turns the rules along the tops of the panes of pane's window
+// on or off.
+func (s Server) SetFrame(pane string, on bool) error {
+	_, err := s.run(frameArgs(pane, on)...)
+	return err
+}
+
+func frameArgs(pane string, on bool) []string {
+	status := "off"
+	if on {
+		status = "top"
+	}
+	return []string{"set-option", "-w", "-t", pane, "pane-border-status", status}
+}
+
+// Colours are the colours Frame draws the rules in, as tmux takes them:
+// "#rrggbb" or "colour123".
+type Colours struct{ Accent, Border, Text string }
+
+// lit is a format that is true for a pane whose rule is drawn in the
+// accent colour: the pane the view selected, and the pane with the
+// keyboard when that is not the view's own, which lights only when it is
+// the one selected.
+const lit = "#{?#{" + SelectOption + "},1,#{?pane_active,#{?#{" + ListOption + "},0,1},0}}"
+
+// FrameFormat and FrameStyle are what Frame sets pane-border-format and
+// both pane border styles to. The title is the pane's TitleOption, or
+// what runs in it while it has none.
+const (
+	FrameFormat = "#{?" + lit + ",#[fg=#{@overview-accent} bold],#[fg=#{@overview-text}]} " +
+		"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} "
+	FrameStyle = "#{?" + lit + ",fg=#{@overview-accent},fg=#{@overview-border}}"
+)
+
+// Frame gives every pane on the server a rule along its top, the pane's
+// title set into it, and single lines between panes. The colours are
+// session's, so views of two config directories on one server can each
+// draw in their own theme.
+func (s Server) Frame(session string, c Colours) error {
+	var args []string
+	for _, o := range [][2]string{{"@overview-accent", c.Accent}, {"@overview-border", c.Border}, {"@overview-text", c.Text}} {
+		args = append(args, "set-option", "-t", "="+session+":", o[0], o[1], ";")
+	}
+	for _, o := range [][2]string{
+		{"pane-border-status", "top"}, {"pane-border-lines", "single"}, {"pane-border-format", FrameFormat},
+		{"pane-border-style", FrameStyle}, {"pane-active-border-style", FrameStyle},
+	} {
+		args = append(args, "set-option", "-g", "-w", o[0], o[1], ";")
+	}
+	_, err := s.run(args[:len(args)-1]...)
+	return err
+}
+
+// PaneSet is a pane option to set: its pane, name and value.
+type PaneSet struct{ Pane, Name, Value string }
+
+// SetPaneOptions sets several pane options in one tmux command, in order.
+// tmux stops at the first that fails, as it does when a pane has gone.
+func (s Server) SetPaneOptions(sets []PaneSet) error {
+	if len(sets) == 0 {
+		return nil
+	}
+	var args []string
+	for _, ps := range sets {
+		args = append(args, "set-option", "-p", "-t", ps.Pane, ps.Name, ps.Value, ";")
+	}
+	_, err := s.run(args[:len(args)-1]...)
 	return err
 }
 

@@ -17,18 +17,19 @@ import (
 )
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t/\n" +
+		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, List: true, Command: "overview",
-			View: `"--theme" "x"`, Zoomed: true, Path: "/w"},
+			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80,
-			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", Path: "/w/app/odd\tdir"},
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -56,6 +57,10 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Review:  rapid.SampledFrom([]string{"", "5f2c-1d"}).Draw(t, "review"),
 				Task:    rapid.SampledFrom([]string{"", "/w/app#6", "/w/a b#12"}).Draw(t, "task"),
 				Zoomed:  rapid.Bool().Draw(t, "zoomed"),
+				X:       rapid.IntRange(0, 500).Draw(t, "x"),
+				Y:       rapid.IntRange(0, 200).Draw(t, "y"),
+				Active:  rapid.Bool().Draw(t, "active"),
+				Framed:  rapid.Bool().Draw(t, "framed"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -67,8 +72,13 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				}
 				return ""
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed), p.Path)
+			status := "off"
+			if p.Framed {
+				status = "top"
+			}
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed),
+				p.X, p.Y, flag(p.Active), status, p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -722,5 +732,106 @@ func TestSetZoomIsIdempotent(t *testing.T) {
 		if got := zoomed(list.ID); got != on {
 			t.Fatalf("step %d: SetZoom(%v) left the window zoomed %v", i, on, got)
 		}
+	}
+}
+
+// Frame draws each pane's rule in the border colour, and in the accent
+// colour for the pane the view selected and for a pane other than the
+// view's that has the keyboard. The view's own pane lights only when it
+// is selected, since it has the keyboard while the user moves between
+// panes.
+func TestFrameLightsTheSelectedPane(t *testing.T) {
+	s := testServer(t)
+	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkList(list.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
+		t.Fatal(err)
+	}
+	style := func(id string) string {
+		return strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", id, "#{E:pane-border-style}")))
+	}
+	const accent, border = "fg=#ff0000", "fg=#111111"
+	if err := s.Select(list.ID); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := style(list.ID), style(beside.ID); a != border || b != border {
+		t.Fatalf("nothing selected, the list active: list %q, beside %q", a, b)
+	}
+	if err := s.SetPaneOptions([]PaneSet{{beside.ID, SelectOption, "1"}, {beside.ID, TitleOption, "claude"}}); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := style(list.ID), style(beside.ID); a != border || b != accent {
+		t.Fatalf("beside selected: list %q, beside %q", a, b)
+	}
+	if got := strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", beside.ID, "#{"+TitleOption+"}"))); got != "claude" {
+		t.Fatalf("title %q", got)
+	}
+	if err := s.SetPaneOptions([]PaneSet{{beside.ID, SelectOption, ""}, {list.ID, SelectOption, "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := style(list.ID), style(beside.ID); a != accent || b != border {
+		t.Fatalf("the list selected: list %q, beside %q", a, b)
+	}
+	if err := s.SetPaneOptions([]PaneSet{{list.ID, SelectOption, ""}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Select(beside.ID); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := style(list.ID), style(beside.ID); a != border || b != accent {
+		t.Fatalf("the keyboard beside: list %q, beside %q", a, b)
+	}
+	if err := s.SetPaneOptions([]PaneSet{{"%999", SelectOption, "1"}}); err == nil {
+		t.Fatal("setting an option on a pane that is not there did not fail")
+	}
+}
+
+// A zoomed list draws its own frame, so the window's rules go with the
+// zoom and come back when it ends. The listing says which it is.
+func TestSetZoomTakesTheRulesAway(t *testing.T) {
+	s := testServer(t)
+	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
+		t.Fatal(err)
+	}
+	framed := func() bool {
+		panes, err := s.Panes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range panes {
+			if p.ID == list.ID {
+				return p.Framed
+			}
+		}
+		t.Fatal("no list")
+		return false
+	}
+	if !framed() {
+		t.Fatal("Frame left the window without rules")
+	}
+	if err := s.SetZoom(list.ID, true); err != nil || framed() {
+		t.Fatalf("zoomed: err %v, framed %v", err, framed())
+	}
+	if err := s.SetZoom(list.ID, false); err != nil || !framed() {
+		t.Fatalf("unzoomed: err %v, framed %v", err, framed())
+	}
+	if err := s.SetFrame(list.ID, false); err != nil || framed() {
+		t.Fatalf("SetFrame off: err %v, framed %v", err, framed())
 	}
 }
