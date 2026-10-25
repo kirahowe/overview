@@ -91,8 +91,8 @@ func TestIssueCard(t *testing.T) {
 		" Keep the list at the width it was dragged to.",
 		"",
 		" acceptance  1 of 2",
-		" ✓ keeps its width",
 		" ○ e2e covers it",
+		" ✓ keeps its width",
 	})
 	long := issueInfo{summary: strings.Repeat("word ", 80)}
 	if got := drawn(issueCard(6, long), 30); len(got) != issueSummaryLines+1 || !strings.Contains(got[issueSummaryLines], "…") {
@@ -217,20 +217,21 @@ func TestIssuesCard(t *testing.T) {
 	}
 }
 
-// An issue with many criteria lists the first few and counts the rest.
-func TestIssueCardCapsItsCriteria(t *testing.T) {
+// An issue's card lists every criterion, those still to do before the
+// done ones, each in the order the issue gives them.
+func TestIssueCardListsPendingCriteriaFirst(t *testing.T) {
 	var crit []issues.Criterion
-	for i := 0; i < 9; i++ {
-		crit = append(crit, issues.Criterion{Text: fmt.Sprint("c", i), Done: i < 2})
+	for i := 0; i < 12; i++ {
+		crit = append(crit, issues.Criterion{Text: fmt.Sprint("c", i), Done: i%3 == 0})
 	}
-	text := ansi.Strip(strings.Join(drawn(issueCard(6, issueInfo{criteria: crit}), 40), "\n"))
-	for _, want := range []string{"acceptance  2 of 9", "○ c5", "… 3 more"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("lacks %q:\n%s", want, text)
-		}
+	got := drawn(issueCard(6, issueInfo{criteria: crit}), 40)
+	var order []string
+	for _, l := range got[2:] {
+		order = append(order, strings.TrimSpace(ansi.Strip(l)))
 	}
-	if strings.Contains(text, "c6") {
-		t.Errorf("lists past the cap:\n%s", text)
+	want := []string{"○ c1", "○ c2", "○ c4", "○ c5", "○ c7", "○ c8", "○ c10", "○ c11", "✓ c0", "✓ c3", "✓ c6", "✓ c9"}
+	if !slices.Equal(order, want) || !strings.Contains(ansi.Strip(got[1]), "acceptance  4 of 12") {
+		t.Errorf("criteria:\n%s", strings.Join(append(got[1:2], order...), "\n"))
 	}
 }
 

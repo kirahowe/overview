@@ -138,7 +138,8 @@ the zoom.
 A workstream's cockpit starts with a header: the issue's reference,
 title, status and priority, how long ago it was taken on, and
 its sessions and terminals. Then come the issue's details from `issues
-show`, with its acceptance criteria and how many are done. The changes
+show`, with all its acceptance criteria, those still to do first, and
+how many are done. The changes
 and the review sit side by side in a wide window. The changes are the
 files changed since the workstream was taken on, most changed first, and
 how many of them are still uncommitted. The review counts the open notes
@@ -149,8 +150,7 @@ in the inbox. A
 project's cockpit shows its root and the kind of repository, its
 sessions and terminals, its issues, and its uncommitted changes. A card
 the window has no room for is left out, from the bottom up. Each group
-of the issues card lists a few issues and says how many more it has,
-and the issue's card lists six of its criteria at most.
+of the issues card lists a few issues and says how many more it has.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` and `v` only when the workstream has a

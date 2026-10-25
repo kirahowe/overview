@@ -277,10 +277,6 @@ func issueSummary(details string) string {
 	return strings.Join(para, " ")
 }
 
-// shownCriteria is how many acceptance criteria the issue card lists
-// before it says how many more there are.
-const shownCriteria = 6
-
 // issueInfo is what the issue card and the task picker's details show,
 // read with issues show.
 type issueInfo struct {
@@ -291,8 +287,8 @@ type issueInfo struct {
 	details  string
 }
 
-// issueCard is the issue's details: its summary and its acceptance
-// criteria, and which are done.
+// issueCard is the issue's details: its summary and all its acceptance
+// criteria, those still to do first.
 func issueCard(id int, info issueInfo) card {
 	return card{title: "Issue", right: dim.Render("issues show " + strconv.Itoa(id)), body: func(w int) []string {
 		switch {
@@ -327,19 +323,15 @@ func issueCard(id int, info issueInfo) card {
 			}
 		}
 		out = append(out, heading.Render("acceptance")+"  "+dim.Render(fmt.Sprintf("%d of %d", done, len(info.criteria))))
-		shown := info.criteria
-		if len(shown) > shownCriteria {
-			shown = shown[:shownCriteria]
-		}
-		for _, c := range shown {
-			if c.Done {
-				out = append(out, green.Render("✓")+" "+fg(pal.Text).Render(c.Text))
-			} else {
+		for _, c := range info.criteria {
+			if !c.Done {
 				out = append(out, dim.Render("○")+" "+dim.Render(c.Text))
 			}
 		}
-		if more := len(info.criteria) - len(shown); more > 0 {
-			out = append(out, dim.Render(fmt.Sprintf("… %d more", more)))
+		for _, c := range info.criteria {
+			if c.Done {
+				out = append(out, green.Render("✓")+" "+fg(pal.Text).Render(c.Text))
+			}
 		}
 		return out
 	}}
