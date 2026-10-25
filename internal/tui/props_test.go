@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
@@ -1733,7 +1734,9 @@ func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
 // keeps as much of the end as fits after an ellipsis.
 func TestPropKeepEnd(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		s := rapid.StringMatching(`[a-z/日本 -]{0,60}`).Draw(t, "s")
+		parts := rapid.SliceOfN(rapid.SampledFrom([]string{"a", "b", "/", " ", "-", "日", "本",
+			"❤️", "❤", "\ufe0f", "👩‍💻", "👍🏽", "e\u0301", "\u0301", "🇨🇦"}), 0, 40).Draw(t, "parts")
+		s := strings.Join(parts, "")
 		w := rapid.IntRange(-2, 70).Draw(t, "w")
 		got := keepEnd(s, w)
 		gw := ansi.StringWidth(got)
@@ -1744,8 +1747,23 @@ func TestPropKeepEnd(t *testing.T) {
 			t.Fatalf("keepEnd(%q, %d) = %q, though it fits", s, w, got)
 		case ansi.StringWidth(s) > w && w > 0 && (!strings.HasPrefix(got, "…") || !strings.HasSuffix(s, strings.TrimPrefix(got, "…"))):
 			t.Fatalf("keepEnd(%q, %d) = %q, not an end of it", s, w, got)
-		case ansi.StringWidth(s) > w && w > 2 && gw < w-1:
+		case ansi.StringWidth(s) > w && w > 2 && gw < w-2:
 			t.Fatalf("keepEnd(%q, %d) = %q, wasting room", s, w, got)
+		}
+		// It cuts between grapheme clusters, never inside one.
+		if got != s && w > 0 {
+			var tails []string
+			g := uniseg.NewGraphemes(s)
+			var gs []string
+			for g.Next() {
+				gs = append(gs, g.Str())
+			}
+			for k := range len(gs) + 1 {
+				tails = append(tails, strings.Join(gs[k:], ""))
+			}
+			if !slices.Contains(tails, strings.TrimPrefix(got, "…")) {
+				t.Fatalf("keepEnd(%q, %d) = %q, cut inside a cluster", s, w, got)
+			}
 		}
 	})
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 
 	"overview/internal/config"
 	"overview/internal/fleet"
@@ -1538,17 +1539,20 @@ func keepEnd(s string, w int) string {
 	case w <= 0:
 		return ""
 	}
-	rs := []rune(s)
-	i, used := len(rs), 1 // the ellipsis
-	for i > 0 {
-		rw := ansi.StringWidth(string(rs[i-1]))
-		if used+rw > w {
-			break
-		}
-		used += rw
+	// Cut between grapheme clusters, so an emoji keeps its variation
+	// selector and a letter its accents, measured as the terminal does.
+	var gs []string
+	var ws []int
+	g := uniseg.NewGraphemes(s)
+	for g.Next() {
+		gs, ws = append(gs, g.Str()), append(ws, ansi.StringWidth(g.Str()))
+	}
+	i, used := len(gs), 1 // the ellipsis
+	for i > 0 && used+ws[i-1] <= w {
+		used += ws[i-1]
 		i--
 	}
-	return "…" + string(rs[i:])
+	return "…" + strings.Join(gs[i:], "")
 }
 
 // fit cuts s to w cells and pads it to exactly w, so panes line up.
