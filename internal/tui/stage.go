@@ -399,16 +399,6 @@ func (m model) alive(id string) bool {
 	return ok
 }
 
-// stageOf is the window the list is in, "" when the listing lacks it.
-func (m model) stageOf(panes []tmux.Pane) string {
-	for _, p := range panes {
-		if p.ID == m.self {
-			return p.Window
-		}
-	}
-	return ""
-}
-
 // want is the pane whose window the list belongs in: a session just started with
 // c until it shows up in the list, else the selected session's own pane or
 // the selected terminal's first pane, else the holder.
@@ -496,7 +486,7 @@ func (m model) restage() (model, tea.Cmd) {
 	if target := m.entering; target != "" {
 		m.entering = ""
 		mux, self, beside := m.mux, m.self, target == want && m.besideTerminal(want)
-		if m.windowOf(target) == m.windowOf(want) && m.stageOf(m.in.Panes) == m.windowOf(want) {
+		if m.windowOf(target) == m.windowOf(want) && m.windowOf(m.self) == m.windowOf(want) {
 			cmds = append(cmds, func() tea.Msg {
 				err := error(nil)
 				if beside {
@@ -716,6 +706,12 @@ func (m model) shown(key string) bool {
 		}
 	}
 	return false
+}
+
+// closeTerminal closes a terminal's window, as closeCmd does it, with the
+// list's place planned from the panes listed now.
+func (m model) closeTerminal(t *world.Terminal) tea.Cmd {
+	return closeCmd(m.mux, m.deps.roots, m.self, m.holder(), t, m.in.Panes, m.width.want, m.landed)
 }
 
 // closedMsg answers closeCmd with the panes after the window closed.

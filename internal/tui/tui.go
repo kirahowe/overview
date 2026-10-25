@@ -426,6 +426,27 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]worl
 	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), m.home.HealthOf(rows), nil}
 }
 
+// landRows takes a refresh. One that failed keeps what the last one
+// found. The pins it read are taken only when no write to them is out or
+// landed since it read them.
+func (m model) landRows(msg rowsMsg) model {
+	if m.rowsErr = msg.err; msg.err != nil {
+		return m
+	}
+	m.rowRoots, m.written, m.loaded = msg.roots, msg.written, true
+	pins := m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded
+	m = m.setInputs(func(in *world.Inputs) {
+		in.Rows, in.TTYs, in.Hosts = msg.rows, msg.ttys, msg.hosts
+		in.Reviews, in.Orchestrator = msg.reviews, msg.health
+		if pins {
+			in.Pinned = msg.pinned
+		}
+	})
+	m.refreshes++
+	// Keep the cursor on a visible row after sessions come and go.
+	return m.adopt().dropTrackers()
+}
+
 // turnsKey names a transcript as it was when written at a moment.
 type turnsKey struct {
 	path string
@@ -687,7 +708,7 @@ func (m model) stick(before model) model {
 // the window it was in when its session ended there.
 func (m model) keepCursor(before model) model {
 	if m.blurred {
-		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.in.Panes), m.sel); ok && key != m.sel {
+		if key, ok := follow(m.placed(m.ordered()), m.windowOf(m.self), m.sel); ok && key != m.sel {
 			m.sel, m.confirm = key, ""
 		}
 		// With no entry there, the cursor stays as it is, even on an entry
@@ -870,22 +891,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case issueReadMsg, changesReadMsg:
 		m = m.landRead(msg)
 	case rowsMsg:
-		// A refresh that failed keeps what the last one found.
-		if m.rowsErr = msg.err; msg.err != nil {
-			return m, nil
-		}
-		m.rowRoots, m.written, m.loaded = msg.roots, msg.written, true
-		pins := m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded
-		m = m.setInputs(func(in *world.Inputs) {
-			in.Rows, in.TTYs, in.Hosts = msg.rows, msg.ttys, msg.hosts
-			in.Reviews, in.Orchestrator = msg.reviews, msg.health
-			if pins {
-				in.Pinned = msg.pinned
-			}
-		})
-		m.refreshes++
-		// Keep the cursor on a visible row after sessions come and go.
-		return m.adopt().dropTrackers(), nil
+		return m.landRows(msg), nil
 	case trackerMsg:
 		m = m.landTracker(msg)
 	case digestMsg:
@@ -918,9 +924,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			return m.say("unpinned " + m.name(msg.root)), nil
 		}
-		if !slices.Contains(m.in.Pinned, msg.root) {
-			m = m.setInputs(func(in *world.Inputs) { in.Pinned = slices.Concat(in.Pinned, []string{msg.root}) })
-		}
+		m = m.setInputs(func(in *world.Inputs) {
+			if !slices.Contains(in.Pinned, msg.root) {
+				in.Pinned = slices.Concat(in.Pinned, []string{msg.root})
+			}
+		})
 		return m.toProject(msg.root).say("pinned " + m.name(msg.root)), nil
 	case doneMsg:
 		if msg.err != nil {
@@ -1010,7 +1018,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.in.Panes, m.width.want, m.landed)
+				return m.say("closing " + c.term.Title + "…"), m.closeTerminal(c.term)
 			}
 		}
 		if s := m.world().Sessions[key]; s != nil {

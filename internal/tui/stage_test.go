@@ -535,8 +535,8 @@ func TestTheStageFollowsTheCursor(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	want := paneWithTTY(f, m.in.TTYs[m.ordered()[0].sess.PID])
-	if !f.staged(want) || m.stageOf(m.in.Panes) != f.stage() {
-		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stageOf(m.in.Panes), want)
+	if !f.staged(want) || m.windowOf(m.self) != f.stage() {
+		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.windowOf(m.self), want)
 	}
 	m = pressSettled(t, m, "j")
 	want = paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
@@ -981,8 +981,8 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				} else if want := m.want(); want != "" && !f.staged(want) {
 					t.Fatalf("the list is in %s, the wanted %s in %s", f.stage(), want, f.window(want))
 				}
-				if m.stageOf(m.in.Panes) != f.stage() {
-					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.stageOf(m.in.Panes))
+				if m.windowOf(m.self) != f.stage() {
+					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.windowOf(m.self))
 				}
 				seen := map[string]bool{}
 				for _, p := range f.panes {
@@ -1642,8 +1642,8 @@ func TestATerminalClosedMidSpawnLeavesNoDeadPanes(t *testing.T) {
 			t.Fatalf("%s of the closed window %s is still listed", p.ID, win)
 		}
 	}
-	if m.stageOf(m.in.Panes) != f.stage() {
-		t.Fatalf("the model has the list in %s, tmux in %s", m.stageOf(m.in.Panes), f.stage())
+	if m.windowOf(m.self) != f.stage() {
+		t.Fatalf("the model has the list in %s, tmux in %s", m.windowOf(m.self), f.stage())
 	}
 }
 
