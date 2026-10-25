@@ -81,6 +81,12 @@ on, whichever pane has the focus, the footer starts with "panels" and
 shows the mode's keys, `ctrl+[ list` among them, since the list's pane
 is where the user looks for the way back.
 
+One view serves every client attached to its session, and the listing
+says only that some client of the session is in the mode, not which.
+So while one client is in the mode, every client's footer shows the
+panels keys. tmux's own rule, which reads `client_key_table` per
+client, is the one place that tells them apart.
+
 ## Where the keys land
 
 The keys start in the list. However they come back into the view's pane,
