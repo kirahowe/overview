@@ -734,7 +734,7 @@ func (m model) placed(es []entry) []place {
 		out[i].key, out[i].alias = e.key(), e.alias != "" || e.kind == workstreamEntry
 		if e.kind == terminalEntry {
 			out[i].window = e.term.Window
-		} else if p, ok := m.pane(m.entryPane(es, e)); ok {
+		} else if p, ok := m.pane(entryPane(es, e)); ok {
 			out[i].window = p.Window
 		}
 	}
@@ -1346,7 +1346,7 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
 	case workstreamEntry:
 		es := m.ordered()
-		if c, ok := lead(children(es, e.task()), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
+		if c, ok := lead(children(es, e.task())); ok {
 			return m.act(c)
 		}
 		if m.cockpit.open {

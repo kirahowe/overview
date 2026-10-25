@@ -190,12 +190,7 @@ func plan(self, want string, panes []tmux.Pane, width int) (shift, bool) {
 	if list.ID == "" || target.ID == "" || target.Window == list.Window {
 		return shift{}, false
 	}
-	n := 0
-	for _, p := range panes {
-		if p.Window == list.Window {
-			n++
-		}
-	}
+	n := panesIn(panes, list.Window)
 	// The list keeps its width, fitted to the window it goes to. Until it
 	// has one, it goes as wide as it is, unless it is alone and so as wide
 	// as the whole window.
@@ -272,14 +267,8 @@ func (m model) keepWidth() (model, tea.Cmd) {
 	if !ok || m.mux == nil || m.staging || m.zooming || m.zoomWant() || list.Zoomed {
 		return m, nil
 	}
-	n := 0
-	for _, p := range m.in.Panes {
-		if p.Window == list.Window {
-			n++
-		}
-	}
 	var to int
-	m.width, to = m.width.seen(list, n == 1)
+	m.width, to = m.width.seen(list, m.inStage() == 1)
 	if to == 0 {
 		return m, nil
 	}
@@ -385,6 +374,20 @@ func (m model) holder() string {
 	return ""
 }
 
+// panesIn counts the panes of panes in window, 0 for no window.
+func panesIn(panes []tmux.Pane, window string) int {
+	n := 0
+	for _, p := range panes {
+		if p.Window == window && window != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// inStage counts the panes in the list's window.
+func (m model) inStage() int { return panesIn(m.in.Panes, m.windowOf(m.self)) }
+
 // windowOf is the window pane id is in, "" when it is not listed.
 func (m model) windowOf(id string) string {
 	p, _ := m.pane(id)
@@ -415,7 +418,7 @@ func (m model) want() string {
 	}
 	es := m.ordered()
 	if e, _, ok := m.selected(es); ok {
-		if id := m.entryPane(es, e); id != "" {
+		if id := entryPane(es, e); id != "" {
 			return id
 		}
 	}
@@ -427,18 +430,17 @@ func (m model) want() string {
 
 // entryPane is the pane that shows an entry, "" when it has none: a
 // session's own pane, a terminal's first pane, or for a workstream its
-// lead's.
-func (m model) entryPane(es []entry, e entry) string {
+// lead's. All three are the World's, which is derived from the panes
+// listed now.
+func entryPane(es []entry, e entry) string {
 	switch e.kind {
 	case sessionEntry:
 		return e.sess.Pane
 	case terminalEntry:
-		if m.alive(e.term.Pane) {
-			return e.term.Pane
-		}
+		return e.term.Pane
 	case workstreamEntry:
-		if c, ok := lead(children(es, e.task()), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
-			return m.entryPane(es, c)
+		if c, ok := lead(children(es, e.task())); ok {
+			return entryPane(es, c)
 		}
 	}
 	return ""

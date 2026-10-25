@@ -1244,11 +1244,24 @@ func pad(lines []string, h int) []string {
 	return lines[:h]
 }
 
+// wrap breaks s, which may be styled, into lines w cells wide, at spaces
+// where it can, each padded to w. It is the one word wrap in the view. A
+// line the wrapper leaves too wide, as ansi.Wrap does when it keeps a
+// hyphen with the letter before it, is broken again at w, so no line is
+// ever wider than w.
 func wrap(s string, w int) []string {
 	if w <= 0 {
 		return nil
 	}
-	return strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n")
+	var out []string
+	for _, l := range strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n") {
+		if ansi.StringWidth(l) <= w {
+			out = append(out, l)
+			continue
+		}
+		out = append(out, strings.Split(ansi.Hardwrap(l, w, true), "\n")...)
+	}
+	return out
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

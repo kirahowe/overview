@@ -805,3 +805,122 @@ func TestPropTerminals(t *testing.T) {
 		}
 	})
 }
+
+func genIssue(t *rapid.T, label string) issues.Issue {
+	return issues.Issue{
+		ID:       rapid.IntRange(1, 6).Draw(t, label+"id"),
+		Status:   rapid.SampledFrom(append(slices.Clone(statuses), "odd")).Draw(t, label+"status"),
+		Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", "", "px"}).Draw(t, label+"priority"),
+	}
+}
+
+// IssueLess and StartLess are strict orders, total on issues that differ
+// in status rank, priority rank or number. StartLess puts ready and inbox
+// first and otherwise agrees with IssueLess, and StreamLess is IssueLess
+// with the root as the last tiebreak.
+func TestPropIssueOrders(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		a, b, c := genIssue(t, "a"), genIssue(t, "b"), genIssue(t, "c")
+		same := func(x, y issues.Issue) bool {
+			return issues.Rank(x.Status) == issues.Rank(y.Status) &&
+				issues.PriorityRank(x.Priority) == issues.PriorityRank(y.Priority) && x.ID == y.ID
+		}
+		startable := func(x issues.Issue) bool { return x.Status == issues.Ready || x.Status == issues.Inbox }
+		for name, less := range map[string]func(x, y issues.Issue) bool{"IssueLess": IssueLess, "StartLess": StartLess} {
+			if less(a, a) {
+				t.Fatalf("%s: %+v before itself", name, a)
+			}
+			if less(a, b) && less(b, a) {
+				t.Fatalf("%s: %+v and %+v each first", name, a, b)
+			}
+			if !same(a, b) && !less(a, b) && !less(b, a) {
+				t.Fatalf("%s: %+v and %+v unordered", name, a, b)
+			}
+			if less(a, b) && less(b, c) && !less(a, c) {
+				t.Fatalf("%s: not transitive over %+v %+v %+v", name, a, b, c)
+			}
+		}
+		switch {
+		case startable(a) && !startable(b):
+			if !StartLess(a, b) {
+				t.Fatalf("StartLess put %+v after %+v", a, b)
+			}
+		case !startable(a) && !startable(b):
+			if StartLess(a, b) != IssueLess(a, b) {
+				t.Fatalf("StartLess and IssueLess disagree on %+v %+v", a, b)
+			}
+		}
+		ra, rb := rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "ra"), rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "rb")
+		sa, sb := &Stream{Key: Key{ra, a.ID}, Issue: a}, &Stream{Key: Key{rb, b.ID}, Issue: b}
+		want := IssueLess(a, b) || !IssueLess(b, a) && ra < rb
+		if StreamLess(sa, sb) != want {
+			t.Fatalf("StreamLess(%+v, %+v) = %v", sa, sb, !want)
+		}
+	})
+}
+
+// LeadOf picks from what it is given: the first session with a pane, else
+// the first terminal, else the first session. Stream.Lead is LeadOf over
+// the whole workstream.
+func TestPropLeadOf(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		var ss []*Session
+		for i := range rapid.IntRange(0, 4).Draw(t, "sessions") {
+			s := &Session{Row: fleet.Row{Live: fleet.Live{SessionID: fmt.Sprint("s", i)}}}
+			if rapid.Bool().Draw(t, "pane") {
+				s.Pane = fmt.Sprint("%", i)
+			}
+			ss = append(ss, s)
+		}
+		var ts []*Terminal
+		for i := range rapid.IntRange(0, 3).Draw(t, "terminals") {
+			ts = append(ts, &Terminal{Window: fmt.Sprint("@", i), Pane: "%t" + fmt.Sprint(i)})
+		}
+		st := &Stream{Sessions: ss, Terminals: ts}
+		ls, lt := st.Lead()
+		if as, at := LeadOf(ss, ts); as != ls || at != lt {
+			t.Fatal("Lead is not LeadOf over the whole workstream")
+		}
+		// A filtered list shows a subset, in order.
+		sub := func(n int, keep []bool) []int {
+			var out []int
+			for i := range n {
+				if keep[i] {
+					out = append(out, i)
+				}
+			}
+			return out
+		}
+		var fs []*Session
+		for _, i := range sub(len(ss), rapid.SliceOfN(rapid.Bool(), len(ss), len(ss)).Draw(t, "keepS")) {
+			fs = append(fs, ss[i])
+		}
+		var ft []*Terminal
+		for _, i := range sub(len(ts), rapid.SliceOfN(rapid.Bool(), len(ts), len(ts)).Draw(t, "keepT")) {
+			ft = append(ft, ts[i])
+		}
+		s, term := LeadOf(fs, ft)
+		if s != nil && term != nil {
+			t.Fatal("a lead that is both a session and a terminal")
+		}
+		withPane := slices.IndexFunc(fs, func(x *Session) bool { return x.Pane != "" })
+		switch {
+		case withPane >= 0:
+			if s != fs[withPane] {
+				t.Fatalf("lead %v, want the first session with a pane", s)
+			}
+		case len(ft) > 0:
+			if term != ft[0] {
+				t.Fatalf("lead %v, want the first terminal", term)
+			}
+		case len(fs) > 0:
+			if s != fs[0] {
+				t.Fatalf("lead %v, want the first session", s)
+			}
+		default:
+			if s != nil || term != nil {
+				t.Fatal("a lead out of nothing")
+			}
+		}
+	})
+}

@@ -46,17 +46,54 @@ func needsFirst(a, b fleet.Row) bool {
 	return a.SessionID < b.SessionID
 }
 
-// StreamLess orders a project's workstreams: by status as issues.Rank has
-// it, then priority, then number, then root.
-func StreamLess(a, b *Stream) bool {
-	if ra, rb := issues.Rank(a.Issue.Status), issues.Rank(b.Issue.Status); ra != rb {
+// IssueLess orders issues as the view shows them: by status as
+// issues.Rank has it, so what waits on you comes first, then priority,
+// then number. The cockpit's issues card lists a project's issues in this
+// order.
+func IssueLess(a, b issues.Issue) bool {
+	if ra, rb := issues.Rank(a.Status), issues.Rank(b.Status); ra != rb {
 		return ra < rb
 	}
-	if pa, pb := issues.PriorityRank(a.Issue.Priority), issues.PriorityRank(b.Issue.Priority); pa != pb {
+	return priorityLess(a, b)
+}
+
+// StartLess orders issues to start work on, as the task picker offers
+// them: ready, then inbox, which are what there is to start, then the
+// rest as IssueLess orders them.
+func StartLess(a, b issues.Issue) bool {
+	if ra, rb := startRank(a.Status), startRank(b.Status); ra != rb {
+		return ra < rb
+	}
+	return priorityLess(a, b)
+}
+
+// startRank ranks a status for StartLess, lowest first.
+func startRank(status string) int {
+	switch status {
+	case issues.Ready:
+		return 0
+	case issues.Inbox:
+		return 1
+	}
+	return 2 + issues.Rank(status)
+}
+
+// priorityLess orders issues by priority, then number.
+func priorityLess(a, b issues.Issue) bool {
+	if pa, pb := issues.PriorityRank(a.Priority), issues.PriorityRank(b.Priority); pa != pb {
 		return pa < pb
 	}
-	if a.ID != b.ID {
-		return a.ID < b.ID
+	return a.ID < b.ID
+}
+
+// StreamLess orders a project's workstreams: by their issues as IssueLess
+// orders them, then root.
+func StreamLess(a, b *Stream) bool {
+	switch {
+	case IssueLess(a.Issue, b.Issue):
+		return true
+	case IssueLess(b.Issue, a.Issue):
+		return false
 	}
 	return a.Root < b.Root
 }

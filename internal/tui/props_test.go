@@ -1511,3 +1511,21 @@ func TestDetailLinesProps(t *testing.T) {
 		}
 	})
 }
+
+// wrap never leaves a line wider than asked, hyphens and long words
+// included, and loses no text.
+func TestWrapStaysWithinItsWidth(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		words := rapid.SliceOf(rapid.StringMatching(`[a-z]{1,14}(-[a-z]{1,6})?`)).Draw(t, "words")
+		w := rapid.IntRange(1, 30).Draw(t, "w")
+		lines := wrap(strings.Join(words, " "), w)
+		for _, l := range lines {
+			if ansi.StringWidth(l) > w {
+				t.Fatalf("line %q is wider than %d", l, w)
+			}
+		}
+		if got, want := strings.Join(strings.Fields(strings.Join(lines, " ")), ""), strings.Join(words, ""); got != want {
+			t.Fatalf("wrapped to %q, lost text of %q", got, want)
+		}
+	})
+}

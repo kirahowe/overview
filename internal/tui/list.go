@@ -122,19 +122,24 @@ func children(es []entry, task string) []entry {
 }
 
 // lead is the entry under a workstream that stands for it, of its
-// children cs: the first with a pane, as hasPane says, which the stage
-// shows beside the workstream and enter goes to, or else the first
-// session, which enter attaches to. ok is false when there is neither.
-// It picks from what the list shows, as World's Lead picks from the whole
-// workstream.
-func lead(cs []entry, hasPane func(entry) bool) (entry, bool) {
+// children cs, which the stage shows beside the workstream and enter goes
+// to. world.LeadOf picks it from the sessions and terminals the list
+// shows, as Stream.Lead picks from the whole workstream. ok is false when
+// cs has neither.
+func lead(cs []entry) (entry, bool) {
+	var ss []*world.Session
+	var ts []*world.Terminal
 	for _, c := range cs {
-		if hasPane(c) {
-			return c, true
+		switch c.kind {
+		case sessionEntry:
+			ss = append(ss, c.sess)
+		case terminalEntry:
+			ts = append(ts, c.term)
 		}
 	}
+	s, t := world.LeadOf(ss, ts)
 	for _, c := range cs {
-		if c.kind == sessionEntry {
+		if (s != nil && c.kind == sessionEntry && c.sess == s) || (t != nil && c.kind == terminalEntry && c.term == t) {
 			return c, true
 		}
 	}

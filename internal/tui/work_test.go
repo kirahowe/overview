@@ -509,22 +509,19 @@ func TestAnAliasActsAsItsSession(t *testing.T) {
 func TestLeadIsTheFirstWithAPaneElseTheFirstSession(t *testing.T) {
 	bg := entry{kind: sessionEntry, sess: &world.Session{Row: row("b", "bg", "", 0)}}
 	s := entry{kind: sessionEntry, sess: &world.Session{Row: row("s", "s", "", 1)}}
+	shown := entry{kind: sessionEntry, sess: &world.Session{Row: row("p", "p", "", 2), Pane: "%2"}}
 	term := entry{kind: terminalEntry, term: &world.Terminal{Window: "@4", Pane: "%4"}}
-	has := func(ids ...string) func(entry) bool {
-		return func(e entry) bool { return slices.Contains(ids, e.key()) }
-	}
 	for _, c := range []struct {
 		name string
 		cs   []entry
-		has  func(entry) bool
 		want string
 	}{
-		{"a paneless first session", []entry{bg, s, term}, has("s", "@4"), "s"},
-		{"only a terminal has a pane", []entry{bg, s, term}, has("@4"), "@4"},
-		{"nothing has a pane", []entry{term, bg, s}, has(), "b"},
-		{"only a paneless terminal", []entry{term}, has(), ""},
+		{"a paneless first session", []entry{bg, shown, term}, "p"},
+		{"only a terminal has a pane", []entry{bg, s, term}, "@4"},
+		{"nothing has a pane", []entry{bg, s}, "b"},
+		{"nothing at all", nil, ""},
 	} {
-		got, ok := lead(c.cs, c.has)
+		got, ok := lead(c.cs)
 		if (c.want == "") == ok || ok && got.key() != c.want {
 			t.Errorf("%s: %s %v, want %q", c.name, got.key(), ok, c.want)
 		}

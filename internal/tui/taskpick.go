@@ -44,39 +44,14 @@ type taskList struct {
 	rows []taskRow
 }
 
-// taskOrder ranks a status in the picker, lowest first: ready, then
-// inbox, which are what there is to start, then the rest as issues.Rank
-// orders them.
-func taskOrder(status string) int {
-	switch status {
-	case issues.Ready:
-		return 0
-	case issues.Inbox:
-		return 1
-	}
-	return 2 + issues.Rank(status)
-}
-
-// taskRowLess orders the picker's rows: by taskOrder, then priority, then
-// number.
-func taskRowLess(a, b issues.Issue) bool {
-	if ra, rb := taskOrder(a.Status), taskOrder(b.Status); ra != rb {
-		return ra < rb
-	}
-	if pa, pb := issues.PriorityRank(a.Priority), issues.PriorityRank(b.Priority); pa != pb {
-		return pa < pb
-	}
-	return a.ID < b.ID
-}
-
 // taskMatches says whether an issue of project id matches every word,
 // already lower case, on its ref (#6 or overview#6) or its title.
 func taskMatches(words []string, id string, i issues.Issue) bool {
 	return matchFields(words, "#"+strconv.Itoa(i.ID), issueRef(id, i), i.Title)
 }
 
-// taskRows are the open issues of open that match query, in the
-// picker's order, each with the sessions linked to it, as sessions counts
+// taskRows are the open issues of open that match query, as
+// world.StartLess orders them, each with the sessions linked to it, as sessions counts
 // them.
 func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, query string) []taskRow {
 	words := strings.Fields(strings.ToLower(query))
@@ -88,9 +63,9 @@ func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, q
 	}
 	slices.SortStableFunc(out, func(a, b taskRow) int {
 		switch {
-		case taskRowLess(a.issue, b.issue):
+		case world.StartLess(a.issue, b.issue):
 			return -1
-		case taskRowLess(b.issue, a.issue):
+		case world.StartLess(b.issue, a.issue):
 			return 1
 		}
 		return 0
@@ -237,7 +212,7 @@ func detailLines(details string, w int) []string {
 		if hang > w/2 {
 			hang, text = 0, marker+text
 		}
-		for i, l := range reflow(text, max(w-hang, 1)) {
+		for i, l := range plainWrap(text, max(w-hang, 1)) {
 			lead := strings.Repeat(" ", hang)
 			if i == 0 && hang > 0 {
 				lead = marker
@@ -264,7 +239,7 @@ func detailLines(details string, w int) []string {
 			flush()
 			blank()
 			h := strings.TrimSpace(strings.TrimLeft(t, "#"))
-			for _, l := range reflow(h, w) {
+			for _, l := range plainWrap(h, w) {
 				out = append(out, heading.Render(l))
 			}
 		case listMarker(t) != "":
@@ -284,11 +259,14 @@ func detailLines(details string, w int) []string {
 	return out
 }
 
-// reflow wraps text at w cells, at spaces where it can. ansi.Wrap can
-// leave a line a cell too wide, keeping a hyphen with the letter before
-// it, so its lines are broken again at w.
-func reflow(text string, w int) []string {
-	return strings.Split(ansi.Hardwrap(ansi.Wrap(text, w, ""), w, true), "\n")
+// plainWrap is wrap for unstyled text, without the padding, so the
+// caller can style each line as it is.
+func plainWrap(text string, w int) []string {
+	ls := wrap(text, w)
+	for i, l := range ls {
+		ls[i] = strings.TrimRight(l, " ")
+	}
+	return ls
 }
 
 // listMarker is the marker t starts with as a list item, with a space

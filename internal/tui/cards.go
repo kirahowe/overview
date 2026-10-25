@@ -13,6 +13,7 @@ import (
 	"overview/internal/diff"
 	"overview/internal/issues"
 	"overview/internal/review"
+	"overview/internal/world"
 )
 
 // The cockpit's cards are built from plain data by pure functions: each
@@ -497,16 +498,11 @@ var groupCaps = map[string]int{"in review": 3, "in progress": 4, "blocked": 2, "
 
 // issueGroups is what the issues card lists of a project's other open
 // issues: those in review, those in progress, the blocked ones and the
-// ready ones, each by priority and cut to its cap, and how many are in
-// the inbox.
+// ready ones, each as world.IssueLess orders them and cut to its cap,
+// and how many are in the inbox.
 func issueGroups(others []issues.Issue) (groups []issueGroup, inbox int) {
 	sorted := append([]issues.Issue(nil), others...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if a, b := issues.PriorityRank(sorted[i].Priority), issues.PriorityRank(sorted[j].Priority); a != b {
-			return a < b
-		}
-		return sorted[i].ID < sorted[j].ID
-	})
+	sort.SliceStable(sorted, func(i, j int) bool { return world.IssueLess(sorted[i], sorted[j]) })
 	groups = []issueGroup{
 		{name: "in review", colour: pal.Blocked},
 		{name: "in progress", colour: pal.Working},

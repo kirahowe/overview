@@ -151,21 +151,26 @@ type Stream struct {
 	Started time.Time
 }
 
-// Lead is what stands for the workstream when it is entered: its first
-// session with a pane, else its first terminal, else its first session.
-// Both are nil when it has neither. This reads the whole workstream; a
-// filtered list picks its lead from what it shows.
-func (s *Stream) Lead() (*Session, *Terminal) {
-	for _, x := range s.Sessions {
+// Lead is what stands for the workstream when it is entered, as LeadOf
+// picks it from all of its sessions and terminals.
+func (s *Stream) Lead() (*Session, *Terminal) { return LeadOf(s.Sessions, s.Terminals) }
+
+// LeadOf is what stands for a workstream when it is entered, of the
+// sessions and terminals given, in the workstream's order: the first
+// session with a pane, else the first terminal, else the first session.
+// Both are nil when there is neither. A filtered list passes what it
+// shows of the workstream.
+func LeadOf(sessions []*Session, terminals []*Terminal) (*Session, *Terminal) {
+	for _, x := range sessions {
 		if x.Pane != "" {
 			return x, nil
 		}
 	}
-	if len(s.Terminals) > 0 {
-		return nil, s.Terminals[0]
+	if len(terminals) > 0 {
+		return nil, terminals[0]
 	}
-	if len(s.Sessions) > 0 {
-		return s.Sessions[0], nil
+	if len(sessions) > 0 {
+		return sessions[0], nil
 	}
 	return nil, nil
 }

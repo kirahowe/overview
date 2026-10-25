@@ -205,11 +205,21 @@ A few helpers read the World without joining anything:
 `Session.Primary()` is the session's last workstream, `Stream.Lead()`
 is what enter goes to (its first session with a pane, else its first
 terminal, else its first session), and `Project.Empty()` says nothing
-is listed in a project. `World.Root(dir)`, `World.Name(dir)` and
+is listed in a project. `LeadOf(sessions, terminals)` is that rule over
+any part of a workstream, which a filtered list uses to pick its lead
+from what it shows; `Lead` is `LeadOf` over the whole workstream. `World.Root(dir)`, `World.Name(dir)` and
 `World.ProjectOf(dir)` look a directory up the way `Derive` does, and
 `World.Short(dir)` shows it as the view does.
 `NameLess`, `ActiveLess`, `StreamLess` and `WindowLess` are the orders
-`Derive` uses.
+`Derive` uses. The issues have two, and every view uses one of them:
+
+- `IssueLess`: status as `issues.Rank` has it (review, in progress,
+  blocked, ready, inbox, then the closed), then priority, then number.
+  `StreamLess` is `IssueLess` on the workstreams' issues, then root. The
+  cockpit's issues card groups its issues in this order.
+- `StartLess`: ready, then inbox, which are what there is to start, then
+  the rest as `IssueLess` has them. The task picker offers its rows in
+  this order.
 `World.Tracker(root)` is a root's tracker as the World holds it, with
 its id, its open issues and why its last read failed: the task picker
 and the cockpit's issues card read it there, and a workstream's ref

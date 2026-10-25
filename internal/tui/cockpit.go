@@ -96,17 +96,6 @@ func (m model) closeCockpit() (model, tea.Cmd) {
 	return m.syncZoom()
 }
 
-// inStage counts the panes in the list's window.
-func (m model) inStage() int {
-	w, n := m.windowOf(m.self), 0
-	for _, p := range m.in.Panes {
-		if p.Window == w && w != "" {
-			n++
-		}
-	}
-	return n
-}
-
 // zoomLost reads a current listing for what became of the list's zoom,
 // for the cockpit or the task picker. tmux ends a zoom when the user goes
 // to another pane of the window, and also when a pane of it closes or
