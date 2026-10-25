@@ -31,7 +31,9 @@ See README.md for behaviour and docs/ for design notes.
   session with the prompt that names it and `t` listing a terminal under
   it, and `s` zooming the list with an issue's details beside the
   picker; and `o` zooming the list into the cockpit and `esc` putting it
-  back; and the panels mode, typed at the outer terminal: `esc` in the
+  back; and, in a tracked project's cockpit, `l` moving the keyboard into
+  the issues card, `j` moving its cursor, `h` returning to the list and
+  `esc` closing the cockpit; and the panels mode, typed at the outer terminal: `esc` in the
   list entering it with the footer saying so, `l` moving the focus to the
   session, and `ctrl+[` from there and `enter` on the list each leaving
   `j` and `k` moving the list's cursor. The key table itself is tested in

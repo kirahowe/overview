@@ -994,3 +994,85 @@ func atoi(s string) int {
 	v, _ := strconv.Atoi(strings.TrimSpace(s))
 	return v
 }
+
+// The cockpit's issues card takes the keyboard: l moves it in from the
+// list, with the card's cursor and the footer saying so, j moves the
+// cursor, h gives the keyboard back to the list, and esc closes the
+// cockpit from there.
+func TestCockpitIssuesCard(t *testing.T) {
+	r := launchWith(t, "i", func(r *rig) string {
+		for _, d := range []string{".jj", ".issues"} {
+			if err := os.MkdirAll(filepath.Join(r.work, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, text := range map[string]string{"project.edn": `{:id "work"}`, "6-first.edn": `{:id 6}`, "7-second.edn": `{:id 7}`} {
+			if err := os.WriteFile(filepath.Join(r.work, ".issues", name), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fake := filepath.Join(r.dir, "issues")
+		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "ready", "title": "first thing", "priority": "p1"},` +
+			`{"id": 7, "ref": "work#7", "status": "ready", "title": "second thing", "priority": "p2"}]}`
+		if err := os.WriteFile(fake, []byte(fmt.Sprintf("#!/bin/sh\necho '%s'\n", list)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return "issues = " + fake + "\n"
+	})
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the list beside the session", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, 0)
+		return ok && strings.Contains(r.screen(), "e2e-0"), say
+	})
+	width := listPane(r.ov.panes()).w
+	// footer is the screen's last line, where the key hints are.
+	footer := func() string {
+		lines := strings.Split(strings.TrimRight(r.screen(), "\n"), "\n")
+		return lines[len(lines)-1]
+	}
+	// marked is the issue the card's cursor is on, "" when it is not
+	// in the card.
+	marked := func() string {
+		for _, l := range strings.Split(r.screen(), "\n") {
+			if i := strings.Index(l, "▸ "); i >= 0 && strings.Contains(l, "#") {
+				return l[i:]
+			}
+		}
+		return ""
+	}
+
+	r.press("o")
+	waitFor(t, "the cockpit with both issues and l offered", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "#6 first thing") && strings.Contains(s, "#7 second thing") &&
+			strings.Contains(footer(), "l issues") && marked() == "", s
+	})
+
+	r.press("l")
+	waitFor(t, "the keyboard in the issues card, on the first issue", func() (bool, string) {
+		m := marked()
+		return strings.Contains(m, "#6 first thing") && strings.Contains(footer(), "h list") && !strings.Contains(footer(), "l issues"), m + "\n" + r.screen()
+	})
+	r.press("j")
+	waitFor(t, "the cursor on the second issue", func() (bool, string) {
+		m := marked()
+		return strings.Contains(m, "#7 second thing"), m + "\n" + r.screen()
+	})
+	r.press("h")
+	waitFor(t, "the keyboard back in the list", func() (bool, string) {
+		return marked() == "" && strings.Contains(footer(), "l issues") && strings.Contains(r.screen(), "#7 second thing"), r.screen()
+	})
+	// With the keyboard back in the list, the cockpit is still open, and
+	// esc closes it.
+	r.press("Escape")
+	waitFor(t, "the cockpit closed, the list beside the session again", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, width)
+		z := r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag}")
+		return ok && z == "0" && !strings.Contains(r.screen(), "#7 second thing"), z + " " + say
+	})
+}
