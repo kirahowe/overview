@@ -1794,3 +1794,60 @@ func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 		}
 	})
 }
+
+// Every line of the help's box is as wide as the box, scrolled or not,
+// and the legend is never cut: each of its lines fits inside the box
+// once the box can hold its widest item.
+func TestPropTheHelpBoxIsSquare(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		w, h := rapid.IntRange(1, 200).Draw(t, "w"), rapid.IntRange(1, 60).Draw(t, "h")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
+		m = update(m, keyMsg("?"))
+		for range rapid.IntRange(0, 40).Draw(t, "scroll") {
+			m = update(m, keyMsg("j"))
+		}
+		lines := m.helpBox()
+		bw, tw := m.helpWidth()
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got != max(bw, 0) && bw >= 6 {
+				t.Fatalf("line %d of the box is %d wide, the box %d: %q", i, got, bw, ansi.Strip(l))
+			}
+		}
+		if tw >= len("⠋ working") {
+			for _, l := range m.helpLegend() {
+				if ansi.StringWidth(l) > tw {
+					t.Fatalf("the legend's line %q is wider than %d", ansi.Strip(l), tw)
+				}
+			}
+		}
+	})
+}
+
+// At 100x20 the help scrolls, and its top border, with the marker that
+// says there is more above, ends where the sides do.
+func TestTheScrolledHelpKeepsItsBorderWhole(t *testing.T) {
+	m := newTestModel(t)
+	m = update(m, tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = update(m, keyMsg("?"))
+	m = update(m, keyMsg("j"))
+	box := m.helpBox()
+	if m.helpTop == 0 || !strings.Contains(ansi.Strip(box[0]), "↑ more") {
+		t.Fatalf("not scrolled: top %d, %q", m.helpTop, ansi.Strip(box[0]))
+	}
+	for i, l := range box {
+		if ansi.StringWidth(l) != ansi.StringWidth(box[1]) {
+			t.Errorf("line %d is %d wide, the sides %d: %q", i, ansi.StringWidth(l), ansi.StringWidth(box[1]), ansi.Strip(l))
+		}
+	}
+	text := strings.Join(slices.Collect(func(yield func(string) bool) {
+		for _, l := range m.helpLegend() {
+			yield(ansi.Strip(l))
+		}
+	}), " ")
+	if !strings.Contains(text, "terminal  #6 task") {
+		t.Errorf("the legend %q", text)
+	}
+}
