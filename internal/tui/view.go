@@ -1008,25 +1008,29 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	if _, tracked := m.world().Tracker(m.rootOf(e, ok)); tracked {
 		s = []hint{{"s", "task"}}
 	}
+	enter := m.enterHint(e)
 	switch e.kind {
 	case workstreamEntry:
-		return slices.Concat([]hint{{"enter", "type"}}, s, []hint{c, t, {"n", "next"}, help})
+		return slices.Concat(enter, s, []hint{c, t, {"n", "next"}, help})
 	case terminalEntry:
-		return slices.Concat([]hint{{"enter", "type"}}, s, []hint{c, t, {"x", "close"}, help})
+		return slices.Concat(enter, s, []hint{c, t, {"x", "close"}, help})
 	case projectEntry:
-		return slices.Concat(s, []hint{c, t, {"x", "unpin"}, {"a", "add"}, help})
+		return slices.Concat(enter, s, []hint{c, t, {"x", "unpin"}, {"a", "add"}, help})
 	}
-	enter := hint{"enter", "type"}
-	if e.sess.Host != nil {
-		enter = hint{"enter", "open app"}
-	} else if e.sess.Background() && e.sess.Pane == "" {
-		enter = hint{"enter", "attach"}
-	}
-	hs := slices.Concat([]hint{enter}, s, []hint{c, t, {"v", "review"}})
+	hs := slices.Concat(enter, s, []hint{c, t, {"v", "review"}})
 	if e.sess.Background() {
 		hs = append(hs, hint{"x", "stop"})
 	}
 	return append(hs, help)
+}
+
+// enterHint is enter's hint for an entry, as enterOn decides what enter
+// does there, and none when it only says something.
+func (m model) enterHint(e entry) []hint {
+	if _, k := m.enterOn(e); k.label() != "" {
+		return []hint{{"enter", k.label()}}
+	}
+	return nil
 }
 
 // hintLine puts lead, styled already, before as many whole hints as fit
@@ -1084,7 +1088,10 @@ func (m model) footer() string {
 		hints = append(hints, hint{"esc", "cancel"})
 	case m.filtering:
 		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
-		hints = []hint{{"enter", "open"}, {"↑↓", "move"}, {"esc", "clear"}}
+		if e, _, ok := m.selected(m.ordered()); ok {
+			hints = m.enterHint(e)
+		}
+		hints = append(hints, hint{"↑↓", "move"}, hint{"esc", "clear"})
 	case m.note != "":
 		if m.inPanels() {
 			lead = append(lead, heading.Render("panels"))
@@ -1153,7 +1160,7 @@ func helpSections() (left, right []helpSection) {
 			e("1 2", "sessions / digests"),
 		}},
 		{"act", []helpEntry{
-			e("enter", "type into the session"),
+			e("enter", "type in its session or terminal"),
 			e("l tab", "the same as enter"),
 			e("x", "stop, close or unpin"),
 			e("y", "copy attach command"),

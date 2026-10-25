@@ -1385,58 +1385,125 @@ func copied(text string, err error) tea.Msg {
 	return noteMsg("copied " + text)
 }
 
-// act does what enter means for an entry: it moves the focus beside the
-// list. On a workstream it acts on the workstream's lead, the entry the
-// stage shows beside it, and with no session under it, it opens the
-// cockpit, the keyboard staying in the list. A background session gets an
+// enterKind is what enter does on an entry. enterOn decides it, act
+// carries it out and the footer names it, so the hint cannot say one
+// thing while enter does another.
+type enterKind int
+
+const (
+	enterSays    enterKind = iota // only a note: how to start something, or why nothing opens
+	enterType                     // the keyboard goes to the entry's pane beside the list
+	enterAttach                   // a background session gets an attach pane first
+	enterApp                      // the app a session runs inside comes forward
+	enterCockpit                  // the cockpit opens, the keyboard staying in the list
+)
+
+// label is how the footer names what enter does, "" when it only says
+// something, since a note is not worth a key's hint.
+func (k enterKind) label() string {
+	switch k {
+	case enterType:
+		return "type"
+	case enterAttach:
+		return "attach"
+	case enterApp:
+		return "open app"
+	case enterCockpit:
+		return "cockpit"
+	}
+	return ""
+}
+
+// enterOn is what enter does on an entry, and the entry it does it to.
+// On a workstream it acts on the workstream's lead, the entry the stage
+// shows beside it, and with nothing under it it opens the cockpit, or in
+// the cockpit says how to start a session. A background session gets an
 // attach pane first. One that runs inside another app brings that app
-// forward, since that is where it is used. A pinned project with nothing in it only says how to start one.
-func (m model) act(e entry) (model, tea.Cmd) {
+// forward, since that is where it is used. A pinned project with nothing
+// in it only says how to start one.
+func (m model) enterOn(e entry) (entry, enterKind) {
 	switch e.kind {
 	case workstreamEntry:
-		es := m.ordered()
-		if c, ok := lead(children(es, e.task())); ok {
-			return m.act(c)
+		if c, ok := lead(children(m.ordered(), e.task())); ok {
+			return m.enterOn(c)
 		}
 		if m.cockpit.open {
-			return m.say("No session works on #" + strconv.Itoa(e.stream.ID) + ". c starts one, t a terminal."), nil
+			return e, enterSays
 		}
-		return m.openCockpit()
+		return e, enterCockpit
 	case projectEntry:
-		if e.proj.Tracked {
-			return m.say("Nothing runs in " + e.proj.Name + " yet. s starts a task, c Claude, t a terminal."), nil
-		}
-		return m.say("Nothing runs in " + e.proj.Name + " yet. c starts Claude here, t a terminal."), nil
+		return e, enterSays
 	case terminalEntry:
 		if m.mux == nil {
-			return m.say("terminals open only inside overview's tmux"), nil
+			return e, enterSays
 		}
-		m.entering = e.term.Pane
-		return m, nil
+		return e, enterType
 	}
 	row := e.sess
-	if h := row.Host; h != nil {
-		if h.Path == "" || m.deps.reveal == nil {
-			return m.say(awayNote(row.Name, *h)), nil
+	switch {
+	case row.Host != nil:
+		if row.Host.Path == "" || m.deps.reveal == nil {
+			return e, enterSays
 		}
-		reveal := m.deps.reveal
+		return e, enterApp
+	case m.mux == nil:
+		return e, enterSays
+	case row.Pane != "":
+		return e, enterType
+	case !row.Background():
+		return e, enterSays
+	}
+	return e, enterAttach
+}
+
+// act does what enterOn decided for an entry.
+func (m model) act(e entry) (model, tea.Cmd) {
+	e, k := m.enterOn(e)
+	switch k {
+	case enterCockpit:
+		return m.openCockpit()
+	case enterType:
+		if e.kind == terminalEntry {
+			m.entering = e.term.Pane
+		} else {
+			m.entering = e.sess.Pane
+		}
+		return m, nil
+	case enterApp:
+		row, h, reveal := e.sess, e.sess.Host, m.deps.reveal
 		return m.say("opening " + h.Name + "…"), func() tea.Msg {
 			return doneMsg{row.Name + " is in " + h.Name, reveal(h.Path)}
 		}
+	case enterAttach:
+		row := e.sess
+		attach := m.home.AttachArgs(row.Live)
+		return m.say("attaching to " + row.Name + "…").startPane(spawn{kind: spawnAttach, key: row.ID, sel: m.sel, name: row.Name,
+			session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach})
 	}
-	if m.mux == nil {
-		return m.say("sessions open only inside overview's tmux"), nil
+	return m.say(m.enterNote(e)), nil
+}
+
+// enterNote is what enter says on an entry where it opens nothing.
+func (m model) enterNote(e entry) string {
+	switch e.kind {
+	case workstreamEntry:
+		return "No session works on #" + strconv.Itoa(e.stream.ID) + ". c starts one, t a terminal."
+	case projectEntry:
+		if e.proj.Tracked {
+			return "Nothing runs in " + e.proj.Name + " yet. s starts a task, c Claude, t a terminal."
+		}
+		return "Nothing runs in " + e.proj.Name + " yet. c starts Claude here, t a terminal."
+	case terminalEntry:
+		return "terminals open only inside overview's tmux"
 	}
-	if p := row.Pane; p != "" {
-		m.entering = p
-		return m, nil
+	switch row := e.sess; {
+	case row.Host != nil:
+		return awayNote(row.Name, *row.Host)
+	case m.mux == nil:
+		return "sessions open only inside overview's tmux"
+	default:
+		return m.stageHint(row)
 	}
-	if !row.Background() {
-		return m.say(m.stageHint(row)), nil
-	}
-	attach := m.home.AttachArgs(row.Live)
-	return m.say("attaching to " + row.Name + "…").startPane(spawn{kind: spawnAttach, key: row.ID, sel: m.sel, name: row.Name,
-		session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach})
 }
 
 // claudeEnv is what a pane overview starts is given, so a claude in it,

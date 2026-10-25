@@ -262,7 +262,10 @@ session. A workstream that no session works on, such as one in review
 whose sessions have ended, shows its cockpit's cards beside the list,
 and `enter` opens the cockpit, with the keyboard still in the list.
 While you are searching, `enter` acts on the selected match and clears the
-search. On a terminal, `enter` moves the keyboard into the pane right of
+search. The footer names what `enter` does on the selected entry, in the
+list, in the cockpit and while searching: `type`, `attach`, `open app` or
+`cockpit`. Where `enter` would only say how to start something, the
+footer leaves it out. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a
 background session or closes a terminal, and asks first; closing a
 terminal kills what runs in it. `y` copies the attach command. To end a

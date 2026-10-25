@@ -646,3 +646,43 @@ func TestARuleSaysTheIssuesFailed(t *testing.T) {
 		t.Fatalf("sections %+v: want the failed project with its workstreams", secs)
 	}
 }
+
+// The footer's enter hint says what enter does on every entry, in the
+// list and in the cockpit, and is left out where enter only says how to
+// start something: on #4, with no session, enter opens the cockpit, and
+// in the cockpit it only says so.
+func TestTheEnterHintSaysWhatEnterDoes(t *testing.T) {
+	f := newFakeMux()
+	m := taskModel(t, f)
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background", Cwd: "/code/app"}, State: fleet.Idle}
+	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), bg), ttys: m.in.TTYs, pinned: []string{"/code/empty"}})
+	m = settle(t, m, cmd)
+	m = pressSettled(t, selectKey(t, m, "s2"), "t")
+	for _, cockpit := range []bool{false, true} {
+		for _, e := range m.ordered() {
+			at := selectKey(t, m, e.key())
+			if cockpit {
+				at = pressSettled(t, at, "o")
+			}
+			label := ""
+			for _, h := range at.panelHints() {
+				if h.key == "enter" {
+					label = h.label
+				}
+			}
+			after, _ := at.apply(action{do: open})
+			did := ""
+			switch {
+			case after.entering != "":
+				did = "type"
+			case strings.HasPrefix(after.note, "attaching"):
+				did = "attach"
+			case after.cockpit.open && !at.cockpit.open:
+				did = "cockpit"
+			}
+			if label != did {
+				t.Errorf("cockpit %v, on %s: the footer says enter %q, enter did %q (note %q)", cockpit, e.key(), label, did, after.note)
+			}
+		}
+	}
+}

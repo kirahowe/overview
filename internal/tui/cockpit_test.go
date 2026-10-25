@@ -441,7 +441,7 @@ func resized(t *testing.T, m model, w, h int) model {
 
 func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
-	m := newTestModel(t, bg)
+	m := stagedModel(t, newFakeMux(), bg)
 	m.cockpit.open = true
 	hs := m.panelHints()
 	if i := slices.IndexFunc(hs, func(h hint) bool { return h.key == "enter" }); i < 0 || hs[i].label != "attach" {
