@@ -12,6 +12,7 @@ import (
 	"overview/internal/issues"
 	"overview/internal/review"
 	"overview/internal/vcs"
+	"overview/internal/world"
 )
 
 // The cockpit is the view's own pane zoomed to fill its window: the list
@@ -98,7 +99,7 @@ func (m model) closeCockpit() (model, tea.Cmd) {
 // inStage counts the panes in the list's window.
 func (m model) inStage() int {
 	w, n := m.windowOf(m.self), 0
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.Window == w && w != "" {
 			n++
 		}
@@ -148,7 +149,7 @@ func closesCockpit(v verb) bool {
 // idleStream says whether e is a workstream that no session works on.
 // The holder shows its cockpit's cards, and enter opens the cockpit.
 func idleStream(es []entry, e entry) bool {
-	return e.kind == workstreamEntry && !slices.ContainsFunc(children(es, e.task), func(c entry) bool { return c.kind == sessionEntry })
+	return e.kind == workstreamEntry && !slices.ContainsFunc(children(es, e.task()), func(c entry) bool { return c.kind == sessionEntry })
 }
 
 // idleSelected says whether the cursor is on an idle workstream.
@@ -158,28 +159,64 @@ func (m model) idleSelected() bool {
 	return ok && idleStream(es, e)
 }
 
-// target is what the cockpit shows: a workstream, when task is set, or
-// else the project at root.
+// target is what the cockpit shows: a workstream, when stream is set, or
+// else the project at root, which is nil when the World has none there.
+// root is where its reads run: the workstream's tracker's root, or the
+// project's.
 type target struct {
-	root  string
-	task  string
-	issue issues.Issue
+	root    string
+	stream  *world.Stream
+	project *world.Project
 }
 
-// cockpitTarget is the cockpit's target for the selected entry: the
+// cockpitTarget is the cockpit's target for the selected entry in w: the
 // workstream it is or sits under, or else the project it belongs to, as
 // rootOf finds it. ok says whether anything is selected.
-func cockpitTarget(e entry, ok bool, rootOf func(entry, bool) string) target {
-	if root, i, on := e.workstream(); ok && on {
-		return target{root: root, task: e.task, issue: i}
+func cockpitTarget(w *world.World, e entry, ok bool, rootOf func(entry, bool) string) target {
+	if ok && e.stream != nil {
+		return target{root: e.stream.Root, stream: e.stream, project: e.stream.Project}
 	}
-	return target{root: rootOf(e, ok)}
+	root := rootOf(e, ok)
+	return target{root: root, project: w.ProjectOf(root)}
 }
 
 // target is the cockpit's target now.
 func (m model) target() target {
 	e, _, ok := m.selected(m.ordered())
-	return cockpitTarget(e, ok, m.rootOf)
+	return cockpitTarget(m.world(), e, ok, m.rootOf)
+}
+
+// sessions are the target's sessions: those linked to its workstream, or
+// every one in its project.
+func (t target) sessions() []*world.Session {
+	switch {
+	case t.stream != nil:
+		return t.stream.Sessions
+	case t.project != nil:
+		return t.project.Members
+	}
+	return nil
+}
+
+// terminals are the target's terminals: those opened for its workstream,
+// or every one in its project.
+func (t target) terminals() []*world.Terminal {
+	switch {
+	case t.stream != nil:
+		return t.stream.Terminals
+	case t.project != nil:
+		return t.project.AllTerminals
+	}
+	return nil
+}
+
+// start is when a workstream's work began, in Unix milliseconds, 0 when
+// nothing says or for a project, whose changes are its working copy's.
+func (t target) start() int64 {
+	if t.stream == nil || t.stream.Started.IsZero() {
+		return 0
+	}
+	return t.stream.Started.UnixMilli()
 }
 
 // cockpitListWidth is the list's width in the cockpit, 0 when the window
@@ -296,83 +333,15 @@ type (
 
 // cockpitKey names a target in the caches.
 func cockpitKey(t target) string {
-	if t.task != "" {
-		return taskPrefix + t.task
+	if t.stream != nil {
+		return taskPrefix + t.stream.Key.String()
 	}
 	return "project:" + t.root
 }
 
-// targetRows are the target's sessions: those linked to its workstream,
-// or those in its project.
-func (m model) targetRows(t target) []fleet.Row {
-	links := m.tasks().links
-	var out []fleet.Row
-	for _, r := range m.rows {
-		switch {
-		case r.Name == fleet.OrchestratorName:
-		case t.task != "" && slices.Contains(links[r.SessionID], t.task):
-			out = append(out, r)
-		case t.task == "" && m.root(r.Cwd) == t.root:
-			out = append(out, r)
-		}
-	}
-	sortActive(out)
-	return out
-}
-
-// targetTerms are the target's terminals: those opened for its
-// workstream, or those of its project.
-func (m model) targetTerms(t target) []terminal {
-	var out []terminal
-	for _, tm := range m.terminals() {
-		if (t.task != "" && tm.Task == t.task) || (t.task == "" && tm.Project == t.root) {
-			out = append(out, tm)
-		}
-	}
-	return out
-}
-
-// streamStart is when the workstream key was taken on, in Unix
-// milliseconds: the earliest time any of rows linked to it, or for a
-// session whose refs have no time, when it started. 0 when none says.
-func streamStart(rows []fleet.Row, key string, linked map[string]map[string]time.Time) int64 {
-	var first int64
-	for _, r := range rows {
-		at := r.StartedAt
-		if t := linked[r.SessionID][key]; !t.IsZero() {
-			at = t.UnixMilli()
-		}
-		if at > 0 && (first == 0 || at < first) {
-			first = at
-		}
-	}
-	return first
-}
-
-// targetStart is when the target's work began: a workstream's start, as
-// streamStart has it, or for a project when its first session started.
-func (m model) targetStart(t target, rows []fleet.Row) int64 {
-	if t.task == "" {
-		return started(rows)
-	}
-	return streamStart(rows, t.task, m.tasks().linked)
-}
-
-// started is when the earliest of rows started, in Unix milliseconds, 0
-// when none says.
-func started(rows []fleet.Row) int64 {
-	var first int64
-	for _, r := range rows {
-		if r.StartedAt > 0 && (first == 0 || r.StartedAt < first) {
-			first = r.StartedAt
-		}
-	}
-	return first
-}
-
 // sessionsSig is what rows are doing, so a change to any of them, as a
 // hook reports it, reads the changes again.
-func sessionsSig(rows []fleet.Row) string {
+func sessionsSig(rows []*world.Session) string {
 	parts := make([]string, len(rows))
 	for i, r := range rows {
 		parts[i] = fmt.Sprint(r.SessionID, ":", r.State, ":", r.Since.UnixNano())
@@ -406,19 +375,18 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 	}
 	t := m.target()
 	var cmds []tea.Cmd
-	if t.task != "" {
+	if t.stream != nil {
 		var read tea.Cmd
-		m, read = m.readIssue(t.root, t.issue.ID)
+		m, read = m.readIssue(t.root, t.stream.ID)
 		cmds = append(cmds, read)
 	}
 	key := cockpitKey(t)
-	rows := m.targetRows(t)
-	sig, start := sessionsSig(rows), m.targetStart(t, rows)
+	sig, start := sessionsSig(t.sessions()), t.start()
 	c, ok := m.changeReads[key]
 	if c.pending || (ok && c.sig == sig && c.fresh) {
 		return m, tea.Batch(cmds...)
 	}
-	stream := t.task != ""
+	stream := t.stream != nil
 	if stream && start == 0 && c.base == "" {
 		c.sig, c.fresh, c.info = sig, true, changeInfo{noStart: true}
 		m.changeReads = withRead(m.changeReads, key, c)
@@ -533,10 +501,10 @@ func stale(mp map[string]changesRead) map[string]changesRead {
 }
 
 // members are a target's sessions and terminals as its header shows them.
-func (m model) members(rows []fleet.Row, terms []terminal) []member {
+func (m model) members(rows []*world.Session, terms []*world.Terminal) []member {
 	var out []member
 	for _, r := range rows {
-		_, _, word, age, style := m.stateMark(r)
+		_, _, word, age, style := m.stateMark(r.Row)
 		if r.State == fleet.Working {
 			style = green
 		}
@@ -548,22 +516,19 @@ func (m model) members(rows []fleet.Row, terms []terminal) []member {
 	return out
 }
 
-// others are the open issues of the target's project other than its own,
-// and how many sessions work on each, by number.
+// others are the open issues of the target's tracker other than its own,
+// and how many sessions work on each, by number, as its workstream lists
+// them.
 func (m model) others(t target) ([]issues.Issue, map[int]int) {
 	var out []issues.Issue
-	for _, i := range m.trackers[t.root].issues {
-		if t.task == "" || i.ID != t.issue.ID {
-			out = append(out, i)
-		}
-	}
 	linked := map[int]int{}
-	for _, keys := range m.tasks().links {
-		for _, k := range keys {
-			for _, i := range out {
-				if k == taskKey(t.root, i.ID) {
-					linked[i.ID]++
-				}
+	count := m.sessionsOn(t.root)
+	tr, _ := m.world().Tracker(t.root)
+	for _, i := range tr.Open {
+		if t.stream == nil || i.ID != t.stream.ID {
+			out = append(out, i)
+			if n := count(i); n > 0 {
+				linked[i.ID] = n
 			}
 		}
 	}
@@ -572,30 +537,30 @@ func (m model) others(t target) ([]issues.Issue, map[int]int) {
 
 // changeStart is when the target's changes are counted from: the start
 // its base was found for, once it has one, and else its start now.
-func (m model) changeStart(t target, rows []fleet.Row) int64 {
+func (m model) changeStart(t target) int64 {
 	if c := m.changeReads[cockpitKey(t)]; c.base != "" && c.start > 0 {
 		return c.start
 	}
-	return m.targetStart(t, rows)
+	return t.start()
 }
 
 // cockpitRows is the cards for target t, in rows from the top.
 func (m model) cockpitRows(t target) [][]card {
-	rows, terms := m.targetRows(t), m.targetTerms(t)
-	ms := m.members(rows, terms)
+	rows := t.sessions()
+	ms := m.members(rows, t.terminals())
 	ch := m.changeReads[cockpitKey(t)]
 	info := ch.info
 	if _, ok := m.changeReads[cockpitKey(t)]; !ok {
 		info.loading = true
 	}
-	_, tracked := m.trackers[t.root]
+	_, tracked := m.world().Tracker(t.root)
 	others, linked := m.others(t)
 	pick := max(0, min(m.cockpit.pick, len(pickable(others))-1))
 	issuesRow := []card{issuesCard(others, linked, m.inIssues(), pick, m.trackers[t.root].err)}
 	if !tracked {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}
-	if t.task == "" {
+	if t.stream == nil {
 		kind := ch.kind
 		if info.noRepo {
 			kind = "no repository"
@@ -611,10 +576,10 @@ func (m model) cockpitRows(t target) [][]card {
 		}
 	}
 	since := ""
-	if s := m.changeStart(t, rows); s > 0 {
+	if s := m.changeStart(t); s > 0 {
 		since = Ago(time.UnixMilli(s))
 	}
-	ir, ok := m.issueReads[t.task]
+	ir, ok := m.issueReads[t.stream.Key.String()]
 	details := ir.info
 	if !ok {
 		details.loading = true
@@ -625,8 +590,8 @@ func (m model) cockpitRows(t target) [][]card {
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{
-		{streamHeader(issueRef(m.projectID(t.root), t.issue), t.issue.Status, t.issue.Priority, t.issue.Title, since, ms)},
-		{issueCard(t.issue.ID, details)},
+		{streamHeader(issueRef(m.projectID(t.root), t.stream.Issue), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms)},
+		{issueCard(t.stream.ID, details)},
 		{changesCard("Changes", since, info), reviewCard(sum)},
 		issuesRow,
 	}
@@ -666,7 +631,7 @@ func (m model) startPicked() (model, tea.Cmd) {
 
 // streamAt is where the workstream key is in es, -1 when it is not.
 func streamAt(es []entry, key string) int {
-	return slices.IndexFunc(es, func(e entry) bool { return e.kind == workstreamEntry && e.task == key })
+	return slices.IndexFunc(es, func(e entry) bool { return e.kind == workstreamEntry && e.task() == key })
 }
 
 // pickStarts says whether enter in the issues card starts a session: no
@@ -675,7 +640,7 @@ func streamAt(es []entry, key string) int {
 // The task picker decides the same way, through taskGoes.
 func (m model) pickStarts() bool {
 	t, i, ok := m.picked()
-	return ok && !taskGoes(taskRow{sessions: streamSessions(m.rows, m.tasks().links, t.root)[i.ID]})
+	return ok && !taskGoes(taskRow{sessions: m.sessionsOn(t.root)(i)})
 }
 
 // picked is the issue under the issues card's cursor, and the cockpit's
@@ -696,7 +661,7 @@ func (m model) keepCockpit() model {
 	if !m.inIssues() {
 		return m
 	}
-	if _, tracked := m.trackers[m.target().root]; !tracked || !m.issuesShown() {
+	if _, tracked := m.world().Tracker(m.target().root); !tracked || !m.issuesShown() {
 		m.cockpit.issues = false
 		return m
 	}

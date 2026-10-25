@@ -17,6 +17,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/world"
 )
 
 // fakeIssues is a set of projects with .issues directories, each listing
@@ -197,7 +198,7 @@ func TestRefreshReadsTrackers(t *testing.T) {
 	if _, ok := m.trackers["/w/app"]; !ok || f.runs["/w/app"] != 1 || f.runs["/w/app-wt"] != 1 {
 		t.Fatalf("trackers %v runs %v", m.trackers, f.runs)
 	}
-	if got := m.tasks().links["s1"]; !slices.Equal(got, []string{"/w/app#6"}) {
+	if got := streamKeys(m.world().Sessions["s1"].Streams); !slices.Equal(got, []string{"/w/app#6"}) {
 		t.Fatalf("links %v, want the worktree's ref on the project", got)
 	}
 	m, cmd = step(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
@@ -247,8 +248,8 @@ func TestAHangingIssuesRunBlocksNothing(t *testing.T) {
 	r2 := row("s2", "blue", "", 12)
 	r2.Cwd = "/w/app"
 	m, cmd = step(m, rowsMsg{rows: []fleet.Row{r, r2}})
-	if len(m.rows) != 2 {
-		t.Fatalf("rows %d: the refresh waited on issues", len(m.rows))
+	if len(m.in.Rows) != 2 {
+		t.Fatalf("rows %d: the refresh waited on issues", len(m.in.Rows))
 	}
 	select {
 	case <-run(cmd):
@@ -295,66 +296,35 @@ func issue(id int, status, title string) issues.Issue {
 	return issues.Issue{ID: id, Status: status, Title: title, Priority: "p2"}
 }
 
-func TestResolveTask(t *testing.T) {
-	ts := trackers{
-		"/w/app":    tracked("app", issue(6, issues.InProgress, "a"), issue(7, issues.Done, "b")),
-		"/w/app-wt": tracked("app", issue(6, issues.InProgress, "a")),
-		"/w/lib":    tracked("lib", issue(1, issues.Ready, "c")),
-		"/x/other":  tracked("other", issue(2, issues.Ready, "d")),
-	}
-	known := map[string]bool{"/w/app": true, "/w/lib": true, "/w/plain": true}
-	root := func(dir string) string {
-		switch {
-		case strings.HasPrefix(dir, "/w/app-wt"):
-			return "/w/app-wt"
-		case strings.HasPrefix(dir, "/w/app"):
-			return "/w/app"
-		}
-		return dir
-	}
-	for _, c := range []struct {
-		name string
-		ref  fleet.TaskRef
-		own  string
-		want string
-	}{
-		{"by project id", fleet.TaskRef{Project: "app", Dir: "/w/lib", ID: 6}, "/w/lib", "/w/app#6"},
-		{"by the directory's tracker", fleet.TaskRef{Dir: "/w/app/sub", ID: 6}, "/w/app", "/w/app#6"},
-		{"a worktree with the same id", fleet.TaskRef{Dir: "/w/app-wt", ID: 6}, "/w/app", "/w/app#6"},
-		{"a worktree named by id", fleet.TaskRef{Project: "app", Dir: "/w/app-wt", ID: 6}, "/w/plain", "/w/app#6"},
-		{"a project not listed", fleet.TaskRef{Dir: "/x/other", ID: 2}, "/w/app", "/x/other#2"},
-		{"a closed issue", fleet.TaskRef{Project: "app", ID: 7}, "/w/app", ""},
-		{"an unknown issue", fleet.TaskRef{Project: "app", ID: 99}, "/w/app", ""},
-		{"an unknown project id", fleet.TaskRef{Project: "nope", Dir: "/w/app", ID: 6}, "/w/app", ""},
-		{"no tracker", fleet.TaskRef{Dir: "/w/plain", ID: 1}, "/w/plain", ""},
-		{"a ready issue", fleet.TaskRef{Project: "lib", ID: 1}, "/w/app", "/w/lib#1"},
-	} {
-		if got := resolveTask(c.ref, c.own, ts, known, root); got != c.want {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-		}
-	}
-	// Without a runner there are no trackers, and nothing links.
-	if got := resolveTask(fleet.TaskRef{Project: "app", ID: 6}, "/w/app", trackers{}, known, root); got != "" {
-		t.Errorf("no trackers: %q", got)
-	}
-	// A project without project.edn has its root's name for an id.
+// A project without project.edn has its root's name for an id, which a
+// ref by that id links to.
+func TestATrackerWithoutProjectEdnLinksByItsName(t *testing.T) {
 	f := newFakeIssues()
 	f.project("/w/tool", "", "3 in-progress t")
 	got := readAll(nil, []string{"/w/tool"}, f.run, f.deps(), t0)
-	if k := resolveTask(fleet.TaskRef{Project: "tool", ID: 3}, "/w/tool", got, map[string]bool{"/w/tool": true}, root); k != "/w/tool#3" {
-		t.Errorf("missing project.edn: %q", k)
+	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/tool"}, Tasks: []fleet.TaskRef{{Project: "tool", ID: 3}}}
+	w := world.Derive(world.Inputs{Rows: []fleet.Row{r}, Trackers: got.inputs()})
+	if keys := streamKeys(w.Sessions["s"].Streams); !slices.Equal(keys, []string{"/w/tool#3"}) {
+		t.Errorf("missing project.edn: %v", keys)
 	}
 }
 
-func TestResolveLinksKeepsTheLatestLast(t *testing.T) {
-	ts := trackers{"/w/app": tracked("app", issue(1, issues.Ready, ""), issue(2, issues.Ready, ""), issue(3, issues.Done, ""))}
-	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/app"}, Tasks: []fleet.TaskRef{
-		{Project: "app", ID: 1}, {Project: "app", ID: 2}, {Dir: "/w/app", ID: 1}, {Project: "app", ID: 3},
-	}}
-	got, _ := resolveLinks([]fleet.Row{r}, ts, map[string]bool{"/w/app": true}, func(d string) string { return d })
-	if want := []string{"/w/app#2", "/w/app#1"}; !slices.Equal(got["s"], want) {
-		t.Fatalf("links %v, want %v", got["s"], want)
+// streamKeys are the keys of ss.
+func streamKeys(ss []*world.Stream) []string {
+	var out []string
+	for _, s := range ss {
+		out = append(out, s.Key.String())
 	}
+	return out
+}
+
+// targetTask is the key of a cockpit target's workstream, "" for a
+// project.
+func targetTask(t target) string {
+	if t.stream == nil {
+		return ""
+	}
+	return t.stream.Key.String()
 }
 
 // taskModel runs in the fake tmux with two sessions in /code/app, which
@@ -371,7 +341,8 @@ func taskModel(t *testing.T, f *fakeMux) model {
 		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"},
 	)}
 	m.trackers = ts
-	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys})
+	m = m.setInputs(nil)
+	m, cmd := step(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs})
 	return settle(t, m, cmd)
 }
 
@@ -392,7 +363,7 @@ func TestTaskModelLists(t *testing.T) {
 	if got := ids(m.sections()); !slices.Equal(got, want) {
 		t.Fatalf("listed %v, want %v", got, want)
 	}
-	if need, _, _ := m.counts(); need != 1 {
+	if need, _, _ := counts(m); need != 1 {
 		t.Fatalf("need %d, want the review", need)
 	}
 }
@@ -493,6 +464,7 @@ func TestTOpensATerminalForTheTask(t *testing.T) {
 	// Once #6 is done, the terminal is the project's, as its session is.
 	m.trackers = trackers{"/code/app": tracked("app",
 		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"})}
+	m = m.setInputs(nil)
 	want = []string{"task:/code/app#4", "s1", "s2", shell.Window}
 	if got := ids(m.sections()); !slices.Equal(got, want) {
 		t.Fatalf("after #6 closed: listed %v, want %v", got, want)
@@ -535,9 +507,9 @@ func TestAnAliasActsAsItsSession(t *testing.T) {
 }
 
 func TestLeadIsTheFirstWithAPaneElseTheFirstSession(t *testing.T) {
-	bg := entry{kind: sessionEntry, row: row("b", "bg", "", 0)}
-	s := entry{kind: sessionEntry, row: row("s", "s", "", 1)}
-	term := entry{kind: terminalEntry, term: terminal{Window: "@4", Pane: "%4"}}
+	bg := entry{kind: sessionEntry, sess: &world.Session{Row: row("b", "bg", "", 0)}}
+	s := entry{kind: sessionEntry, sess: &world.Session{Row: row("s", "s", "", 1)}}
+	term := entry{kind: terminalEntry, term: &world.Terminal{Window: "@4", Pane: "%4"}}
 	has := func(ids ...string) func(entry) bool {
 		return func(e entry) bool { return slices.Contains(ids, e.key()) }
 	}
@@ -571,7 +543,8 @@ func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
 	m := stagedModel(t, f, s1, bg)
 	ts := trackers{"/code/app": tracked("app", issues.Issue{ID: 6, Ref: "app#6", Title: "w", Status: issues.InProgress})}
 	m.trackers = ts
-	m, cmd := step(m, rowsMsg{rows: m.rows, ttys: m.ttys})
+	m = m.setInputs(nil)
+	m, cmd := step(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs})
 	m = settle(t, m, cmd)
 	if got := ids(m.sections())[:3]; !slices.Equal(got, []string{"task:/code/app#6", "b1", "s1"}) {
 		t.Fatalf("listed %v, want the background session first", got)
@@ -635,6 +608,7 @@ func TestTheCursorFollowsItsSessionWhenAnAliasGoes(t *testing.T) {
 			is = append(is, issue(id, issues.InProgress, "t"))
 		}
 		m.trackers = trackers{"/code/app": tracked("app", is...)}
+		m = m.setInputs(nil)
 		m = update(m, rowsMsg{rows: []fleet.Row{r1, r2}})
 		return m.ordered()
 	}
@@ -666,6 +640,7 @@ func TestARuleSaysTheIssuesFailed(t *testing.T) {
 	tr := m.trackers["/code/app"]
 	tr.err = errors.New("boom")
 	m.trackers = trackers{"/code/app": tr}
+	m = m.setInputs(nil)
 	text := ansi.Strip(m.View())
 	if !strings.Contains(text, "issues failed") || strings.Contains(text, "2 tasks") {
 		t.Fatalf("rule:\n%s", text)

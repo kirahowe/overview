@@ -3,11 +3,12 @@ package tui
 import (
 	"errors"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -290,11 +291,11 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	m := taskModel(t, newFakeMux())
 	m = update(m, keyMsg("r"))
 	started := time.Unix(1_700_000_000, 0)
-	rows := slices.Clone(m.rows)
+	rows := slices.Clone(m.in.Rows)
 	for i := range rows {
 		rows[i].StartedAt = started.UnixMilli()
 	}
-	m = update(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m = update(m, rowsMsg{rows: rows, ttys: m.in.TTYs})
 	// The project tracks its issues and is a git repository. The issues
 	// CLI lists the tracker's issues, as each refresh reads them, and
 	// shows #6's details.
@@ -313,6 +314,7 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	tr := m.trackers["/code/app"]
 	tr.stamp = issueStamp(m.deps.glob, m.deps.modTime, "/code/app")
 	m.trackers = trackers{"/code/app": tr}
+	m = m.setInputs(nil)
 	m.deps.vcs = func(dir string, args ...string) ([]byte, error) {
 		asked = append(asked, args)
 		switch {
@@ -350,9 +352,9 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 		t.Fatalf("read again with nothing changed: %v", asked[n:])
 	}
 	rows[0].State = fleet.Working
-	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.in.TTYs})
 	m = settle(t, m, cmd)
-	if m.target().task != "/code/app#6" || len(m.trackers["/code/app"].issues) != 2 {
+	if targetTask(m.target()) != "/code/app#6" || len(m.trackers["/code/app"].issues) != 2 {
 		t.Fatalf("the refresh lost the workstream: target %+v, tracker %+v", m.target(), m.trackers["/code/app"])
 	}
 	if len(asked) == n || slices.ContainsFunc(asked[n:], func(a []string) bool { return slices.Contains(a, "reflog") }) {
@@ -374,7 +376,7 @@ func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
 		r.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6, Linked: time.UnixMilli(at)}}
 		return r
 	}
-	s1, s2 := linked(m.rows[0], 1_700_000_000_000), linked(m.rows[1], 1_700_000_200_000)
+	s1, s2 := linked(m.in.Rows[0], 1_700_000_000_000), linked(m.in.Rows[1], 1_700_000_200_000)
 	clock := time.Unix(1_700_001_000, 0)
 	m.deps.now = func() time.Time { return clock }
 	reflogs, reads := 0, 0
@@ -393,7 +395,7 @@ func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
 	set := func(rows ...fleet.Row) {
 		t.Helper()
 		var cmd tea.Cmd
-		m, cmd = step(m, rowsMsg{rows: rows, ttys: m.ttys})
+		m, cmd = step(m, rowsMsg{rows: rows, ttys: m.in.TTYs})
 		m = settle(t, m, cmd)
 	}
 	set(s1, s2)
@@ -423,24 +425,6 @@ func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
 	}
 }
 
-func TestStreamStart(t *testing.T) {
-	key := "/w#1"
-	a := fleet.Row{Live: fleet.Live{SessionID: "a", StartedAt: 500}}
-	b := fleet.Row{Live: fleet.Live{SessionID: "b", StartedAt: 300}}
-	linked := map[string]map[string]time.Time{"a": {key: time.UnixMilli(200)}, "b": {"/w#2": time.UnixMilli(100)}}
-	if got := streamStart([]fleet.Row{a, b}, key, linked); got != 200 {
-		t.Fatalf("got %d, want a's link at 200", got)
-	}
-	if got := streamStart([]fleet.Row{b}, key, linked); got != 300 {
-		t.Fatalf("got %d, want b's start, its refs having no time for %s", got, key)
-	}
-	if got := streamStart(nil, key, linked); got != 0 {
-		t.Fatalf("got %d with no rows", got)
-	}
-}
-
-// A failed read says why at the top of the card, on lines that fit, and
-// the card still lists what the last good read found.
 func TestIssuesCardSaysWhyTheReadFailed(t *testing.T) {
 	others := []issues.Issue{{ID: 4, Title: "show cost", Status: issues.Review}}
 	got := drawn(issuesCard(others, nil, false, 0, errors.New("issues --dir /w/app list --json: exit status 2:\nno such\tthing")), 40)

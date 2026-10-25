@@ -87,13 +87,13 @@ func (m model) entryTitle(e entry, ok bool) []titleSeg {
 	case !ok:
 		return []titleSeg{{text: "details"}}
 	case e.kind == workstreamEntry:
-		return []titleSeg{{text: "#" + strconv.Itoa(e.issue.ID) + " " + e.issue.Title}}
+		return []titleSeg{{text: "#" + strconv.Itoa(e.stream.ID) + " " + e.stream.Issue.Title}}
 	case e.kind == projectEntry:
-		return []titleSeg{{text: m.name(e.project)}}
+		return []titleSeg{{text: e.proj.Name}}
 	case e.kind == terminalEntry:
 		return []titleSeg{{text: "$ " + e.term.Title}}
 	}
-	return m.stateTitle(e.row)
+	return m.stateTitle(e.sess.Row)
 }
 
 // paneTitle is the title of pane p of the view's session.
@@ -142,14 +142,14 @@ func (m model) paneTitle(p tmux.Pane, byTTY map[string]fleet.Row, byID map[strin
 // show.
 func (m model) frames() map[string]paneFrame {
 	byTTY, byID := map[string]fleet.Row{}, map[string]fleet.Row{}
-	for _, r := range m.rows {
-		if tty := m.ttys[r.PID]; tty != "" && !r.Background() {
+	for _, r := range m.in.Rows {
+		if tty := m.in.TTYs[r.PID]; tty != "" && !r.Background() {
 			byTTY[tty] = r
 		}
 		byID[r.SessionID] = r
 	}
 	out := map[string]paneFrame{}
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.Session == m.session && m.session != "" {
 			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, byTTY, byID))}
 		}

@@ -16,6 +16,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 // The view runs in a pane of overview's own tmux server, and the window it
@@ -272,7 +273,7 @@ func (m model) keepWidth() (model, tea.Cmd) {
 		return m, nil
 	}
 	n := 0
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.Window == list.Window {
 			n++
 		}
@@ -365,7 +366,7 @@ func drawCmd(write func(string, []byte) error, tty, text string) tea.Cmd {
 }
 
 func (m model) pane(id string) (tmux.Pane, bool) {
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.ID == id && id != "" {
 			return p, true
 		}
@@ -376,7 +377,7 @@ func (m model) pane(id string) (tmux.Pane, bool) {
 // holder is the pane the view draws details into, "" when the listing has
 // none in the view's session.
 func (m model) holder() string {
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.Holder && p.Session == m.session {
 			return p.ID
 		}
@@ -405,38 +406,6 @@ func (m model) stageOf(panes []tmux.Pane) string {
 	return ""
 }
 
-// paneOf is the pane that shows a session, "" when it has none: the pane
-// its claude runs in, or the attach opened for a background session.
-func (m model) paneOf(r fleet.Row) string {
-	if r.Background() {
-		for _, p := range m.panes {
-			if r.ID != "" && p.Attach == r.ID && p.Session == m.session {
-				return p.ID
-			}
-		}
-		return ""
-	}
-	tty := m.ttys[r.PID]
-	for _, p := range m.panes {
-		if tty != "" && p.TTY == tty && p.ID != m.self && p.Session == m.session {
-			return p.ID
-		}
-	}
-	return ""
-}
-
-// elsewhere says whether an interactive session runs in a pane of another
-// session on this server, such as another home's view.
-func (m model) elsewhere(r fleet.Row) bool {
-	tty := m.ttys[r.PID]
-	for _, p := range m.panes {
-		if tty != "" && p.TTY == tty && p.Session != m.session {
-			return true
-		}
-	}
-	return false
-}
-
 // want is the pane whose window the list belongs in: a session just started with
 // c until it shows up in the list, else the selected session's own pane or
 // the selected terminal's first pane, else the holder.
@@ -462,13 +431,13 @@ func (m model) want() string {
 func (m model) entryPane(es []entry, e entry) string {
 	switch e.kind {
 	case sessionEntry:
-		return m.paneOf(e.row)
+		return e.sess.Pane
 	case terminalEntry:
 		if m.alive(e.term.Pane) {
 			return e.term.Pane
 		}
 	case workstreamEntry:
-		if c, ok := lead(children(es, e.task), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
+		if c, ok := lead(children(es, e.task()), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
 			return m.entryPane(es, c)
 		}
 	}
@@ -486,9 +455,19 @@ func (m model) besideTerminal(want string) bool {
 // setPanes takes a fresh listing of tmux's panes and their roots, which
 // also say whether a client of the session is in the panels mode.
 func (m model) setPanes(panes []tmux.Pane, rs roots) model {
-	m.panes, m.paneRoots = panes, rs
+	m.paneRoots = rs
 	m.panels = slices.ContainsFunc(panes, func(p tmux.Pane) bool { return p.Panels && p.Session == m.session })
-	return m
+	return m.setInputs(func(in *world.Inputs) { in.Panes = panes })
+}
+
+// addPane takes a pane a Cmd has just started, before a listing shows it.
+func (m model) addPane(p tmux.Pane) model {
+	return m.setInputs(func(in *world.Inputs) { in.Panes = slices.Concat(in.Panes, []tmux.Pane{p}) })
+}
+
+// keepPanes takes panes as the model's latest, keeping the roots it has.
+func (m model) keepPanes(panes []tmux.Pane) model {
+	return m.setInputs(func(in *world.Inputs) { in.Panes = panes })
 }
 
 // restage brings tmux in line with the model after every update: it moves
@@ -504,7 +483,7 @@ func (m model) restage() (model, tea.Cmd) {
 	}
 	// With the keyboard outside the list, the list stays beside the pane
 	// the user is in, unless an action asked to go somewhere.
-	if mv, ok := plan(m.self, want, m.panes, m.width.want); ok && (!m.blurred || m.entering != "") {
+	if mv, ok := plan(m.self, want, m.in.Panes, m.width.want); ok && (!m.blurred || m.entering != "") {
 		m.staging = true
 		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.landed)
 	}
@@ -515,7 +494,7 @@ func (m model) restage() (model, tea.Cmd) {
 	if target := m.entering; target != "" {
 		m.entering = ""
 		mux, self, beside := m.mux, m.self, target == want && m.besideTerminal(want)
-		if m.windowOf(target) == m.windowOf(want) && m.stageOf(m.panes) == m.windowOf(want) {
+		if m.windowOf(target) == m.windowOf(want) && m.stageOf(m.in.Panes) == m.windowOf(want) {
 			cmds = append(cmds, func() tea.Msg {
 				err := error(nil)
 				if beside {
@@ -613,7 +592,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		// Known now, though the next listing is yet to come. A listing
 		// asked for before this point may lack it or its options.
-		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
+		m = m.addPane(msg.pane)
 		switch msg.kind {
 		case spawnHolder:
 			m.holderShown = ""
@@ -623,12 +602,13 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 				m.entering = msg.pane.ID
 			}
 		case spawnSession:
-			m.opened, m.entering = msg.pane, msg.pane.ID
+			m, m.entering = m.setOpened(msg.pane), msg.pane.ID
 			m = m.say("started " + msg.name)
 		case spawnTerminal:
 			// A terminal is listed as soon as its pane is, so the cursor
 			// takes it at once.
-			m.sel, m.confirm, m.opened, m.entering = msg.pane.Window, "", tmux.Pane{}, msg.pane.ID
+			m.sel, m.confirm, m.entering = msg.pane.Window, "", msg.pane.ID
+			m = m.setOpened(tmux.Pane{})
 			if m.filter != "" && !m.shown(m.sel) {
 				m.filter, m.filtering = "", false
 			}
@@ -643,7 +623,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if msg.err != nil {
 			m = m.say("could not mark the review: " + msg.err.Error())
 		}
-		m.panes = slices.Concat(m.panes, []tmux.Pane{msg.pane})
+		m = m.addPane(msg.pane)
 		m.entering = msg.pane.ID
 	case zoomedMsg:
 		m.landed++
@@ -660,12 +640,13 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.framed, m.frameStale = nil, true
 		}
 		if msg.window != "" && msg.err == nil {
-			m.panes = slices.Clone(m.panes)
-			for i, p := range m.panes {
+			panes := slices.Clone(m.in.Panes)
+			for i, p := range panes {
 				if p.Window == msg.window {
-					m.panes[i].Framed = msg.on
+					panes[i].Framed = msg.on
 				}
 			}
+			m = m.keepPanes(panes)
 		}
 	case widthMsg:
 		m.landed++
@@ -682,8 +663,8 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		// The rest may be stale, but the window is gone and the list is
 		// where it went, so no move aims at a closed pane.
-		gone := slices.DeleteFunc(slices.Clone(m.panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
-		m.panes = movedSelf(gone, msg.panes, m.self)
+		gone := slices.DeleteFunc(slices.Clone(m.in.Panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
+		m = m.keepPanes(movedSelf(gone, msg.panes, m.self))
 	}
 	return m, nil
 }
@@ -702,7 +683,7 @@ func (m model) stageLanded(msg stagedMsg) (model, tea.Cmd) {
 		return m.setPanes(msg.panes, msg.roots).keepWidth()
 	default:
 		// The rest may be stale, but where the list went is not.
-		m.panes = movedSelf(m.panes, msg.panes, m.self)
+		m = m.keepPanes(movedSelf(m.in.Panes, msg.panes, m.self))
 	}
 	return m, nil
 }
@@ -713,9 +694,10 @@ func (m model) adopt() model {
 	if m.opened.ID == "" {
 		return m
 	}
-	for _, r := range m.rows {
-		if !r.Background() && m.ttys[r.PID] == m.opened.TTY {
-			m.sel, m.opened = r.SessionID, tmux.Pane{}
+	for _, r := range m.world().Agents {
+		if r.TTY != "" && r.TTY == m.opened.TTY {
+			m.sel = r.SessionID
+			m = m.setOpened(tmux.Pane{})
 			if m.filter != "" && !m.shown(r.SessionID) {
 				m.filter, m.filtering = "", false
 			}
@@ -747,7 +729,7 @@ type closedMsg struct {
 // closeCmd closes a terminal's window, and everything that runs in it.
 // When the list is in that window it first goes beside the holder, since
 // closing the window with the list in it would end the view.
-func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t terminal, panes []tmux.Pane, width, gen int) tea.Cmd {
+func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t *world.Terminal, panes []tmux.Pane, width, gen int) tea.Cmd {
 	inside := false
 	for _, p := range panes {
 		inside = inside || (p.ID == self && p.Window == t.Window)
@@ -791,10 +773,10 @@ func (m model) holderText(w, h int) string {
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
 	case e.kind == projectEntry:
 		hint := ". c starts Claude here, t a terminal, x unpins it."
-		if _, tracked := m.trackers[e.project]; tracked {
+		if e.proj.Tracked {
 			hint = ". s starts one of its tasks, c Claude, t a terminal, and x unpins it."
 		}
-		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+hint), cw)
+		lines = wrap(dim.Render("No sessions in "+e.proj.Name+hint), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
 	case idleStream(es, e):
@@ -804,10 +786,10 @@ func (m model) holderText(w, h int) string {
 	case e.kind == workstreamEntry:
 		lines = m.workstreamLines(e, cw)
 	default:
-		if hint := m.stageHint(e.row); hint != "" {
+		if hint := m.stageHint(e.sess); hint != "" {
 			lines = append(wrap(dim.Render(hint), cw), "")
 		}
-		lines = append(lines, m.detail(e.row, cw)...)
+		lines = append(lines, m.detail(e.sess, cw)...)
 	}
 	if len(lines) > h {
 		head := 0
@@ -836,12 +818,13 @@ func (m model) holderText(w, h int) string {
 // workstreamLines is what the holder shows for a workstream whose
 // sessions have no pane to show: its issue, and where enter goes.
 func (m model) workstreamLines(e entry, w int) []string {
-	ref := issueRef(m.projectID(e.project), e.issue)
-	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(e.issue.Title), w)
-	out = append(out, wrap(dim.Render(e.issue.Status+" · "+e.issue.Priority+" · "+m.name(e.project)), w)...)
+	st := e.stream
+	ref := issueRef(m.projectID(st.Root), st.Issue)
+	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(st.Issue.Title), w)
+	out = append(out, wrap(dim.Render(st.Issue.Status+" · "+st.Issue.Priority+" · "+st.Project.Name), w)...)
 	out = append(out, "")
 	n := 0
-	for _, c := range children(m.ordered(), e.task) {
+	for _, c := range children(m.ordered(), e.task()) {
 		if c.kind == sessionEntry {
 			n++
 		}
@@ -853,17 +836,16 @@ func (m model) workstreamLines(e entry, w int) []string {
 }
 
 // stageHint says why the holder shows a session instead of its terminal.
-func (m model) stageHint(r fleet.Row) string {
-	_, away := m.hosts[r.PID]
+func (m model) stageHint(r *world.Session) string {
 	switch {
 	case r.Background():
 		return "A background session. enter attaches to it here."
-	case away:
+	case r.Host != nil:
 		return "" // the details say where it is
-	case m.elsewhere(r):
+	case r.Elsewhere:
 		return "This session runs in another overview session."
-	case m.ttys[r.PID] != "":
-		return "This session runs in " + m.ttys[r.PID] + ", outside overview's tmux, so it cannot be shown here."
+	case r.TTY != "":
+		return "This session runs in " + r.TTY + ", outside overview's tmux, so it cannot be shown here."
 	}
 	return "This session has no terminal to show."
 }

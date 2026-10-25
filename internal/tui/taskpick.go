@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"overview/internal/fleet"
 	"overview/internal/issues"
 )
 
@@ -76,14 +75,14 @@ func taskMatches(words []string, id string, i issues.Issue) bool {
 }
 
 // taskRows are the open issues of open that match query, in the
-// picker's order, each with the sessions linked to it, by number, as
-// sessions has them.
-func taskRows(open []issues.Issue, id string, sessions map[int]int, query string) []taskRow {
+// picker's order, each with the sessions linked to it, as sessions counts
+// them.
+func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, query string) []taskRow {
 	words := strings.Fields(strings.ToLower(query))
 	var out []taskRow
 	for _, i := range open {
 		if issues.Open(i.Status) && taskMatches(words, id, i) {
-			out = append(out, taskRow{issue: i, sessions: sessions[i.ID]})
+			out = append(out, taskRow{issue: i, sessions: sessions(i)})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b taskRow) int {
@@ -102,7 +101,7 @@ func taskRows(open []issues.Issue, id string, sessions map[int]int, query string
 // says whether overview has the issues binary, tracked whether the
 // project's tracker has been read, as t, and reading whether a read of
 // it is out.
-func taskListOf(name string, t tracker, tracked, reading, tool bool, sessions map[int]int, query string) taskList {
+func taskListOf(name string, t tracker, tracked, reading, tool bool, sessions func(issues.Issue) int, query string) taskList {
 	switch {
 	case !tool:
 		return taskList{note: "Install the issues tool to track tasks."}
@@ -145,35 +144,11 @@ func taskOpens(name string, tracked, reading, tool bool) (open bool, note string
 // so a second one is never started by accident.
 func taskGoes(r taskRow) bool { return r.sessions > 0 }
 
-// streamSessions counts the sessions linked to each workstream of the
-// project at root, by issue number, from links, the workstreams of each
-// session by session ID. The orchestrator is no session of a project.
-func streamSessions(rows []fleet.Row, links map[string][]string, root string) map[int]int {
-	out := map[int]int{}
-	prefix := root + "#"
-	for _, r := range rows {
-		if r.Name == fleet.OrchestratorName {
-			continue
-		}
-		seen := map[int]bool{}
-		for _, k := range links[r.SessionID] {
-			n, err := strconv.Atoi(strings.TrimPrefix(k, prefix))
-			if !strings.HasPrefix(k, prefix) || err != nil || seen[n] {
-				continue
-			}
-			seen[n] = true
-			out[n]++
-		}
-	}
-	return out
-}
-
 // taskList is what the open picker shows now.
 func (m model) taskList() taskList {
 	root := m.taskPick.root
 	t, tracked := m.trackers[root]
-	sessions := streamSessions(m.rows, m.tasks().links, root)
-	return taskListOf(m.name(root), t, tracked, m.reading[root], m.issues != nil, sessions, m.taskPick.query)
+	return taskListOf(m.name(root), t, tracked, m.reading[root], m.issues != nil, m.sessionsOn(root), m.taskPick.query)
 }
 
 // taskSel is the selected row of l, -1 when it has none.

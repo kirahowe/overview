@@ -2,13 +2,15 @@ package tui
 
 import (
 	"fmt"
-	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
+	"overview/internal/world"
 )
 
 // psSample is trimmed from a real `ps -A -o pid=,ppid=,tty=,comm=`: a
@@ -37,7 +39,7 @@ func TestPlaces(t *testing.T) {
 	if len(ttys) != 1 || ttys[903] != "ttys004" {
 		t.Fatalf("ttys %v", ttys)
 	}
-	want := map[int]host{
+	want := map[int]world.Host{
 		63381: {Name: "Obsidian", Path: "/Applications/Obsidian.app"},
 		5000:  {},
 	}
@@ -125,7 +127,7 @@ func TestPropHostIsTheNearestBundledAncestor(t *testing.T) {
 		procs := genProcs(t)
 		pid := rapid.IntRange(1, 22).Draw(t, "pid")
 		got := hostOf(procs, pid)
-		want := host{}
+		want := world.Host{}
 		p, ok := procs[pid]
 		for hop := 0; ok && hop < maxHops && p.ppid > 0; hop++ {
 			if p, ok = procs[p.ppid]; ok && strings.Contains(p.comm, ".app/") {
@@ -151,8 +153,8 @@ func awayModel(t *testing.T) (model, *[]string) {
 	m := newTestModel(t, row("s1", "red", "auth", 11), obs)
 	var opened []string
 	m.deps.reveal = func(path string) error { opened = append(opened, path); return nil }
-	m = update(m, rowsMsg{rows: m.rows, ttys: map[int]string{11: "ttys1"},
-		hosts: map[int]host{63381: {Name: "Obsidian", Path: "/Applications/Obsidian.app"}}})
+	m = update(m, rowsMsg{rows: m.in.Rows, ttys: map[int]string{11: "ttys1"},
+		hosts: map[int]world.Host{63381: {Name: "Obsidian", Path: "/Applications/Obsidian.app"}}})
 	return m, &opened
 }
 
@@ -182,9 +184,9 @@ func TestAwaySessionsGoLast(t *testing.T) {
 // the agents list.
 func TestAwaySessionThatNeedsYouLeadsTheAgents(t *testing.T) {
 	m, _ := awayModel(t)
-	for i := range m.rows {
-		if m.rows[i].SessionID == "obs" {
-			m.rows[i].State = fleet.Blocked
+	for i := range m.in.Rows {
+		if m.in.Rows[i].SessionID == "obs" {
+			m.in.Rows[i].State = fleet.Blocked
 		}
 	}
 	secs := m.sections()
@@ -218,7 +220,7 @@ func TestXOnAwaySessionPointsToItsApp(t *testing.T) {
 
 func TestEnterOnSessionWithoutAnAppOnlySaysSo(t *testing.T) {
 	m, opened := awayModel(t)
-	m = update(m, rowsMsg{rows: m.rows, ttys: m.ttys, hosts: map[int]host{63381: {}}})
+	m = update(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs, hosts: map[int]world.Host{63381: {}}})
 	m.sel = "obs"
 	m, cmd := press(m, "enter")
 	if cmd != nil || len(*opened) != 0 || !strings.Contains(m.note, "without a terminal") {

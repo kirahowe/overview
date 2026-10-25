@@ -22,6 +22,7 @@ import (
 	"overview/internal/review"
 	"overview/internal/tmux"
 	"overview/internal/vcs"
+	"overview/internal/world"
 )
 
 const (
@@ -51,7 +52,7 @@ type (
 	rowsMsg struct {
 		rows   []fleet.Row
 		ttys   map[int]string
-		hosts  map[int]host
+		hosts  map[int]world.Host
 		pinned []string
 		pinGen int // the model's pinsLanded when it was asked for
 		roots  roots
@@ -84,10 +85,13 @@ type model struct {
 	trackers trackers
 	reading  map[string]bool
 
-	rows    []fleet.Row
-	ttys    map[int]string
-	hosts   map[int]host // interactive sessions with no terminal, by pid
-	pinned  []string     // the pinned projects' roots
+	// in holds the sources' latest values, unjoined: the rows, ttys,
+	// hosts, panes, pins, roots and trackers. Only setInputs changes it,
+	// and each change gets a new generation, gen, which the World and the
+	// list are memoized on. memo is shared by every copy of the model.
+	in      world.Inputs
+	gen     int
+	memo    *memo
 	rowsErr error
 	loaded  bool
 
@@ -139,7 +143,6 @@ type model struct {
 	mux            multiplexer
 	self, session  string
 	exe            string
-	panes          []tmux.Pane
 	failed         string
 	staging        bool
 	spawningHolder bool
@@ -278,7 +281,7 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, transcripts: fleet.NewTranscripts(), deps: systemDeps()}
+	return model{home: home, llm: llm, cache: &detailCache{}, memo: &memo{}, transcripts: fleet.NewTranscripts(), deps: systemDeps()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -304,6 +307,9 @@ type deps struct {
 	// for the cockpit's changes.
 	vcs       vcs.Runner
 	untracked func(path string) (vcs.Untracked, error)
+	// derive joins the inputs into a World. It is world.Derive, which is
+	// pure; tests count its calls.
+	derive func(world.Inputs) world.World
 }
 
 // roots finds the project roots of dirs.
@@ -312,7 +318,7 @@ func (d deps) roots(dirs ...string) roots { return findRoots(d.exists, d.resolve
 func systemDeps() deps {
 	return deps{now: time.Now, reveal: openApp, copyText: copyText, psTable: psTable, readDirs: readDirs, writeTTY: writeTTY,
 		exists: exists, resolve: resolvePath, modTime: modTime, recentTurns: fleet.RecentTurns, reviews: readReviews,
-		glob: glob, readFile: os.ReadFile, vcs: vcs.Exec, untracked: vcs.ReadUntracked}
+		glob: glob, readFile: os.ReadFile, vcs: vcs.Exec, untracked: vcs.ReadUntracked, derive: world.Derive}
 }
 
 func glob(pattern string) []string {
@@ -398,7 +404,7 @@ func (m model) refresh() tea.Msg {
 // rowsMsg is a refresh of rows, with the roots of the directories it
 // names: the sessions', their task refs', the pinned projects' and the one
 // overview was started in. It reads the disk, so it runs in a Cmd.
-func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]host, pinned []string) rowsMsg {
+func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]world.Host, pinned []string) rowsMsg {
 	dirs := append(slices.Clone(pinned), m.cwd)
 	for _, r := range rows {
 		dirs = append(dirs, r.Cwd)
@@ -437,10 +443,10 @@ type turnsMsg struct{ recent }
 // found it and has not asked already.
 func (m model) askTurns() (model, tea.Cmd) {
 	e, _, ok := m.selected(m.ordered())
-	if !ok || e.kind != sessionEntry || e.row.Transcript == "" {
+	if !ok || e.kind != sessionEntry || e.sess.Transcript == "" {
 		return m, nil
 	}
-	k := turnsKey{e.row.Transcript, m.written[e.row.Transcript]}
+	k := turnsKey{e.sess.Transcript, m.written[e.sess.Transcript]}
 	if k == m.turns.key || k == m.turnsAsked {
 		return m, nil
 	}
@@ -465,31 +471,6 @@ func (m model) runDigest() tea.Msg {
 func (m model) say(note string) model {
 	m.note, m.noteAt = note, m.deps.now()
 	return m
-}
-
-// sections is the list as shown, with the filter applied.
-func (m model) sections() []section {
-	return buildList(m.rows, m.terminals(), m.pinned, m.tasks(), m.filter, m.name, m.short, m.hostOf)
-}
-
-// terminals are the windows of the view's session that run no session.
-func (m model) terminals() []terminal {
-	claude := map[string]bool{}
-	for _, r := range m.rows {
-		if tty := m.ttys[r.PID]; tty != "" && !r.Background() {
-			claude[tty] = true
-		}
-	}
-	return terminals(m.panes, m.session, m.self, m.opened.ID, claude, m.root)
-}
-
-// hostOf names the app a session runs inside, for one that has no terminal.
-func (m model) hostOf(r fleet.Row) (string, bool) {
-	if r.Background() {
-		return "", false
-	}
-	h, ok := m.hosts[r.PID]
-	return h.label(), ok
 }
 
 // ordered is the list flattened in the order the cursor walks it.
@@ -542,7 +523,8 @@ func (m model) moveTo(es []entry, i int) model {
 	}
 	i = max(0, min(i, len(es)-1))
 	if k := es[i].key(); k != m.sel {
-		m.sel, m.confirm, m.opened, m.entering = k, "", tmux.Pane{}, ""
+		m.sel, m.confirm, m.entering = k, "", ""
+		m = m.setOpened(tmux.Pane{})
 	}
 	return m
 }
@@ -639,12 +621,12 @@ func samePlace(old, now []entry, sel string) (string, bool) {
 	}
 	was := old[i]
 	if was.kind == workstreamEntry {
-		for _, c := range children(old, was.task) {
+		for _, c := range children(old, was.task()) {
 			if c.kind != sessionEntry {
 				continue
 			}
 			for _, e := range now {
-				if e.kind == sessionEntry && e.alias == "" && e.row.SessionID == c.row.SessionID {
+				if e.kind == sessionEntry && e.alias == "" && e.sess.SessionID == c.sess.SessionID {
 					return e.key(), true
 				}
 			}
@@ -657,11 +639,11 @@ func samePlace(old, now []entry, sel string) (string, bool) {
 	agents := was.alias == agentsPrefix
 	primary, other := "", ""
 	for _, e := range now {
-		if e.kind != sessionEntry || e.row.SessionID != was.row.SessionID {
+		if e.kind != sessionEntry || e.sess.SessionID != was.sess.SessionID {
 			continue
 		}
 		switch {
-		case (e.alias == agentsPrefix) == agents && (agents || e.task == was.task):
+		case (e.alias == agentsPrefix) == agents && (agents || e.stream == was.stream):
 			return e.key(), true
 		case e.alias == "" && primary == "":
 			primary = e.key()
@@ -678,12 +660,15 @@ func samePlace(old, now []entry, sel string) (string, bool) {
 // stick applies stuck across one update, from the model before it.
 func (m model) stick(before model) model {
 	e, _, ok := before.selected(before.ordered())
-	r, isSession := e.session()
+	s, isSession := e.session()
 	if !ok || !isSession {
 		return m
 	}
-	was, _ := before.pane(before.paneOf(r))
-	now, _ := m.pane(m.paneOf(r))
+	was, _ := before.pane(s.Pane)
+	now := tmux.Pane{}
+	if s := m.world().Sessions[s.SessionID]; s != nil {
+		now, _ = m.pane(s.Pane)
+	}
 	if key, ok := stuck(was.Window, now.Window == was.Window, m.ordered()); ok {
 		m.sel = key
 	}
@@ -698,7 +683,7 @@ func (m model) stick(before model) model {
 // the window it was in when its session ended there.
 func (m model) keepCursor(before model) model {
 	if m.blurred {
-		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.panes), m.sel); ok && key != m.sel {
+		if key, ok := follow(m.placed(m.ordered()), m.stageOf(m.in.Panes), m.sel); ok && key != m.sel {
 			m.sel, m.confirm = key, ""
 		}
 		// With no entry there, the cursor stays as it is, even on an entry
@@ -730,7 +715,7 @@ func (m model) unblur() model {
 // the session needs you, or a workstream in review.
 func needy(e entry) bool {
 	if e.kind == workstreamEntry {
-		return e.issue.Status == issues.Review
+		return e.stream.Issue.Status == issues.Review
 	}
 	r, ok := e.session()
 	return ok && e.alias == "" && r.NeedsYou()
@@ -865,11 +850,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rowsErr = msg.err; msg.err != nil {
 			return m, nil
 		}
-		m.rows, m.ttys, m.hosts, m.rowRoots, m.written, m.loaded = msg.rows, msg.ttys, msg.hosts, msg.roots, msg.written, true
+		m.rowRoots, m.written, m.loaded = msg.roots, msg.written, true
 		m.reviews = msg.reviews
-		if m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded {
-			m.pinned = msg.pinned
-		}
+		pins := m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded
+		m = m.setInputs(func(in *world.Inputs) {
+			in.Rows, in.TTYs, in.Hosts = msg.rows, msg.ttys, msg.hosts
+			if pins {
+				in.Pinned = msg.pinned
+			}
+		})
 		// Keep the cursor on a visible row after sessions come and go.
 		m = m.adopt()
 		return m.readTrackers()
@@ -900,11 +889,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err != nil:
 			return m.say("could not add the project: " + msg.err.Error()), nil
 		case msg.unpin:
-			m.pinned = slices.DeleteFunc(slices.Clone(m.pinned), func(r string) bool { return r == msg.root })
+			m = m.setInputs(func(in *world.Inputs) {
+				in.Pinned = slices.DeleteFunc(slices.Clone(in.Pinned), func(r string) bool { return r == msg.root })
+			})
 			return m.say("unpinned " + m.name(msg.root)), nil
 		}
-		if !slices.Contains(m.pinned, msg.root) {
-			m.pinned = slices.Concat(m.pinned, []string{msg.root})
+		if !slices.Contains(m.in.Pinned, msg.root) {
+			m = m.setInputs(func(in *world.Inputs) { in.Pinned = slices.Concat(in.Pinned, []string{msg.root}) })
 		}
 		return m.toProject(msg.root).say("pinned " + m.name(msg.root)), nil
 	case doneMsg:
@@ -995,15 +986,13 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				continue
 			}
 			if c.kind == terminalEntry && m.mux != nil {
-				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.panes, m.width.want, m.landed)
+				return m.say("closing " + c.term.Title + "…"), closeCmd(m.mux, m.deps.roots, m.self, m.holder(), c.term, m.in.Panes, m.width.want, m.landed)
 			}
 		}
-		for _, r := range m.rows {
-			if r.SessionID == key {
-				home, l := m.home, r.Live
-				return m.say("stopping " + r.Name + "…"), func() tea.Msg {
-					return doneMsg{"stopped " + l.Name, home.Stop(l)}
-				}
+		if s := m.world().Sessions[key]; s != nil {
+			home, l := m.home, s.Live
+			return m.say("stopping " + s.Name + "…"), func() tea.Msg {
+				return doneMsg{"stopped " + l.Name, home.Stop(l)}
 			}
 		}
 		return m.say("left it running"), nil
@@ -1089,15 +1078,15 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
 			m.pins++
-			home, root := m.home, e.project
+			home, root := m.home, e.pin()
 			return m, func() tea.Msg { return pinnedMsg{root: root, err: home.UnpinProject(root), unpin: true} }
 		case ok && e.kind == workstreamEntry:
 			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:
 			return m.say("nothing to stop"), nil
 		default:
-			if app, away := m.hostOf(row); away {
-				return m.say(row.Name + " belongs to " + app + ". Close it there."), nil
+			if row.Host != nil {
+				return m.say(row.Name + " belongs to " + row.Host.Label() + ". Close it there."), nil
 			}
 			if !row.Background() {
 				return m.say("only background sessions can be stopped from here"), nil
@@ -1105,14 +1094,14 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = row.SessionID
 		}
 	case newSession:
-		if root, i, on := e.workstream(); ok && on {
-			return m.startOn(root, i)
+		if ok && e.stream != nil {
+			return m.startOn(e.stream.Root, e.stream.Issue)
 		}
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
 		task := ""
 		if ok {
-			task = e.task
+			task = e.task()
 		}
 		return m.openTerminal(m.rootOf(e, ok), task)
 	case openReview:
@@ -1192,7 +1181,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.cockpit.issues = false
 			return m, nil
 		}
-		if _, tracked := m.trackers[m.target().root]; !tracked {
+		if _, tracked := m.world().Tracker(m.target().root); !tracked {
 			return m.say("this project does not track its issues"), nil
 		}
 		if !m.issuesShown() {
@@ -1229,25 +1218,19 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	return m, nil
 }
 
-// knownRoots are the roots of the projects in the list: those of the
-// sessions and terminals, and the pinned ones.
-func (m model) knownRoots() []string {
+// shownRoots are the roots of the projects in the list.
+func (m model) shownRoots() []string {
 	var roots []string
-	for _, r := range m.rows {
-		if r.Name != fleet.OrchestratorName {
-			roots = append(roots, m.root(r.Cwd))
-		}
+	for _, p := range m.world().Projects {
+		roots = append(roots, p.Roots...)
 	}
-	for _, t := range m.terminals() {
-		roots = append(roots, t.Project)
-	}
-	return append(roots, m.pinned...)
+	return roots
 }
 
 // pickMatches is what the picker offers now.
 func (m model) pickMatches() []string {
 	shown := map[string]bool{}
-	for _, r := range m.knownRoots() {
+	for _, r := range m.shownRoots() {
 		shown[r] = true
 	}
 	return pickMatches(m.pick.query, m.user, m.pick.paths, shown, m.short)
@@ -1273,7 +1256,7 @@ func (m model) setPickQuery(q string) (model, tea.Cmd) {
 func (m model) readPicks() (model, tea.Cmd) {
 	dirs := []string{m.pick.from}
 	if m.pick.from == "" {
-		dirs = pickParents(append(m.knownRoots(), m.root(m.cwd)))
+		dirs = pickParents(append(m.shownRoots(), m.root(m.cwd)))
 	}
 	return m, readPathsCmd(m.deps.readDirs, m.pick.from, dirs)
 }
@@ -1296,7 +1279,8 @@ func (m model) toProject(root string) model {
 		key, ok = find()
 	}
 	if ok {
-		m.sel, m.confirm, m.opened = key, "", tmux.Pane{}
+		m.sel, m.confirm = key, ""
+		m = m.setOpened(tmux.Pane{})
 	}
 	return m
 }
@@ -1309,17 +1293,19 @@ func (m model) rootOf(e entry, ok bool) string {
 	case !ok:
 		return m.root(m.cwd)
 	case e.kind == terminalEntry:
-		return e.term.Project
-	case e.kind == projectEntry, e.task != "":
-		return e.project
+		return e.term.Root
+	case e.kind == projectEntry:
+		return e.pin()
+	case e.stream != nil:
+		return e.stream.Root
 	}
-	return m.root(e.row.Cwd)
+	return m.root(e.sess.Cwd)
 }
 
 // moveToSay is what a key that acts on a session or terminal says on a
 // workstream: what it does, and to move to an entry under it.
 func (m model) moveToSay(e entry, does string) string {
-	return does + ": move to one under #" + strconv.Itoa(e.issue.ID)
+	return does + ": move to one under #" + strconv.Itoa(e.stream.ID)
 }
 
 // copyText puts text on the clipboard.
@@ -1346,18 +1332,18 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
 	case workstreamEntry:
 		es := m.ordered()
-		if c, ok := lead(children(es, e.task), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
+		if c, ok := lead(children(es, e.task()), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
 			return m.act(c)
 		}
 		if m.cockpit.open {
-			return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one, t a terminal."), nil
+			return m.say("No session works on #" + strconv.Itoa(e.stream.ID) + ". c starts one, t a terminal."), nil
 		}
 		return m.openCockpit()
 	case projectEntry:
-		if _, tracked := m.trackers[e.project]; tracked {
-			return m.say("Nothing runs in " + m.name(e.project) + " yet. s starts a task, c Claude, t a terminal."), nil
+		if e.proj.Tracked {
+			return m.say("Nothing runs in " + e.proj.Name + " yet. s starts a task, c Claude, t a terminal."), nil
 		}
-		return m.say("Nothing runs in " + m.name(e.project) + " yet. c starts Claude here, t a terminal."), nil
+		return m.say("Nothing runs in " + e.proj.Name + " yet. c starts Claude here, t a terminal."), nil
 	case terminalEntry:
 		if m.mux == nil {
 			return m.say("terminals open only inside overview's tmux"), nil
@@ -1365,10 +1351,10 @@ func (m model) act(e entry) (model, tea.Cmd) {
 		m.entering = e.term.Pane
 		return m, nil
 	}
-	row := e.row
-	if h, away := m.hosts[row.PID]; away && !row.Background() {
+	row := e.sess
+	if h := row.Host; h != nil {
 		if h.Path == "" || m.deps.reveal == nil {
-			return m.say(awayNote(row.Name, h)), nil
+			return m.say(awayNote(row.Name, *h)), nil
 		}
 		reveal := m.deps.reveal
 		return m.say("opening " + h.Name + "…"), func() tea.Msg {
@@ -1378,7 +1364,7 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions open only inside overview's tmux"), nil
 	}
-	if p := m.paneOf(row); p != "" {
+	if p := row.Pane; p != "" {
 		m.entering = p
 		return m, nil
 	}
@@ -1441,7 +1427,7 @@ func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
 }
 
 // awayNote says where a session that runs inside another app is.
-func awayNote(name string, h host) string {
+func awayNote(name string, h world.Host) string {
 	if h.Name == "" {
 		return name + " runs without a terminal, so there is nowhere to go."
 	}

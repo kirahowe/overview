@@ -25,6 +25,7 @@ import (
 	"overview/internal/issues"
 	"overview/internal/review"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 var (
@@ -35,24 +36,27 @@ var (
 	replies = []string{"", "done.", "Which one?", "ok *?*", "what now? "}
 )
 
-// fakeProject names a project after its directory's last element, so several
-// cwds can share one project and projects can differ in case only.
-func fakeProject(cwd string) string {
-	if cwd == "" {
-		return "?"
-	}
-	return path.Base(cwd)
+// The list's properties run on Worlds that world.Derive builds from drawn
+// inputs. No directory has a root of its own, so a project is named after
+// its directory in full, and projects can differ in case only. An
+// interactive session with pid 3 runs inside an app, Notes.
+
+// listWorld derives the World of rows, the panes of the view's session
+// "ov", the pinned projects and trackers.
+func listWorld(rows []fleet.Row, panes []tmux.Pane, pinned []string, ts map[string]world.Tracker) *world.World {
+	w := world.Derive(world.Inputs{
+		Rows: rows, Hosts: map[int]world.Host{3: {Name: "Notes"}}, Panes: panes, Session: "ov",
+		Pinned: pinned, Trackers: ts,
+	})
+	return &w
 }
 
-// fakeShort shows a directory as it is.
-func fakeShort(dir string) string { return dir }
-
-// fakeHost puts an interactive session with pid 3 inside an app, Notes.
-func fakeHost(r fleet.Row) (string, bool) {
-	if r.Background() || r.PID != 3 {
-		return "", false
+// fakeProject is the name of the project of cwd.
+func fakeProject(cwd string) string {
+	if cwd == "" {
+		return ""
 	}
-	return "Notes", true
+	return path.Clean(cwd)
 }
 
 func phrase(t *rapid.T, label string) string {
@@ -106,9 +110,9 @@ func genQuery(t *rapid.T) string {
 	return strings.Join(terms, rapid.SampledFrom([]string{" ", "  ", "\t"}).Draw(t, "sep"))
 }
 
-// sessionList is buildList with sessions only.
-func sessionList(rows []fleet.Row, query string, project func(string) string, host func(fleet.Row) (string, bool)) []section {
-	return buildList(rows, nil, nil, tasks{}, query, project, fakeShort, host)
+// sessionList is the list of rows alone.
+func sessionList(rows []fleet.Row, query string) []section {
+	return present(listWorld(rows, nil, nil, nil), query)
 }
 
 // ids are the keys of the entries above the agents list that are no alias:
@@ -188,112 +192,11 @@ func TestPropEveryMatchAppearsOnce(t *testing.T) {
 		if rapid.Bool().Draw(t, "qupper") {
 			q = strings.ToUpper(q)
 		}
-		got := ids(sessionList(rows, q, fakeProject, fakeHost))
+		got := ids(sessionList(rows, q))
 		sort.Strings(want)
 		sort.Strings(got)
 		if strings.Join(want, ",") != strings.Join(got, ",") {
 			t.Fatalf("query %q: got %v want %v", q, got, want)
-		}
-	})
-}
-
-// Without workstreams, every session sits in its project's section, or in
-// the away section when another app runs it, working first and then the
-// newest. The agents list comes last and holds every session shown above
-// once, those that need you first, longest wait first.
-func TestPropSectionsHoldTheRightRows(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		secs := sessionList(genRows(t), genQuery(t), fakeProject, fakeHost)
-		seen := map[string]bool{}
-		var prev *section
-		for i := range secs {
-			s := &secs[i]
-			if len(s.Entries) == 0 {
-				t.Fatalf("empty section %q", s.Title)
-			}
-			if s.Agents {
-				if i != len(secs)-1 || s.Title != agentsTitle {
-					t.Fatalf("agents at %d of %d titled %q", i, len(secs), s.Title)
-				}
-				listed := map[string]bool{}
-				for j, e := range s.Entries {
-					r := e.row
-					if e.alias != agentsPrefix || e.key() != "agents/"+r.SessionID || !seen[r.SessionID] || listed[r.SessionID] {
-						t.Fatalf("agents entry %s (shown above %v, twice %v)", e.key(), seen[r.SessionID], listed[r.SessionID])
-					}
-					listed[r.SessionID] = true
-					if j > 0 {
-						p := s.Entries[j-1].row
-						bad := !p.NeedsYou() && r.NeedsYou() ||
-							p.NeedsYou() && r.NeedsYou() && (p.Since.After(r.Since) || p.Since.Equal(r.Since) && p.SessionID >= r.SessionID) ||
-							!p.NeedsYou() && !r.NeedsYou() && !activeLess(p, r)
-						if bad {
-							t.Fatalf("agents order: %s before %s", p.SessionID, r.SessionID)
-						}
-					}
-				}
-				if len(listed) != len(seen) {
-					t.Fatalf("agents list %d of %d sessions", len(listed), len(seen))
-				}
-				continue
-			}
-			for j, e := range s.Entries {
-				r := e.row
-				if seen[r.SessionID] {
-					t.Fatalf("%s appears twice", r.SessionID)
-				}
-				seen[r.SessionID] = true
-				_, away := fakeHost(r)
-				if away != s.Away {
-					t.Fatalf("%s: away=%v in section away=%v", r.SessionID, away, s.Away)
-				}
-				if !s.Away && fakeProject(r.Cwd) != s.Title {
-					t.Fatalf("%s (project %q) is under %q", r.SessionID, fakeProject(r.Cwd), s.Title)
-				}
-				if j > 0 && !activeLess(s.Entries[j-1].row, r) {
-					t.Fatalf("order: %s before %s", s.Entries[j-1].row.SessionID, r.SessionID)
-				}
-			}
-			if s.Away && (i != len(secs)-2 || s.Title != awayTitle) {
-				t.Fatalf("away section at %d of %d titled %q, want before the agents and %q", i, len(secs), s.Title, awayTitle)
-			}
-			if !s.Away {
-				if prev != nil && !nameLess(prev.Title, s.Title) {
-					t.Fatalf("projects out of order: %q then %q", prev.Title, s.Title)
-				}
-				prev = s
-			}
-		}
-	})
-}
-
-func TestPropIndependentOfInputOrder(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		rows, q := genRows(t), genQuery(t)
-		shuffled := rapid.Permutation(rows).Draw(t, "perm")
-		a := sessionList(rows, q, fakeProject, fakeHost)
-		b := sessionList(shuffled, q, fakeProject, fakeHost)
-		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
-			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
-		}
-		if !reflect.DeepEqual(ids(a), ids(sessionList(rows, q, fakeProject, fakeHost))) {
-			t.Fatal("not deterministic")
-		}
-	})
-}
-
-func TestPropEmptyQueryIsEverything(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		rows := genRows(t)
-		q := rapid.SampledFrom([]string{"", " ", " \t "}).Draw(t, "blank")
-		want := 0
-		for _, r := range rows {
-			if r.Name != fleet.OrchestratorName {
-				want++
-			}
-		}
-		if got := len(ids(sessionList(rows, q, fakeProject, fakeHost))); got != want {
-			t.Fatalf("got %d rows, want %d", got, want)
 		}
 	})
 }
@@ -303,10 +206,10 @@ func TestPropLongerQueryNeverAddsRows(t *testing.T) {
 		rows, q := genRows(t), genQuery(t)
 		extra := rapid.SampledFrom([]string{"a", "x", "e", " fix", " ", "  api", "\tzz"}).Draw(t, "extra")
 		base := map[string]bool{}
-		for _, id := range ids(sessionList(rows, q, fakeProject, fakeHost)) {
+		for _, id := range ids(sessionList(rows, q)) {
 			base[id] = true
 		}
-		for _, id := range ids(sessionList(rows, q+extra, fakeProject, fakeHost)) {
+		for _, id := range ids(sessionList(rows, q+extra)) {
 			if !base[id] {
 				t.Fatalf("%q matches %s but %q does not", q+extra, id, q)
 			}
@@ -325,14 +228,14 @@ func TestPropNoMatchAcrossFieldBoundary(t *testing.T) {
 			{LastPrompt: a, Name: b},
 		} {
 			r.SessionID = "x"
-			if len(ids(sessionList([]fleet.Row{r}, term, func(string) string { return "" }, fakeHost))) != 0 {
+			if len(ids(sessionList([]fleet.Row{r}, term))) != 0 {
 				t.Fatalf("%q matched across fields %q|%q", term, a, b)
 			}
 		}
 		// Whitespace splits terms, so a "term" with a space is two terms and
 		// each may match a different field.
 		r := fleet.Row{SessionID: "x", Title: a, LastPrompt: b}
-		if len(ids(sessionList([]fleet.Row{r}, a+" "+b, func(string) string { return "" }, fakeHost))) != 1 {
+		if len(ids(sessionList([]fleet.Row{r}, a+" "+b))) != 1 {
 			t.Fatalf("%q %q should match as two terms", a, b)
 		}
 	})
@@ -344,7 +247,7 @@ func TestMatchingIsPerFieldAndCaseInsensitive(t *testing.T) {
 		"billing": true, "AUTH": true, "fix auth": true, "auth billing": true,
 		"authrotate": false, "fixauth": false, "keys fix": true, "nope": false,
 	} {
-		got := len(ids(sessionList([]fleet.Row{r}, q, fakeProject, fakeHost))) == 1
+		got := len(ids(sessionList([]fleet.Row{r}, q))) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
 		}
@@ -426,6 +329,7 @@ func TestRootsResolveSymlinks(t *testing.T) {
 func TestModelRootLooksUp(t *testing.T) {
 	m := newTestModel(t)
 	m.rowRoots, m.paneRoots, m.user = roots{"/a/x": "/a"}, roots{"/a/x": "/b", "/c/y": "/c"}, "/u"
+	m = m.setInputs(nil)
 	for dir, want := range map[string]string{"/a/x": "/a", "/c/y": "/c", "/d/z/": "/d/z", "": ""} {
 		if got := m.root(dir); got != want {
 			t.Errorf("root(%q) = %q, want %q", dir, got, want)
@@ -584,19 +488,21 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 	})
 }
 
-// genTerms draws terminals in distinct windows, in projects named like the
-// rows' (fakeProject takes the last path element).
-func genTerms(t *rapid.T) []terminal {
+// genTerms draws the panes of terminals in distinct windows of the view's
+// session, in the rows' projects, some of them opened for a workstream.
+func genTerms(t *rapid.T) []tmux.Pane {
 	n := rapid.IntRange(0, 6).Draw(t, "terms")
 	wins := rapid.SliceOfNDistinct(rapid.IntRange(0, 30), n, n, rapid.ID[int]).Draw(t, "wins")
-	out := make([]terminal, n)
+	out := make([]tmux.Pane, n)
 	for i, w := range wins {
-		out[i] = terminal{
-			Window:  fmt.Sprintf("@%d", w),
-			Pane:    fmt.Sprintf("%%%d", 100+w),
+		out[i] = tmux.Pane{
+			ID: fmt.Sprintf("%%%d", 100+w), Session: "ov", Window: fmt.Sprintf("@%d", w),
 			Project: rapid.SampledFrom(cwds).Draw(t, "tproject"),
-			Title:   rapid.SampledFrom([]string{"zsh", "node", "vite, node", "make"}).Draw(t, "title"),
+			Command: rapid.SampledFrom([]string{"zsh", "node", "vite", "make"}).Draw(t, "command"),
 			Path:    rapid.SampledFrom([]string{"/w/alpha/web", "/x/api", "/"}).Draw(t, "path"),
+		}
+		if rapid.Bool().Draw(t, "termtask") {
+			out[i].Task = genKey().Draw(t, "ttask")
 		}
 	}
 	return out
@@ -606,105 +512,197 @@ func genPinned(t *rapid.T) []string {
 	return rapid.SliceOfDistinct(rapid.SampledFrom([]string{"/w/alpha", "/w/delta", "/w/Beta", "/p/omega", "/w/gamma"}), rapid.ID[string]).Draw(t, "pinned")
 }
 
-// With no query, every session but the orchestrator, every terminal and
-// every pinned project shows exactly once: a pinned project as a
-// placeholder exactly when no session or terminal is in it. A project's
-// terminals come after its sessions, by window number, and a placeholder
-// is alone in its section.
-func TestPropEveryEntryShowsOnce(t *testing.T) {
+// The workstreams. Two of the rows' projects track their issues; their
+// issues have numbers 1 to 5 and any status, and sessions link to them,
+// or to issues that are closed or not there at all, by project id.
+
+var (
+	trackedRoots = []string{"/w/alpha", "/w/gamma"}
+	statuses     = []string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked, issues.Done, issues.Dropped}
+)
+
+// genIssues draws the open and closed issues of the tracked roots, by
+// root, each root's id its base name.
+func genIssues(t *rapid.T) map[string][]issues.Issue {
+	out := map[string][]issues.Issue{}
+	for _, root := range trackedRoots {
+		if rapid.IntRange(0, 4).Draw(t, "untracked") == 0 {
+			continue
+		}
+		out[root] = []issues.Issue{}
+		for _, id := range rapid.SliceOfDistinct(rapid.IntRange(1, 5), rapid.ID[int]).Draw(t, "issues") {
+			out[root] = append(out[root], issues.Issue{
+				ID: id, Ref: fmt.Sprintf("%s#%d", path.Base(root), id), Title: phrase(t, "ititle"),
+				Status:   rapid.SampledFrom(statuses).Draw(t, "status"),
+				Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", ""}).Draw(t, "priority"),
+			})
+		}
+	}
+	return out
+}
+
+// worldTrackers are the trackers of issues, as the World is told of them.
+func worldTrackers(is map[string][]issues.Issue) map[string]world.Tracker {
+	out := map[string]world.Tracker{}
+	for root, list := range is {
+		out[root] = world.Tracker{ID: path.Base(root), Open: list}
+	}
+	return out
+}
+
+// genLinks gives each row up to three refs to issues by project id.
+func genLinks(t *rapid.T, rows []fleet.Row) {
+	for i := range rows {
+		for range rapid.IntRange(0, 3).Draw(t, "links") {
+			rows[i].Tasks = append(rows[i].Tasks, fleet.TaskRef{
+				Project: rapid.SampledFrom([]string{"alpha", "gamma", "Beta"}).Draw(t, "rproject"),
+				ID:      rapid.IntRange(1, 6).Draw(t, "rid"),
+			})
+		}
+	}
+}
+
+func genKey() *rapid.Generator[string] {
+	return rapid.Custom(func(t *rapid.T) string {
+		return taskKey(rapid.SampledFrom(append(trackedRoots, "/w/Beta")).Draw(t, "kroot"), rapid.IntRange(1, 6).Draw(t, "kid"))
+	})
+}
+
+// genListWorld draws a whole World: sessions linked to workstreams,
+// terminals, pinned projects and trackers.
+func genListWorld(t *rapid.T) *world.World {
+	rows := genRows(t)
+	genLinks(t, rows)
+	return listWorld(rows, genTerms(t), genPinned(t), worldTrackers(genIssues(t)))
+}
+
+// presented is what the World holds that the list shows, in the World's
+// order: each listed project's workstreams, each with its sessions and
+// terminals, and its own sessions and terminals, then the away sessions,
+// then the agents. A session under a workstream that is not its primary
+// one is an alias.
+func presented(w *world.World) []string {
+	var out []string
+	for _, p := range w.Projects {
+		if p.Empty() {
+			out = append(out, "project:"+p.Pins[0])
+		}
+		for _, st := range p.Streams {
+			out = append(out, "task:"+st.Key.String())
+			for _, s := range st.Sessions {
+				if s.Primary() == st {
+					out = append(out, s.SessionID)
+				} else {
+					out = append(out, "task:"+st.Key.String()+"/"+s.SessionID)
+				}
+			}
+			for _, tm := range st.Terminals {
+				out = append(out, tm.Window)
+			}
+		}
+		for _, s := range p.Sessions {
+			out = append(out, s.SessionID)
+		}
+		for _, tm := range p.Terminals {
+			out = append(out, tm.Window)
+		}
+	}
+	for _, s := range w.Away {
+		out = append(out, s.SessionID)
+	}
+	for _, s := range w.Agents {
+		out = append(out, "agents/"+s.SessionID)
+	}
+	return out
+}
+
+func keys(es []entry) []string {
+	var out []string
+	for _, e := range es {
+		out = append(out, e.key())
+	}
+	return out
+}
+
+// With an empty query the list is the whole World, in its order: every
+// listed project, workstream, session, terminal and away session, a
+// placeholder for each project with nothing in it, and every session once
+// in the agents list. Each entry points at what it shows.
+func TestPropPresentShowsTheWholeWorld(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
-		secs := buildList(rows, terms, pinned, tasks{}, "", fakeProject, fakeShort, fakeHost)
-		count := map[string]int{}
+		w := genListWorld(t)
+		q := rapid.SampledFrom([]string{"", " ", " \t "}).Draw(t, "blank")
+		secs := present(w, q)
+		if got, want := keys(flatten(secs)), presented(w); !slices.Equal(got, want) {
+			t.Fatalf("the list %v, want %v", got, want)
+		}
+		var titles []string
 		for _, s := range secs {
-			sawTerm := false
-			for j, e := range s.Entries {
-				count[e.key()]++
+			if !s.Away && !s.Agents {
+				titles = append(titles, s.Title)
+			}
+			for _, e := range s.Entries {
 				switch e.kind {
-				case terminalEntry:
-					if s.Away || s.Agents || s.Title != fakeProject(e.term.Project) {
-						t.Fatalf("terminal %s (project %q) in section %q", e.key(), e.term.Project, s.Title)
-					}
-					if sawTerm && !windowLess(s.Entries[j-1].term.Window, e.term.Window) {
-						t.Fatalf("terminals out of order in %q", s.Title)
-					}
-					sawTerm = true
-				case projectEntry:
-					if len(s.Entries) != 1 || s.Title != fakeProject(e.project) {
-						t.Fatalf("placeholder %s in %+v", e.key(), s)
-					}
 				case sessionEntry:
-					if sawTerm {
-						t.Fatalf("session %s after a terminal in %q", e.key(), s.Title)
+					if w.Sessions[e.sess.SessionID] != e.sess {
+						t.Fatalf("%s is not the World's session", e.key())
+					}
+				case workstreamEntry:
+					if w.Streams[e.stream.Key] != e.stream || e.stream.Project.Name != s.Title {
+						t.Fatalf("%s is not the World's workstream in %q", e.key(), s.Title)
+					}
+				case terminalEntry:
+					if !slices.Contains(w.Terminals, e.term) || e.term.Project.Name != s.Title {
+						t.Fatalf("%s is not the World's terminal in %q", e.key(), s.Title)
 					}
 				}
-			}
-		}
-		used := map[string]bool{}
-		for _, r := range rows {
-			if r.Name != fleet.OrchestratorName {
-				used[fakeProject(r.Cwd)] = true
-				if count[r.SessionID] != 1 {
-					t.Fatalf("session %s shows %d times", r.SessionID, count[r.SessionID])
+				if e.stream != nil && e.kind != workstreamEntry && (e.alias == agentsPrefix || !slices.Contains(e.stream.Project.Streams, e.stream)) {
+					t.Fatalf("%s sits under %s", e.key(), e.task())
 				}
 			}
 		}
-		for _, tm := range terms {
-			used[fakeProject(tm.Project)] = true
-			if count[tm.Window] != 1 {
-				t.Fatalf("terminal %s shows %d times", tm.Window, count[tm.Window])
-			}
+		var want []string
+		for _, p := range w.Projects {
+			want = append(want, p.Name)
 		}
-		// Pinned roots with one name are one project, shown once.
-		holders := map[string]int{}
-		for _, p := range pinned {
-			if count["project:"+p] > 0 {
-				holders[fakeProject(p)]++
-			}
-		}
-		for _, p := range pinned {
-			name := fakeProject(p)
-			if used[name] && count["project:"+p] != 0 {
-				t.Fatalf("pinned %s has entries, yet a placeholder", p)
-			}
-			if !used[name] && holders[name] != 1 {
-				t.Fatalf("pinned %s is empty, and has %d placeholders", p, holders[name])
-			}
+		if !slices.Equal(titles, want) {
+			t.Fatalf("sections %v, want %v", titles, want)
 		}
 	})
 }
 
-func TestPropEntriesIndependentOfInputOrder(t *testing.T) {
+// A query never adds an entry, and what it shows keeps the World's order.
+func TestPropAQueryNeverAddsAnEntry(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
-		a := buildList(rows, terms, pinned, tasks{}, q, fakeProject, fakeShort, fakeHost)
-		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
-			rapid.Permutation(pinned).Draw(t, "pinned"), tasks{}, q, fakeProject, fakeShort, fakeHost)
-		if !reflect.DeepEqual(ids(a), ids(b)) || len(a) != len(b) {
-			t.Fatalf("order changed: %v vs %v", ids(a), ids(b))
+		w := genListWorld(t)
+		q := rapid.OneOf(rapid.Just(genQuery(t)), rapid.SampledFrom([]string{"#2", "alpha#3", "gamma", "#4 alpha", "notes", "node"})).Draw(t, "q")
+		all := presented(w)
+		at := -1
+		for _, k := range keys(flatten(present(w, q))) {
+			i := slices.Index(all, k)
+			if i < 0 {
+				t.Fatalf("%q shows %s, which the World does not list", q, k)
+			}
+			if i <= at {
+				t.Fatalf("%q shows %s out of the World's order", q, k)
+			}
+			at = i
 		}
 	})
 }
 
 // A search shows a placeholder only when every term is in its project's
-// name, and never brings back a project with entries as a placeholder.
+// name.
 func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned, q := genRows(t), genTerms(t), genPinned(t), genQuery(t)
-		all := map[string]bool{}
-		for _, id := range ids(buildList(rows, terms, pinned, tasks{}, "", fakeProject, fakeShort, fakeHost)) {
-			all[id] = true
-		}
-		for _, e := range flatten(buildList(rows, terms, pinned, tasks{}, q, fakeProject, fakeShort, fakeHost)) {
+		w, q := genListWorld(t), genQuery(t)
+		for _, e := range flatten(present(w, q)) {
 			if e.kind != projectEntry {
 				continue
 			}
-			if !all[e.key()] {
-				t.Fatalf("%q shows placeholder %s that the full list lacks", q, e.key())
-			}
-			name := strings.ToLower(fakeProject(e.project))
-			for _, w := range strings.Fields(strings.ToLower(q)) {
-				if !strings.Contains(name, w) {
+			name := strings.ToLower(e.proj.Name)
+			for _, word := range strings.Fields(strings.ToLower(q)) {
+				if !strings.Contains(name, word) {
 					t.Fatalf("%q shows the placeholder for %q", q, name)
 				}
 			}
@@ -713,135 +711,14 @@ func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 }
 
 func TestTerminalSearch(t *testing.T) {
-	term := terminal{Window: "@4", Pane: "%9", Project: "/w/shop", Title: "node", Path: "/x/shop/web"}
+	term := tmux.Pane{ID: "%9", Session: "ov", Window: "@4", Project: "/w/shop", Command: "node", Path: "/x/shop/web"}
 	for q, want := range map[string]bool{
 		"": true, "shop": true, "NODE": true, "web": true, "node web": true, "shop/web": true,
 		"nodeweb": false, "zsh": false, "terminal": false,
 	} {
-		got := len(buildList(nil, []terminal{term}, nil, tasks{}, q, fakeProject, fakeShort, fakeHost)) == 1
+		got := len(present(listWorld(nil, []tmux.Pane{term}, nil, nil), q)) == 1
 		if got != want {
 			t.Errorf("%q: got %v want %v", q, got, want)
-		}
-	}
-}
-
-func TestCountsSkipTerminalsAndPlaceholders(t *testing.T) {
-	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/a"}, State: fleet.Working}
-	secs := buildList([]fleet.Row{r}, []terminal{{Window: "@1", Project: "/w/a"}}, []string{"/w/b"}, tasks{}, "", fakeProject, fakeShort, fakeHost)
-	if need, working, idle := counts(secs); need != 0 || working != 1 || idle != 0 {
-		t.Fatalf("counts %d %d %d", need, working, idle)
-	}
-}
-
-// genPanes draws a tmux listing: panes in a few windows of the view's
-// session "ov" and of another, with the list, the holder, attaches and
-// claude ttys among them.
-func genPanes(t *rapid.T) []tmux.Pane {
-	n := rapid.IntRange(0, 10).Draw(t, "panes")
-	panes := make([]tmux.Pane, n)
-	for i := range panes {
-		panes[i] = tmux.Pane{
-			ID:      fmt.Sprintf("%%%d", i),
-			TTY:     fmt.Sprintf("ttys%03d", i),
-			Session: rapid.SampledFrom([]string{"ov", "ov", "ov", "other"}).Draw(t, "session"),
-			Window:  fmt.Sprintf("@%d", rapid.IntRange(0, 4).Draw(t, "window")),
-			Command: rapid.SampledFrom([]string{"zsh", "-zsh", "node", "claude", "vim", ""}).Draw(t, "command"),
-			Path:    rapid.SampledFrom([]string{"/w/a", "/w/a/sub", "/w/b", ""}).Draw(t, "path"),
-			Project: rapid.SampledFrom([]string{"", "", "/w/p"}).Draw(t, "project"),
-			Attach:  rapid.SampledFrom([]string{"", "", "", "bg1"}).Draw(t, "attach"),
-			Task:    rapid.SampledFrom([]string{"", "", "/w/p#6"}).Draw(t, "task"),
-		}
-	}
-	return panes
-}
-
-// terminals lists exactly the windows of the view's session that hold a
-// pane besides the list and none of the holder, an attach, a listed
-// claude, or the pane c just opened. Each comes once, in window order,
-// named after its first such pane.
-func TestPropTerminals(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		panes := genPanes(t)
-		pick := func(label string) string {
-			if len(panes) == 0 || rapid.Bool().Draw(t, label+"none") {
-				return ""
-			}
-			return rapid.SampledFrom(panes).Draw(t, label).ID
-		}
-		self, holder, opened := pick("self"), pick("holder"), pick("opened")
-		for i := range panes {
-			panes[i].Holder = panes[i].ID == holder
-		}
-		claude := map[string]bool{}
-		for _, p := range panes {
-			if rapid.IntRange(0, 4).Draw(t, "claude") == 0 {
-				claude[p.TTY] = true
-			}
-		}
-		root := func(p string) string { return "root:" + p }
-		got := terminals(panes, "ov", self, opened, claude, root)
-
-		want := map[string][]tmux.Pane{}
-		bad := map[string]bool{}
-		for _, p := range panes {
-			if p.Session != "ov" || p.ID == self {
-				continue
-			}
-			want[p.Window] = append(want[p.Window], p)
-			if p.ID == holder || p.Attach != "" || claude[p.TTY] || p.ID == opened {
-				bad[p.Window] = true
-			}
-		}
-		n := 0
-		for w := range want {
-			if !bad[w] {
-				n++
-			}
-		}
-		if len(got) != n {
-			t.Fatalf("%d terminals, want %d: %+v", len(got), n, got)
-		}
-		for i, tm := range got {
-			ps := want[tm.Window]
-			if len(ps) == 0 || bad[tm.Window] {
-				t.Fatalf("%s is not a terminal: %+v", tm.Window, ps)
-			}
-			if i > 0 && !windowLess(got[i-1].Window, tm.Window) {
-				t.Fatalf("out of order: %s then %s", got[i-1].Window, tm.Window)
-			}
-			first := ps[0]
-			wantProject := first.Project
-			if wantProject == "" {
-				wantProject = root(first.Path)
-			}
-			if tm.Pane != first.ID || tm.Path != first.Path || tm.Project != wantProject || tm.Task != first.Task || tm.Title != termTitle(ps) {
-				t.Fatalf("terminal %+v from panes %+v", tm, ps)
-			}
-		}
-	})
-}
-
-func TestTermTitle(t *testing.T) {
-	p := func(cmds ...string) []tmux.Pane {
-		var out []tmux.Pane
-		for _, c := range cmds {
-			out = append(out, tmux.Pane{Command: c})
-		}
-		return out
-	}
-	for _, c := range []struct {
-		panes []tmux.Pane
-		want  string
-	}{
-		{p("zsh"), "zsh"},
-		{p("-zsh", "bash"), "zsh"},
-		{p("zsh", "node"), "node"},
-		{p("node", "zsh", "vite", "node"), "node, vite"},
-		{p(""), "shell"},
-		{nil, "shell"},
-	} {
-		if got := termTitle(c.panes); got != c.want {
-			t.Errorf("%v: %q, want %q", c.panes, got, c.want)
 		}
 	}
 }
@@ -850,7 +727,7 @@ func TestTermTitle(t *testing.T) {
 // session has left it and the window is listed as a terminal.
 func TestPropStuck(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		es := flatten(buildList(genRows(t), genTerms(t), genPinned(t), tasks{}, "", fakeProject, fakeShort, fakeHost))
+		es := flatten(present(genListWorld(t), ""))
 		win := rapid.SampledFrom([]string{"", "@1", "@2", "@7"}).Draw(t, "win")
 		still := rapid.Bool().Draw(t, "still")
 		key, ok := stuck(win, still, es)
@@ -964,6 +841,7 @@ func TestPropViewFitsAnySize(t *testing.T) {
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys, ts := workRows(t)
 		m.trackers = ts
+		m = m.setInputs(nil)
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		// With the issues tool, s opens the task picker, and it may be
 		// open on any project, tracked or not, with any query.
@@ -1075,253 +953,37 @@ func TestPropFitList(t *testing.T) {
 	})
 }
 
-// Workstreams. Two of the rows' projects track their issues; their issues
-// have numbers 1 to 5 and any status, and sessions and terminals link to
-// them, or to issues that are closed or not there at all.
-
-var (
-	trackedRoots = []string{"/w/alpha", "/w/gamma"}
-	statuses     = []string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked, issues.Done, issues.Dropped}
-)
-
-func genTasks(t *rapid.T, rows []fleet.Row) tasks {
-	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, links: map[string][]string{}}
-	for _, root := range trackedRoots {
-		if rapid.IntRange(0, 4).Draw(t, "untracked") == 0 {
-			continue
-		}
-		tk.ids[root] = path.Base(root)
-		for _, id := range rapid.SliceOfDistinct(rapid.IntRange(1, 5), rapid.ID[int]).Draw(t, "issues") {
-			tk.open[root] = append(tk.open[root], issues.Issue{
-				ID: id, Ref: fmt.Sprintf("%s#%d", path.Base(root), id), Title: phrase(t, "ititle"),
-				Status:   rapid.SampledFrom(statuses).Draw(t, "status"),
-				Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", ""}).Draw(t, "priority"),
-			})
-		}
-	}
-	for _, r := range rows {
-		keys := rapid.SliceOfNDistinct(genKey(), 0, 3, rapid.ID[string]).Draw(t, "links")
-		if len(keys) > 0 {
-			tk.links[r.SessionID] = keys
-		}
-	}
-	return tk
-}
-
-func genKey() *rapid.Generator[string] {
-	return rapid.Custom(func(t *rapid.T) string {
-		return taskKey(rapid.SampledFrom(append(trackedRoots, "/w/Beta")).Draw(t, "kroot"), rapid.IntRange(1, 6).Draw(t, "kid"))
-	})
-}
-
-// genTaskTerms are genTerms, some of them opened for a workstream.
-func genTaskTerms(t *rapid.T) []terminal {
-	ts := genTerms(t)
-	for i := range ts {
-		if rapid.Bool().Draw(t, "termtask") {
-			ts[i].Task = genKey().Draw(t, "ttask")
-		}
-	}
-	return ts
-}
-
-// streamsOf are the workstreams buildList should list, before a query:
-// the open issues that are active or have a session, other than the
-// orchestrator, linked to them.
-func streamsOf(rows []fleet.Row, tk tasks) map[string]issues.Issue {
-	open := map[string]issues.Issue{}
-	for root, list := range tk.open {
-		for _, i := range list {
-			if issues.Open(i.Status) {
-				open[taskKey(root, i.ID)] = i
-			}
-		}
-	}
-	out := map[string]issues.Issue{}
-	for k, i := range open {
-		if active(i.Status) {
-			out[k] = i
-		}
-	}
-	for _, r := range rows {
-		if r.Name == fleet.OrchestratorName {
-			continue
-		}
-		for _, k := range tk.links[r.SessionID] {
-			if i, ok := open[k]; ok {
-				out[k] = i
-			}
-		}
-	}
-	return out
-}
-
-// validLinks are a session's links to listed workstreams, in order.
-func validLinks(r fleet.Row, tk tasks, streams map[string]issues.Issue) []string {
-	var out []string
-	for _, k := range tk.links[r.SessionID] {
-		if _, ok := streams[k]; ok {
-			out = append(out, k)
-		}
-	}
-	return out
-}
-
-func TestPropWorkstreams(t *testing.T) {
+// Each session has a primary entry, under the workstream it was linked
+// to last or in its project, an alias under each other workstream it is
+// linked to, and one in the agents list.
+func TestPropSessionEntries(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned := genRows(t), genTaskTerms(t), genPinned(t)
-		tk := genTasks(t, rows)
-		secs := buildList(rows, terms, pinned, tk, "", fakeProject, fakeShort, fakeHost)
-		streams := streamsOf(rows, tk)
+		w := genListWorld(t)
 		count := map[string]int{}
-		for _, e := range flatten(secs) {
+		for _, e := range flatten(present(w, "")) {
 			if count[e.key()]++; count[e.key()] > 1 {
 				t.Fatalf("key %s twice", e.key())
 			}
 		}
-		// Every workstream, and only those, is listed once.
-		listed := 0
-		for _, e := range flatten(secs) {
-			if e.kind != workstreamEntry {
-				continue
-			}
-			listed++
-			i, ok := streams[e.task]
-			if !ok || i.ID != e.issue.ID || !issues.Open(e.issue.Status) || e.key() != "task:"+e.task {
-				t.Fatalf("workstream %s should not be listed: %+v", e.key(), e.issue)
-			}
-		}
-		if listed != len(streams) {
-			t.Fatalf("%d workstreams listed, want %d: %v", listed, len(streams), streams)
-		}
-		// Each session: a primary entry under the last workstream it is
-		// linked to, or in its project; an alias under each other one; and
-		// one in the agents list.
-		for _, r := range rows {
-			if r.Name == fleet.OrchestratorName {
-				continue
-			}
-			links := validLinks(r, tk, streams)
+		for id, s := range w.Sessions {
 			n := 0
-			for _, e := range flatten(secs) {
-				if e.kind == sessionEntry && e.row.SessionID == r.SessionID {
-					n++
+			for k, c := range count {
+				if k == id || strings.HasSuffix(k, "/"+id) {
+					n += c
 				}
 			}
-			if n != max(len(links), 1)+1 {
-				t.Fatalf("%s is listed %d times with links %v", r.SessionID, n, links)
+			if n != max(len(s.Streams), 1)+1 || count[id] != 1 || count["agents/"+id] != 1 {
+				t.Fatalf("%s is listed %d times with streams %v", id, n, s.Streams)
 			}
-			if count["agents/"+r.SessionID] != 1 || count[r.SessionID] != 1 {
-				t.Fatalf("%s: primary %d, agents %d", r.SessionID, count[r.SessionID], count["agents/"+r.SessionID])
-			}
-			for j, k := range links {
-				key := "task:" + k + "/" + r.SessionID
-				if j == len(links)-1 {
-					key = r.SessionID
+			for _, st := range s.Streams {
+				key := "task:" + st.Key.String() + "/" + id
+				if st == s.Primary() {
+					key = id
 				}
 				if count[key] != 1 {
-					t.Fatalf("%s has no entry %s (links %v)", r.SessionID, key, links)
+					t.Fatalf("%s has no entry %s", id, key)
 				}
 			}
-		}
-		checkOrder(t, secs, terms, fakeProject)
-	})
-}
-
-// checkOrder checks the order of every project section: its workstreams
-// by workstreamLess, each followed by its sessions (working first, then
-// the newest) and its terminals (by window), then the unlinked sessions
-// and terminals in the same order. A terminal sits under a workstream
-// exactly when it was opened for one that is listed in its project.
-func checkOrder(t *rapid.T, secs []section, terms []terminal, project func(string) string) {
-	shownWS := map[string]entry{}
-	for _, e := range flatten(secs) {
-		if e.kind == workstreamEntry {
-			shownWS[e.task] = e
-		}
-	}
-	for _, s := range secs {
-		if s.Agents || s.Away {
-			for _, e := range s.Entries {
-				if e.task != "" {
-					t.Fatalf("%s in %q is under a workstream", e.key(), s.Title)
-				}
-			}
-			continue
-		}
-		var prevWS *entry
-		ws := ""      // the workstream the entries are under, "" once past them
-		phase := 0    // 0 sessions, 1 terminals, within a group
-		past := false // past the workstreams
-		var prev *entry
-		for j := range s.Entries {
-			e := s.Entries[j]
-			switch {
-			case e.kind == workstreamEntry:
-				if past {
-					t.Fatalf("workstream %s after unlinked entries in %q", e.key(), s.Title)
-				}
-				if project(e.project) != s.Title {
-					t.Fatalf("workstream %s in %q", e.key(), s.Title)
-				}
-				if prevWS != nil && !workstreamLess(*prevWS, e) {
-					t.Fatalf("workstreams out of order: %s then %s", prevWS.key(), e.key())
-				}
-				prevWS, ws, phase, prev = &s.Entries[j], e.task, 0, nil
-				continue
-			case e.kind == projectEntry:
-				continue
-			case e.task == "" && ws != "" || !past && ws == "":
-				past, ws, phase, prev = true, "", 0, nil
-			}
-			if e.task != ws {
-				t.Fatalf("%s (task %q) sits under %q in %q", e.key(), e.task, ws, s.Title)
-			}
-			if e.kind == terminalEntry {
-				want := ""
-				if w, ok := shownWS[e.term.Task]; ok && project(w.project) == project(e.term.Project) {
-					want = e.term.Task
-				}
-				if e.task != want {
-					t.Fatalf("terminal %s (opened for %q) under %q", e.key(), e.term.Task, e.task)
-				}
-				if phase == 1 && !windowLess(prev.term.Window, e.term.Window) {
-					t.Fatalf("terminals out of order in %q", s.Title)
-				}
-				phase = 1
-			} else {
-				if phase == 1 {
-					t.Fatalf("session %s after a terminal in %q", e.key(), s.Title)
-				}
-				if prev != nil && !activeLess(prev.row, e.row) {
-					t.Fatalf("sessions out of order: %s then %s", prev.key(), e.key())
-				}
-			}
-			prev = &s.Entries[j]
-		}
-	}
-}
-
-func TestPropWorkstreamsIndependentOfInputOrder(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned, q := genRows(t), genTaskTerms(t), genPinned(t), genQuery(t)
-		tk := genTasks(t, rows)
-		keys := func(secs []section) []string {
-			var out []string
-			for _, e := range flatten(secs) {
-				out = append(out, e.key())
-			}
-			return out
-		}
-		a := buildList(rows, terms, pinned, tk, q, fakeProject, fakeShort, fakeHost)
-		shuffled := tasks{open: map[string][]issues.Issue{}, ids: tk.ids, links: tk.links}
-		for r, l := range tk.open {
-			shuffled.open[r] = rapid.Permutation(l).Draw(t, "issues")
-		}
-		b := buildList(rapid.Permutation(rows).Draw(t, "rows"), rapid.Permutation(terms).Draw(t, "terms"),
-			rapid.Permutation(pinned).Draw(t, "pinned"), shuffled, q, fakeProject, fakeShort, fakeHost)
-		if !reflect.DeepEqual(keys(a), keys(b)) {
-			t.Fatalf("order changed: %v vs %v", keys(a), keys(b))
 		}
 	})
 }
@@ -1331,11 +993,10 @@ func TestPropWorkstreamsIndependentOfInputOrder(t *testing.T) {
 // and shows a workstream only when it or something under it matches.
 func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms := genRows(t), genTaskTerms(t)
-		tk := genTasks(t, rows)
+		w := genListWorld(t)
 		q := rapid.OneOf(rapid.Just(genQuery(t)), rapid.SampledFrom([]string{"#2", "alpha#3", "gamma", "#4 alpha"})).Draw(t, "q")
-		all := buildList(rows, terms, nil, tk, "", fakeProject, fakeShort, fakeHost)
-		got := buildList(rows, terms, nil, tk, q, fakeProject, fakeShort, fakeHost)
+		all := present(w, "")
+		got := present(w, q)
 		words := strings.Fields(strings.ToLower(q))
 		shown := map[string]bool{}
 		for _, e := range flatten(got) {
@@ -1345,9 +1006,9 @@ func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
 			cur := ""
 			for _, e := range s.Entries {
 				if e.kind == workstreamEntry {
-					cur = e.task
-				} else if e.task != "" && e.task != cur {
-					t.Fatalf("%q shows %s without its workstream %s", q, e.key(), e.task)
+					cur = e.task()
+				} else if e.task() != "" && e.task() != cur {
+					t.Fatalf("%q shows %s without its workstream %s", q, e.key(), e.task())
 				}
 			}
 		}
@@ -1356,8 +1017,9 @@ func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
 				if e.kind != workstreamEntry {
 					continue
 				}
-				self := matchFields(words, e.issue.Ref, fmt.Sprintf("#%d", e.issue.ID), e.issue.Title, fakeProject(e.project))
-				kids := children(flatten(all), e.task)
+				i := e.stream.Issue
+				self := matchFields(words, i.Ref, fmt.Sprintf("#%d", i.ID), i.Title, e.stream.Project.Name)
+				kids := children(flatten(all), e.task())
 				any := false
 				for _, c := range kids {
 					any = any || shown[c.key()]
@@ -1369,34 +1031,6 @@ func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
 					t.Fatalf("%q: %s shown %v, matches %v, a child shown %v", q, e.key(), shown[e.key()], self, any)
 				}
 			}
-		}
-	})
-}
-
-func TestPropCountsAreEachSessionOnce(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		rows := genRows(t)
-		tk := genTasks(t, rows)
-		need, working, idle := counts(buildList(rows, nil, nil, tk, "", fakeProject, fakeShort, fakeHost))
-		wantNeed, wantWorking, wantIdle := 0, 0, 0
-		for _, r := range rows {
-			switch {
-			case r.Name == fleet.OrchestratorName:
-			case r.NeedsYou():
-				wantNeed++
-			case r.State == fleet.Working:
-				wantWorking++
-			default:
-				wantIdle++
-			}
-		}
-		for _, i := range streamsOf(rows, tk) {
-			if i.Status == issues.Review {
-				wantNeed++
-			}
-		}
-		if need != wantNeed || working != wantWorking || idle != wantIdle {
-			t.Fatalf("counts %d %d %d, want %d %d %d", need, working, idle, wantNeed, wantWorking, wantIdle)
 		}
 	})
 }
@@ -1413,10 +1047,10 @@ func workRows(t *rapid.T) ([]fleet.Row, map[int]string, trackers) {
 			})
 		}
 	}
-	tk := genTasks(t, nil)
+	is := genIssues(t)
 	ts := trackers{}
-	for _, root := range slices.Sorted(maps.Keys(tk.open)) {
-		ts[root] = tracker{id: tk.ids[root], issues: parsedIssues(t, tk.open[root])}
+	for _, root := range slices.Sorted(maps.Keys(is)) {
+		ts[root] = tracker{id: path.Base(root), issues: parsedIssues(t, is[root])}
 	}
 	return rows, ttys, ts
 }
@@ -1460,6 +1094,7 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(3, 40).Draw(t, "h")})
 		rows, ttys, ts := workRows(t)
 		m.trackers = ts
+		m = m.setInputs(nil)
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		es := m.ordered()
 		m, _ = press(m, "g")
@@ -1492,29 +1127,28 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 // workstream, and for any other entry its project.
 func TestPropCockpitTargetIsTheWorkstreamAbove(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms, pinned := genRows(t), genTaskTerms(t), genPinned(t)
-		tk := genTasks(t, rows)
-		es := flatten(buildList(rows, terms, pinned, tk, "", fakeProject, fakeShort, fakeHost))
-		rootOf := func(e entry, ok bool) string { return "root of " + e.key() }
-		streams := map[string]entry{}
+		w := genListWorld(t)
+		es := flatten(present(w, ""))
+		rootOf := func(e entry, ok bool) string { return "/root/of/" + e.key() }
+		var under *world.Stream
 		for _, e := range es {
-			if e.kind == workstreamEntry {
-				streams[e.task] = e
-			}
-		}
-		for _, e := range es {
-			got := cockpitTarget(e, true, rootOf)
-			ws, under := streams[e.task]
+			got := cockpitTarget(w, e, true, rootOf)
 			switch {
-			case e.task != "" && !under:
-				t.Fatalf("%s sits under %s, which is not listed", e.key(), e.task)
-			case under && (got.task != ws.task || got.root != ws.project || got.issue.ID != ws.issue.ID):
-				t.Fatalf("%s under %s has target %+v", e.key(), e.task, got)
-			case !under && (got.task != "" || got.root != rootOf(e, true)):
+			case e.kind == workstreamEntry:
+				under = e.stream
+			case e.stream == nil || e.alias == agentsPrefix:
+				under = nil
+			}
+			switch {
+			case e.stream != under && e.alias != agentsPrefix:
+				t.Fatalf("%s sits under %s, not the workstream above it", e.key(), e.task())
+			case under != nil && (got.stream != under || got.root != under.Root || got.project != under.Project):
+				t.Fatalf("%s under %s has target %+v", e.key(), under.Key, got)
+			case under == nil && (got.stream != nil || got.root != rootOf(e, true) || got.project != w.ProjectOf(got.root)):
 				t.Fatalf("%s under no workstream has target %+v", e.key(), got)
 			}
 		}
-		if got := cockpitTarget(entry{}, false, rootOf); got.task != "" || got.root != rootOf(entry{}, false) {
+		if got := cockpitTarget(w, entry{}, false, rootOf); got.stream != nil || got.root != rootOf(entry{}, false) {
 			t.Fatalf("with nothing selected: %+v", got)
 		}
 	})
@@ -1688,24 +1322,30 @@ func TestPropTheFocusedCardIsShown(t *testing.T) {
 // that change move its entries, never the cursor to another session.
 func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		rows, terms := genRows(t), genTaskTerms(t)
-		tk, query := genTasks(t, rows), genQuery(t)
-		old := flatten(buildList(rows, terms, nil, tk, query, fakeProject, fakeShort, fakeHost))
+		rows, terms, query := genRows(t), genTerms(t), genQuery(t)
+		genLinks(t, rows)
+		is := genIssues(t)
+		old := flatten(present(listWorld(rows, terms, nil, worldTrackers(is)), query))
 		if len(old) == 0 {
 			return
 		}
 		// Issues close and sessions link again, or everything changes.
-		next := tasks{open: map[string][]issues.Issue{}, ids: tk.ids, links: map[string][]string{}}
-		for _, root := range slices.Sorted(maps.Keys(tk.open)) {
-			next.open[root] = slices.DeleteFunc(slices.Clone(tk.open[root]), func(issues.Issue) bool { return rapid.Bool().Draw(t, "close") })
+		next := map[string][]issues.Issue{}
+		for _, root := range slices.Sorted(maps.Keys(is)) {
+			next[root] = slices.DeleteFunc(slices.Clone(is[root]), func(issues.Issue) bool { return rapid.Bool().Draw(t, "close") })
 		}
-		for _, id := range slices.Sorted(maps.Keys(tk.links)) {
-			next.links[id] = rapid.Permutation(tk.links[id]).Draw(t, "relink")
+		rows = slices.Clone(rows)
+		for i := range rows {
+			rows[i].Tasks = rapid.Permutation(rows[i].Tasks).Draw(t, "relink")
 		}
 		if rapid.IntRange(0, 4).Draw(t, "anew") == 0 {
-			next, query = genTasks(t, rows), genQuery(t)
+			for i := range rows {
+				rows[i].Tasks = nil
+			}
+			genLinks(t, rows)
+			next, query = genIssues(t), genQuery(t)
 		}
-		now := flatten(buildList(rows, terms, nil, next, query, fakeProject, fakeShort, fakeHost))
+		now := flatten(present(listWorld(rows, terms, nil, worldTrackers(next)), query))
 		// keepNear leaves a listed cursor be: the cursor is on one that went.
 		gone := slices.DeleteFunc(slices.Clone(old), func(o entry) bool {
 			return slices.ContainsFunc(now, func(e entry) bool { return e.key() == o.key() })
@@ -1725,10 +1365,10 @@ func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 		}
 		still := slices.ContainsFunc(now, func(e entry) bool {
 			r, ok := e.session()
-			return ok && r.SessionID == was.row.SessionID
+			return ok && r.SessionID == was.sess.SessionID
 		})
-		if still && (!ok || now[at].kind != sessionEntry || now[at].row.SessionID != was.row.SessionID) {
-			t.Fatalf("on %s, moved to %s (%v), though %s is listed", sel, got, ok, was.row.SessionID)
+		if still && (!ok || now[at].kind != sessionEntry || now[at].sess.SessionID != was.sess.SessionID) {
+			t.Fatalf("on %s, moved to %s (%v), though %s is listed", sel, got, ok, was.sess.SessionID)
 		}
 	})
 }
@@ -1774,7 +1414,7 @@ func TestPropTaskRows(t *testing.T) {
 		words := rapid.SliceOfN(rapid.OneOf(rapid.SampledFrom([]string{"fix", "THE", "li", "app#", "#1", "#2"}),
 			rapid.Custom(func(t *rapid.T) string { return phrase(t, "word") })), 0, 3).Draw(t, "query")
 		query := strings.Join(words, " ")
-		rows := taskRows(list, "app", sessions, query)
+		rows := taskRows(list, "app", counted(sessions), query)
 		terms := strings.Fields(strings.ToLower(query))
 		seen := map[int]bool{}
 		for k, r := range rows {

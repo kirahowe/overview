@@ -5,14 +5,13 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/world"
 )
 
 // A workstream is an open issue of a project that tracks its work with the
@@ -25,7 +24,7 @@ import (
 const retryAfter = 10 * time.Second
 
 // taskKey names a workstream: its project's root and its issue's number.
-func taskKey(root string, id int) string { return root + "#" + strconv.Itoa(id) }
+func taskKey(root string, id int) string { return world.Key{Root: root, ID: id}.String() }
 
 // tracker is one project's issues as the refreshes read them. A run that
 // failed keeps the issues of the last that worked, and its error.
@@ -86,8 +85,8 @@ type trackerMsg struct {
 	ok   bool
 }
 
-// readTrackers asks for the trackers of the projects in the list, and
-// drops those of projects that have left it. A read is asked for a root
+// readTrackers asks for the trackers the World needs, and drops those of
+// projects that have left it. A read is asked for a root
 // only when none is out for it, so however long the issues CLI takes,
 // at most one runs per project, and the rows refresh never waits on one.
 // Without a runner there is nothing to read.
@@ -95,14 +94,17 @@ func (m model) readTrackers() (model, tea.Cmd) {
 	if m.issues == nil {
 		return m, nil
 	}
-	roots := trackerRoots(m.knownRoots(), m.rows, m.root)
+	roots := m.world().Trackers
 	kept := trackers{}
 	for _, r := range roots {
 		if t, ok := m.trackers[r]; ok {
 			kept[r] = t
 		}
 	}
-	m.trackers = kept
+	if len(kept) != len(m.trackers) {
+		m.trackers = kept
+		m = m.setInputs(nil)
+	}
 	var cmds []tea.Cmd
 	for _, root := range roots {
 		if root == "" || m.reading[root] {
@@ -129,8 +131,10 @@ func (m model) landTracker(msg trackerMsg) model {
 		ts := maps.Clone(m.trackers)
 		delete(ts, msg.root)
 		m.trackers = ts
+	} else {
+		return m
 	}
-	return m
+	return m.setInputs(nil)
 }
 
 // listedID is the project id the issues list gives, "" when it has no
@@ -155,137 +159,6 @@ func fallbackID(readFile func(string) ([]byte, error), root string) string {
 	}
 	return filepath.Base(root)
 }
-
-// trackerRoots are the roots whose trackers a refresh reads: the known
-// roots, and those of the directories the sessions' task refs name, whose
-// project ids the refs may need.
-func trackerRoots(known []string, rows []fleet.Row, root func(string) string) []string {
-	out := slices.Clone(known)
-	for _, r := range rows {
-		for _, ref := range r.Tasks {
-			out = append(out, root(ref.Dir))
-		}
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// resolveTask is the workstream a session's ref links it to, "" for none.
-// The ref names its project by id, or else by its directory, whose
-// tracker gives the id. The workstream is in the known project with that
-// id, preferring the session's own (own), and else in the ref's
-// directory's project: a subagent's `issues --dir <worktree> start 6`
-// names a worktree, which is a root of its own with the same id. The ref
-// links only if that project lists the issue as open.
-func resolveTask(ref fleet.TaskRef, own string, ts trackers, known map[string]bool, root func(string) string) string {
-	dirRoot := root(ref.Dir)
-	id := ref.Project
-	if id == "" {
-		id = ts[dirRoot].id
-	}
-	target := ""
-	if id != "" {
-		var hits []string
-		for r, t := range ts {
-			if known[r] && t.id == id {
-				hits = append(hits, r)
-			}
-		}
-		slices.Sort(hits)
-		switch {
-		case slices.Contains(hits, own):
-			target = own
-		case len(hits) > 0:
-			target = hits[0]
-		}
-	}
-	if target == "" {
-		target = dirRoot
-	}
-	t, ok := ts[target]
-	if !ok || id != "" && t.id != id {
-		return ""
-	}
-	for _, i := range t.issues {
-		if i.ID == ref.ID && issues.Open(i.Status) {
-			return taskKey(target, i.ID)
-		}
-	}
-	return ""
-}
-
-// resolveLinks is the workstreams each session is linked to, by session
-// ID, oldest first and each once, where it sits as late as it was last
-// linked, and when the session first linked to each, as its refs say.
-// own is the root of a session's project.
-func resolveLinks(rows []fleet.Row, ts trackers, known map[string]bool, root func(string) string) (map[string][]string, map[string]map[string]time.Time) {
-	out, at := map[string][]string{}, map[string]map[string]time.Time{}
-	for _, r := range rows {
-		var keys []string
-		when := map[string]time.Time{}
-		for _, ref := range r.Tasks {
-			k := resolveTask(ref, root(r.Cwd), ts, known, root)
-			if k == "" {
-				continue
-			}
-			keys = slices.DeleteFunc(keys, func(o string) bool { return o == k })
-			keys = append(keys, k)
-			// Two refs, such as a prompt's and a command's, can name
-			// the same workstream: the earlier link counts.
-			if t := ref.Linked; !t.IsZero() && (when[k].IsZero() || t.Before(when[k])) {
-				when[k] = t
-			}
-		}
-		if len(keys) > 0 {
-			out[r.SessionID] = keys
-		}
-		if len(when) > 0 {
-			at[r.SessionID] = when
-		}
-	}
-	return out, at
-}
-
-// tasks is what buildList knows of the projects' issues: the open ones of
-// each tracked project by root, its project id, whether its last read
-// failed, and the workstreams each session is linked to.
-type tasks struct {
-	open   map[string][]issues.Issue
-	ids    map[string]string
-	failed map[string]bool
-	links  map[string][]string
-	// linked is when each session first linked each workstream, by
-	// session ID then key, where its refs say.
-	linked map[string]map[string]time.Time
-}
-
-// tasksOf is tasks for the trackers of the known roots, and of the roots
-// the links point to.
-func tasksOf(ts trackers, known []string, rows []fleet.Row, root func(string) string) tasks {
-	isKnown := map[string]bool{}
-	for _, r := range known {
-		isKnown[r] = true
-	}
-	links, linked := resolveLinks(rows, ts, isKnown, root)
-	tk := tasks{open: map[string][]issues.Issue{}, ids: map[string]string{}, failed: map[string]bool{}, links: links, linked: linked}
-	use := func(r string) {
-		if t, ok := ts[r]; ok {
-			tk.open[r], tk.ids[r], tk.failed[r] = t.issues, t.id, t.err != nil
-		}
-	}
-	for _, r := range known {
-		use(r)
-	}
-	for _, keys := range tk.links {
-		for _, k := range keys {
-			use(k[:strings.LastIndexByte(k, '#')])
-		}
-	}
-	return tk
-}
-
-// tasks is the model's tasks, as the list shows them.
-func (m model) tasks() tasks { return tasksOf(m.trackers, m.knownRoots(), m.rows, m.root) }
 
 // projectID is the issues project id of the project at root.
 func (m model) projectID(root string) string {

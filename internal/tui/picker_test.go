@@ -12,6 +12,7 @@ import (
 	"pgregory.net/rapid"
 
 	"overview/internal/fleet"
+	"overview/internal/world"
 )
 
 const testHome = "/u/kira"
@@ -110,7 +111,7 @@ func TestPropPickMatchesWords(t *testing.T) {
 			if !slices.Contains(want, p) {
 				t.Fatalf("%q matched %s", q, p)
 			}
-			if i > 0 && !nameLess(testShort(got[i-1]), testShort(p)) && !(testShort(got[i-1]) == testShort(p) && got[i-1] < p) {
+			if i > 0 && !world.NameLess(testShort(got[i-1]), testShort(p)) && !(testShort(got[i-1]) == testShort(p) && got[i-1] < p) {
 				t.Fatalf("out of order: %v", got)
 			}
 		}

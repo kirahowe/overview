@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"overview/internal/world"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -163,7 +164,7 @@ func pickMatches(query, home string, paths []string, shown map[string]bool, shor
 	sort.Slice(out, func(i, j int) bool {
 		a, b := by(out[i]), by(out[j])
 		if a != b {
-			return nameLess(a, b)
+			return world.NameLess(a, b)
 		}
 		return out[i] < out[j]
 	})

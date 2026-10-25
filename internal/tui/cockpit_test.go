@@ -15,7 +15,7 @@ import (
 func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	first := paneWithTTY(f, m.ttys[m.ordered()[0].row.PID])
+	first := paneWithTTY(f, m.in.TTYs[m.ordered()[0].sess.PID])
 	if !f.staged(first) {
 		t.Fatalf("the list is in %s, want beside %s", f.stage(), first)
 	}
@@ -32,7 +32,7 @@ func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 		t.Fatalf("after j: sel %s, list in %s (was %s), open %v, moves %v", m.sel, f.stage(), stage, m.cockpit.open, f.moves)
 	}
 	m = pressSettled(t, m, "esc")
-	second := paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
+	second := paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
 	if m.cockpit.open || f.zoomed("%0") || len(f.zooms) != 2 {
 		t.Fatalf("after esc: open %v zoomed %v zooms %v", m.cockpit.open, f.zoomed("%0"), f.zooms)
 	}
@@ -145,7 +145,7 @@ func TestOWhileTheListMovesOpensWhereItLands(t *testing.T) {
 		t.Fatalf("o during the move: open %v zooms %v", m.cockpit.open, f.zooms)
 	}
 	m = feed(t, m, cmdMsgs(move))
-	second := paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
+	second := paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
 	if !m.cockpit.open || !f.staged(second) || !f.zoomed("%0") {
 		t.Fatalf("open %v, list in %s beside %s %v, zoomed %v", m.cockpit.open, f.stage(), second, f.staged(second), f.zoomed("%0"))
 	}
@@ -159,7 +159,7 @@ func TestTheCockpitOpensWithTheListAlone(t *testing.T) {
 	// The session beside the list exits while the user is elsewhere, so
 	// the list stays where it was, alone.
 	m.blurred = true
-	f.exit(paneWithTTY(f, m.ttys[11]))
+	f.exit(paneWithTTY(f, m.in.TTYs[11]))
 	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
 	m = settle(t, m, cmd)
 	if n := f.inWindow(f.stage()); n != 1 {
@@ -179,7 +179,7 @@ func TestTheCockpitOpensWithTheListAlone(t *testing.T) {
 func TestAPaneClosingKeepsTheCockpit(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
-	split := f.split(f.panes[f.find(paneWithTTY(f, m.ttys[11]))].ID)
+	split := f.split(f.panes[f.find(paneWithTTY(f, m.in.TTYs[11]))].ID)
 	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
 	m = settle(t, m, cmd)
 	m = pressSettled(t, m, "o")
@@ -192,7 +192,7 @@ func TestAPaneClosingKeepsTheCockpit(t *testing.T) {
 	if !m.cockpit.open || !f.zoomed("%0") {
 		t.Fatalf("after a split closed: open %v zoomed %v", m.cockpit.open, f.zoomed("%0"))
 	}
-	f.exit(paneWithTTY(f, m.ttys[11]))
+	f.exit(paneWithTTY(f, m.in.TTYs[11]))
 	m, cmd = step(m, listPanes(f, m.deps.roots, m.landed)())
 	m = settle(t, m, cmd)
 	if !m.cockpit.open || f.inWindow(f.stage()) != 1 {
@@ -296,7 +296,7 @@ func TestCockpitTarget(t *testing.T) {
 		{"agents/s1", "/code/app", ""},
 	} {
 		got := selectKey(t, m, c.key).target()
-		if got.root != c.root || got.task != c.task {
+		if got.root != c.root || targetTask(got) != c.task {
 			t.Errorf("%s: target %+v, want root %s task %s", c.key, got, c.root, c.task)
 		}
 	}
@@ -349,6 +349,7 @@ func withIssues(m model, more ...issues.Issue) model {
 	tr := m.trackers["/code/app"]
 	tr.issues = append(slices.Clone(tr.issues), more...)
 	m.trackers = trackers{"/code/app": tr}
+	m = m.setInputs(nil)
 	return m
 }
 
@@ -386,7 +387,7 @@ func TestEnterOnAnIssueInProgressGoesToItsWorkstream(t *testing.T) {
 	if len(f.spawned) != 0 {
 		t.Fatalf("started a session on #6: %+v", f.spawned)
 	}
-	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.inIssues() || m.target().task != "/code/app#6" {
+	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.inIssues() || targetTask(m.target()) != "/code/app#6" {
 		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.inIssues(), m.target())
 	}
 }
@@ -452,7 +453,7 @@ func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 // an open cockpit, so it cannot open one afterwards. Pressing o again, or
 // esc, cancels it too.
 func TestAPendingOIsCancelled(t *testing.T) {
-	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.ttys[m.ordered()[1].row.PID]) }
+	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID]) }
 	for _, c := range []struct {
 		name  string
 		keys  []string

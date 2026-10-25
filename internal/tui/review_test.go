@@ -3,10 +3,11 @@ package tui
 import (
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"slices"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
 	"overview/internal/review"
@@ -25,7 +26,7 @@ func TestReviewOpensUnderTheSession(t *testing.T) {
 	if len(f.splits) != 1 {
 		t.Fatalf("splits %+v", f.splits)
 	}
-	session := m.paneOf(row)
+	session := paneOf(m, row)
 	store := filepath.Join(m.home.Dir, "overview", "reviews", "s-1.jsonl")
 	want := []string{"overview", "review", "view", "--store", store, "--dir", "/code/app", "--target", session,
 		"--title", "fix-parser", "--transcript", "/t/s-1.jsonl", "--started", "1792634408",
@@ -33,9 +34,9 @@ func TestReviewOpensUnderTheSession(t *testing.T) {
 	if got := f.splits[0].command; !slices.Equal(got, want) {
 		t.Fatalf("command\n got %q\nwant %q", got, want)
 	}
-	p := reviewPane(m.panes, "s-1")
+	p := reviewPane(m.in.Panes, "s-1")
 	if p == "" || f.panes[f.find(p)].Window != f.panes[f.find(session)].Window {
-		t.Fatalf("the review should be marked and in the session's window: %+v", m.panes)
+		t.Fatalf("the review should be marked and in the session's window: %+v", m.in.Panes)
 	}
 	if f.focus != p {
 		t.Fatalf("the keyboard should go to the review %s, not %s", p, f.focus)

@@ -14,6 +14,7 @@ import (
 	"overview/internal/config"
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/world"
 )
 
 // pal is the palette in use, and the styles below are built from it.
@@ -534,7 +535,7 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 		add("", m.rule(sec.Title, style, sectionNote(sec)))
 		for j, e := range sec.Entries {
 			add(e.key(), m.entryLine(e, e.key() == sel))
-			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].task != e.task) {
+			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].stream != e.stream) {
 				add(e.key(), m.plain(dim.Render("   no sessions")))
 			}
 		}
@@ -644,37 +645,41 @@ func (m model) stateMark(r fleet.Row) (mark string, markStyle lipgloss.Style, wo
 func (m model) entryLine(e entry, selected bool) string {
 	text := fg(pal.Text)
 	indent := []seg{}
-	if e.task != "" && e.kind != workstreamEntry {
+	if e.stream != nil && e.kind != workstreamEntry {
 		indent = []seg{{"   ", text}}
 	}
 	switch e.kind {
 	case workstreamEntry:
+		i := e.stream.Issue
 		var right []seg
-		switch e.issue.Status {
+		switch i.Status {
 		case issues.InProgress:
 		case issues.Review:
 			right = append(right, seg{"review ", fg(pal.Blocked)})
 		case issues.Blocked:
 			right = append(right, seg{"blocked ", fg(pal.Asking)})
 		default:
-			right = append(right, seg{e.issue.Status + " ", dim})
+			right = append(right, seg{i.Status + " ", dim})
 		}
-		right = append(right, seg{e.issue.Priority, dim})
-		left := []seg{{"#" + strconv.Itoa(e.issue.ID) + " ", dim}, {e.issue.Title, text.Bold(true)}}
+		right = append(right, seg{i.Priority, dim})
+		left := []seg{{"#" + strconv.Itoa(i.ID) + " ", dim}, {i.Title, text.Bold(true)}}
 		return m.line(left, right, false, selected)
 	case terminalEntry:
 		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
 		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
 	case projectEntry:
 		offer := "c claude · t terminal"
-		if _, tracked := m.trackers[e.project]; tracked {
+		if e.proj.Tracked {
 			offer = "s task · " + offer
 		}
 		return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, selected)
 	}
-	r := e.row
-	mark, markStyle, word, age, wordStyle := m.stateMark(r)
-	app, away := m.hostOf(r)
+	r := e.sess
+	mark, markStyle, word, age, wordStyle := m.stateMark(r.Row)
+	app, away := "", r.Host != nil
+	if away {
+		app = r.Host.Label()
+	}
 	name := text
 	if away && !r.NeedsYou() {
 		name = dim
@@ -703,17 +708,17 @@ func (m model) entryLine(e entry, selected bool) string {
 // works on, with its project's name when that is not the session's own
 // and there is room, or else its project, or the app it runs in.
 func (m model) agentsNote(e entry, app string, away bool, used int) string {
-	switch {
-	case e.issue.ID != 0:
-		ref := "#" + strconv.Itoa(e.issue.ID)
-		if p := m.name(e.project); p != m.name(e.row.Cwd) && used+ansi.StringWidth(p)+len(ref)+2 <= m.contentWidth() {
+	switch st := e.sess.Primary(); {
+	case st != nil:
+		ref := "#" + strconv.Itoa(st.ID)
+		if p := st.Project.Name; p != e.sess.Project.Name && used+ansi.StringWidth(p)+len(ref)+2 <= m.contentWidth() {
 			return p + " " + ref
 		}
 		return ref
 	case away:
 		return app
 	}
-	return m.name(e.row.Cwd)
+	return e.sess.Project.Name
 }
 
 type detailCache struct {
@@ -725,8 +730,12 @@ type detailCache struct {
 // changed. detailLines is a pure function of the key's parts, and the
 // cache only spares the restyling that the holder would otherwise redo on
 // every spinner frame.
-func (m model) detail(r fleet.Row, w int) []string {
-	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, m.ttys[r.PID], m.hosts[r.PID],
+func (m model) detail(r *world.Session, w int) []string {
+	host := world.Host{}
+	if r.Host != nil {
+		host = *r.Host
+	}
+	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, r.TTY, r.Host != nil, host,
 		m.written[r.Transcript], r.Transcript == m.turns.key.path, m.turns.key)
 	if m.cache != nil && m.cache.key == key {
 		return m.cache.lines
@@ -740,7 +749,7 @@ func (m model) detail(r fleet.Row, w int) []string {
 
 // detailLines renders everything known about one session: where it is, what
 // it is waiting on, and its last few turns.
-func (m model) detailLines(r fleet.Row, w int) []string {
+func (m model) detailLines(r *world.Session, w int) []string {
 	var out []string
 	add := func(s string) { out = append(out, wrap(s, w)...) }
 
@@ -756,7 +765,10 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		state = pill("idle "+Ago(r.Since), pal.Muted)
 	}
 	kind := "interactive"
-	h, away := m.hosts[r.PID]
+	h, away := world.Host{}, r.Host != nil
+	if away {
+		h = *r.Host
+	}
 	switch {
 	case r.Background():
 		kind = "background " + r.ID
@@ -764,8 +776,8 @@ func (m model) detailLines(r fleet.Row, w int) []string {
 		kind += " · inside " + h.Name
 	case away:
 		kind += " · no terminal"
-	case m.ttys[r.PID] != "":
-		kind += " · " + m.ttys[r.PID]
+	case r.TTY != "":
+		kind += " · " + r.TTY
 	}
 	add(state + "  " + dim.Render(kind))
 	out = append(out, "")
@@ -871,7 +883,8 @@ type titleSeg struct {
 // listTitle is the title of the list's panel: the home's name, then how
 // many sessions need you, how many work, and how many are idle.
 func (m model) listTitle() []titleSeg {
-	need, working, idle := m.counts()
+	w := m.world()
+	need, working, idle := w.Need, w.Working, w.Idle
 	segs := []titleSeg{{text: "◆ " + m.home.Name()}}
 	if need > 0 {
 		segs = append(segs, titleSeg{"  ! " + strconv.Itoa(need), pal.Blocked})
@@ -976,7 +989,7 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	}
 	// s goes after enter and before c in a project that tracks its tasks.
 	var s []hint
-	if _, tracked := m.trackers[m.rootOf(e, ok)]; tracked {
+	if _, tracked := m.world().Tracker(m.rootOf(e, ok)); tracked {
 		s = []hint{{"s", "task"}}
 	}
 	switch e.kind {
@@ -988,13 +1001,13 @@ func (m model) entryHints(e entry, ok bool) []hint {
 		return slices.Concat(s, []hint{c, t, {"x", "unpin"}, {"a", "add"}, help})
 	}
 	enter := hint{"enter", "type"}
-	if _, away := m.hostOf(e.row); away {
+	if e.sess.Host != nil {
 		enter = hint{"enter", "open app"}
-	} else if e.row.Background() && m.paneOf(e.row) == "" {
+	} else if e.sess.Background() && e.sess.Pane == "" {
 		enter = hint{"enter", "attach"}
 	}
 	hs := slices.Concat([]hint{enter}, s, []hint{c, t, {"v", "review"}})
-	if e.row.Background() {
+	if e.sess.Background() {
 		hs = append(hs, hint{"x", "stop"})
 	}
 	return append(hs, help)
@@ -1027,7 +1040,7 @@ func hintLine(lead []string, hints []hint, w int) string {
 func (m model) footer() string {
 	var lead []string
 	if m.loaded && m.rowsErr == nil {
-		switch h := m.home.HealthOf(m.rows); {
+		switch h := m.home.HealthOf(m.in.Rows); {
 		case !h.Running:
 			lead = append(lead, red.Render("orchestrator off"))
 		case h.Stale:
@@ -1173,10 +1186,8 @@ func (m model) confirmBox() []string {
 		}
 	}
 	name := m.confirm
-	for _, r := range m.rows {
-		if r.SessionID == m.confirm {
-			name = r.Name
-		}
+	if s := m.world().Sessions[m.confirm]; s != nil {
+		name = s.Name
 	}
 	body := []string{bold.Foreground(pal.Text).Render("Stop " + name + "?")}
 	body = append(body, wrap(dim.Render("Its conversation is kept, and claude attach brings it back."), w-4)...)

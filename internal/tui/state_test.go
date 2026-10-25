@@ -199,7 +199,7 @@ func TestStateMachine(t *testing.T) {
 						}
 					}
 					ref.cockpit.issues = false
-					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys, pinned: ref.pinned, err: ref.rowsErr}) // settles listTop
+					ref = update(ref, rowsMsg{rows: ref.in.Rows, ttys: ref.in.TTYs, pinned: ref.in.Pinned, err: ref.rowsErr}) // settles listTop
 					if m.sel != id {
 						t.Fatalf("click on %s left the cursor on %s", id, m.sel)
 					}

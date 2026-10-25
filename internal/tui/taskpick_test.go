@@ -10,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"overview/internal/fleet"
 	"overview/internal/issues"
 )
 
@@ -52,11 +51,11 @@ func TestTaskRows(t *testing.T) {
 		{"old", nil},
 	}
 	for _, c := range cases {
-		if got := rowIDs(taskRows(open, "app", nil, c.query)); !slices.Equal(got, c.want) {
+		if got := rowIDs(taskRows(open, "app", counted(nil), c.query)); !slices.Equal(got, c.want) {
 			t.Errorf("%q: %v, want %v", c.query, got, c.want)
 		}
 	}
-	rs := taskRows(open, "app", map[int]int{5: 2, 1: 1}, "")
+	rs := taskRows(open, "app", counted(map[int]int{5: 2, 1: 1}), "")
 	counts := map[int]int{}
 	for _, r := range rs {
 		counts[r.issue.ID] = r.sessions
@@ -87,7 +86,7 @@ func TestTaskListNotes(t *testing.T) {
 		{"rows", some, true, true, true, "", "", 1},
 	}
 	for _, c := range cases {
-		l := taskListOf("app", c.t, c.tracked, c.reading, c.tool, nil, c.query)
+		l := taskListOf("app", c.t, c.tracked, c.reading, c.tool, counted(nil), c.query)
 		if l.note != c.note || len(l.rows) != c.rows {
 			t.Errorf("%s: note %q rows %d, want %q and %d", c.name, l.note, len(l.rows), c.note, c.rows)
 		}
@@ -109,21 +108,9 @@ func TestTaskOpens(t *testing.T) {
 	}
 }
 
-func TestStreamSessions(t *testing.T) {
-	rows := []fleet.Row{
-		{Live: fleet.Live{SessionID: "a"}},
-		{Live: fleet.Live{SessionID: "b"}},
-		{Live: fleet.Live{SessionID: "o", Name: fleet.OrchestratorName}},
-	}
-	links := map[string][]string{
-		"a": {"/w/app#6", "/w/app#7", "/w/app-wt#6"},
-		"b": {"/w/app#6"},
-		"o": {"/w/app#7"},
-	}
-	got := streamSessions(rows, links, "/w/app")
-	if len(got) != 2 || got[6] != 2 || got[7] != 1 {
-		t.Fatalf("%v", got)
-	}
+// counted counts the sessions on an issue from n, by number.
+func counted(n map[int]int) func(issues.Issue) int {
+	return func(i issues.Issue) int { return n[i.ID] }
 }
 
 // pinnedTasksModel has /code/todo pinned, tracked and with nothing

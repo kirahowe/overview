@@ -534,12 +534,12 @@ func paneWithTTY(f *fakeMux, tty string) string {
 func TestTheStageFollowsTheCursor(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	want := paneWithTTY(f, m.ttys[m.ordered()[0].row.PID])
-	if !f.staged(want) || m.stageOf(m.panes) != f.stage() {
-		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stageOf(m.panes), want)
+	want := paneWithTTY(f, m.in.TTYs[m.ordered()[0].sess.PID])
+	if !f.staged(want) || m.stageOf(m.in.Panes) != f.stage() {
+		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.stageOf(m.in.Panes), want)
 	}
 	m = pressSettled(t, m, "j")
-	want = paneWithTTY(f, m.ttys[m.ordered()[1].row.PID])
+	want = paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
 	if !f.staged(want) || f.inWindow(f.stage()) != 2 {
 		t.Fatalf("after j the list is in %s, want %s's window alone", f.stage(), want)
 	}
@@ -609,7 +609,7 @@ func TestEnterOnABackgroundSessionAttachesBesideTheList(t *testing.T) {
 	if !slices.Contains(call.env, m.home.ClaudeEnv()) {
 		t.Fatalf("env %v", call.env)
 	}
-	attach := m.paneOf(bg)
+	attach := paneOf(m, bg)
 	if p, ok := m.pane(attach); !ok || p.Attach != "abc123" || f.panes[f.find(attach)].Attach != "abc123" {
 		t.Fatalf("the attach pane %s is not marked: %+v", attach, f.panes)
 	}
@@ -667,7 +667,7 @@ func TestAListingFromBeforeASpawnIsDropped(t *testing.T) {
 	m := stagedModel(t, f, bg)
 	gen := m.spawns
 	m = pressSettled(t, m, "enter")
-	attach := m.paneOf(bg)
+	attach := paneOf(m, bg)
 	if attach == "" || m.spawns != gen+1 {
 		t.Fatalf("attach %q, spawns %d", attach, m.spawns)
 	}
@@ -676,16 +676,16 @@ func TestAListingFromBeforeASpawnIsDropped(t *testing.T) {
 	moves := len(f.moves)
 	m, cmd := step(m, panesMsg{panes: unmarked, gen: gen})
 	m = settle(t, m, cmd)
-	if m.paneOf(bg) != attach || len(f.moves) != moves {
-		t.Fatalf("a stale listing lost the attach: pane %q, moves %d then %d", m.paneOf(bg), moves, len(f.moves))
+	if paneOf(m, bg) != attach || len(f.moves) != moves {
+		t.Fatalf("a stale listing lost the attach: pane %q, moves %d then %d", paneOf(m, bg), moves, len(f.moves))
 	}
 	// A current listing is taken: the window, unmarked, is now a plain
 	// terminal, and the cursor stays in it.
 	f.panes = unmarked
 	m, cmd = step(m, panesMsg{panes: unmarked, gen: m.spawns})
 	m = settle(t, m, cmd)
-	if m.paneOf(bg) != "" || m.sel != f.window(attach) || !f.staged(attach) {
-		t.Fatalf("a current listing was not taken: pane %q, sel %s, list in %s", m.paneOf(bg), m.sel, f.stage())
+	if paneOf(m, bg) != "" || m.sel != f.window(attach) || !f.staged(attach) {
+		t.Fatalf("a current listing was not taken: pane %q, sel %s, list in %s", paneOf(m, bg), m.sel, f.stage())
 	}
 }
 
@@ -958,8 +958,8 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				}
 				switch {
 				case e.kind == terminalEntry && e.term.Window == p.Window,
-					e.kind == sessionEntry && e.row.Background() && p.Attach == e.row.ID,
-					e.kind == sessionEntry && !e.row.Background() && p.TTY == m.ttys[e.row.PID]:
+					e.kind == sessionEntry && e.sess.Background() && p.Attach == e.sess.ID,
+					e.kind == sessionEntry && !e.sess.Background() && p.TTY == m.in.TTYs[e.sess.PID]:
 					return true
 				}
 			}
@@ -981,8 +981,8 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				} else if want := m.want(); want != "" && !f.staged(want) {
 					t.Fatalf("the list is in %s, the wanted %s in %s", f.stage(), want, f.window(want))
 				}
-				if m.stageOf(m.panes) != f.stage() {
-					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.stageOf(m.panes))
+				if m.stageOf(m.in.Panes) != f.stage() {
+					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.stageOf(m.in.Panes))
 				}
 				seen := map[string]bool{}
 				for _, p := range f.panes {
@@ -1130,7 +1130,7 @@ func repoModel(t *testing.T, f *fakeMux) model {
 // found again with the model's deps.
 func refreshed(t tester, m model) model {
 	t.Helper()
-	m, cmd := step(m, m.rowsMsg(m.rows, m.ttys, m.hosts, m.pinned))
+	m, cmd := step(m, m.rowsMsg(m.in.Rows, m.in.TTYs, m.in.Hosts, m.in.Pinned))
 	return settle(t, m, cmd)
 }
 
@@ -1304,7 +1304,7 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "+ c claude · t terminal") || !strings.Contains(view, "x unpin") {
 		t.Fatalf("view %s", view)
 	}
-	need, working, idle := m.counts()
+	need, working, idle := counts(m)
 	if need+working+idle != 0 {
 		t.Fatal("the placeholder counts as a session")
 	}
@@ -1334,7 +1334,7 @@ func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
 	m = settle(t, m, cmd)
 	m = pressSettled(t, m, "t")
 	e, _, _ := m.selected(m.ordered())
-	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || e.kind != terminalEntry || e.term.Project != "/code/empty" {
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || e.kind != terminalEntry || e.term.Root != "/code/empty" {
 		t.Fatalf("spawned %+v, sel %+v", f.spawned, e)
 	}
 	if m.shown("project:/code/empty") {
@@ -1348,11 +1348,11 @@ func TestAFailedRefreshKeepsTheList(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	m = pressSettled(t, m, "t", "k")
-	sel, cur, rows, ttys := m.sel, f.stage(), m.rows, m.ttys
+	sel, cur, rows, ttys := m.sel, f.stage(), m.in.Rows, m.in.TTYs
 	m, cmd := step(m, rowsMsg{err: errors.New("claude agents: timeout")})
 	m = settle(t, m, cmd)
-	if m.sel != sel || f.stage() != cur || len(m.rows) != 2 || m.rowsErr == nil {
-		t.Fatalf("after a failed refresh: sel %s, list in %s, rows %d, err %v", m.sel, f.stage(), len(m.rows), m.rowsErr)
+	if m.sel != sel || f.stage() != cur || len(m.in.Rows) != 2 || m.rowsErr == nil {
+		t.Fatalf("after a failed refresh: sel %s, list in %s, rows %d, err %v", m.sel, f.stage(), len(m.in.Rows), m.rowsErr)
 	}
 	m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
 	m = settle(t, m, cmd)
@@ -1383,9 +1383,9 @@ func TestClaudeTypedInATerminalKeepsTheList(t *testing.T) {
 	moves, selects := len(f.moves), len(f.selects)
 	r := row("new", "typed", "typed", 44)
 	r.Cwd = "/code/app"
-	ttys := maps.Clone(m.ttys)
+	ttys := maps.Clone(m.in.TTYs)
 	ttys[44] = shell.TTY
-	m, cmd := step(m, m.rowsMsg(append(slices.Clone(m.rows), r), ttys, nil, nil))
+	m, cmd := step(m, m.rowsMsg(append(slices.Clone(m.in.Rows), r), ttys, nil, nil))
 	m = settle(t, m, cmd)
 	if f.stage() != shell.Window || len(f.moves) != moves || len(f.selects) != selects || m.sel != "new" {
 		t.Fatalf("list in %s (was %s), moves %d then %d, sel %s", f.stage(), shell.Window, moves, len(f.moves), m.sel)
@@ -1399,13 +1399,13 @@ func TestANewSessionIDKeepsTheListWhileTyping(t *testing.T) {
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	m = blurred(t, pressSettled(t, m, "j"))
 	cur, moves := f.stage(), len(f.moves)
-	rows := slices.Clone(m.rows)
+	rows := slices.Clone(m.in.Rows)
 	for i := range rows {
 		if rows[i].SessionID == m.sel {
 			rows[i].SessionID = "s-new"
 		}
 	}
-	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.in.TTYs})
 	m = settle(t, m, cmd)
 	if f.stage() != cur || len(f.moves) != moves || m.sel != "s-new" {
 		t.Fatalf("list in %s (was %s), sel %s", f.stage(), cur, m.sel)
@@ -1426,8 +1426,8 @@ func TestASessionInAnotherOverviewSessionGetsTheHolder(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	f.add("overview-other", "ttys777")
-	ttys := map[int]string{11: m.ttys[11], 22: "ttys777"}
-	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.rows), row("s2", "zzz", "x", 22)), ttys: ttys})
+	ttys := map[int]string{11: m.in.TTYs[11], 22: "ttys777"}
+	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), row("s2", "zzz", "x", 22)), ttys: ttys})
 	m = settle(t, m, cmd)
 	m = pressSettled(t, m, "j")
 	if m.sel != "s2" || f.panes[f.find("%0")].Session != "ov" || !f.staged("%1") {
@@ -1503,8 +1503,8 @@ func TestARefreshFromBeforeAPinKeepsThePin(t *testing.T) {
 	}
 	m, cmd := step(m, stale)
 	m = settle(t, m, cmd)
-	if !slices.Contains(m.pinned, "/code/new") || m.sel != "project:/code/new" {
-		t.Fatalf("a stale refresh: pinned %v, sel %s", m.pinned, m.sel)
+	if !slices.Contains(m.in.Pinned, "/code/new") || m.sel != "project:/code/new" {
+		t.Fatalf("a stale refresh: pinned %v, sel %s", m.in.Pinned, m.sel)
 	}
 }
 
@@ -1559,13 +1559,13 @@ func TestASearchLostWhileTypingKeepsTheListOnReturn(t *testing.T) {
 	m.filter = "auth"
 	m = blurred(t, m)
 	cur, sel := f.stage(), m.sel
-	rows := slices.Clone(m.rows)
+	rows := slices.Clone(m.in.Rows)
 	for i := range rows {
 		if rows[i].SessionID == m.sel {
 			rows[i].Title = "other"
 		}
 	}
-	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.ttys})
+	m, cmd := step(m, rowsMsg{rows: rows, ttys: m.in.TTYs})
 	m = settle(t, m, cmd)
 	if m.sel != sel || f.stage() != cur {
 		t.Fatalf("while typing: sel %s (was %s), list in %s (was %s)", m.sel, sel, f.stage(), cur)
@@ -1637,13 +1637,13 @@ func TestATerminalClosedMidSpawnLeavesNoDeadPanes(t *testing.T) {
 	m, cmd := press(m, "x", "y")
 	m.spawns++ // a spawn asked for meanwhile
 	m = settle(t, m, cmd)
-	for _, p := range m.panes {
+	for _, p := range m.in.Panes {
 		if p.Window == win {
 			t.Fatalf("%s of the closed window %s is still listed", p.ID, win)
 		}
 	}
-	if m.stageOf(m.panes) != f.stage() {
-		t.Fatalf("the model has the list in %s, tmux in %s", m.stageOf(m.panes), f.stage())
+	if m.stageOf(m.in.Panes) != f.stage() {
+		t.Fatalf("the model has the list in %s, tmux in %s", m.stageOf(m.in.Panes), f.stage())
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"overview/internal/fleet"
 	"overview/internal/issues"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 const (
@@ -46,7 +47,7 @@ func workModel(t *testing.T, w, h int) model {
 	}
 	m := newTestModel(t)
 	m.user, m.session = "/u", "ov"
-	m.panes = []tmux.Pane{
+	m.in.Panes = []tmux.Pane{
 		{ID: "%7", Session: "ov", Window: "@7", Command: "go", Path: ovRoot, Project: ovRoot, Task: ovRoot + "#6"},
 		{ID: "%8", Session: "ov", Window: "@8", Command: "npm", Path: webRoot, Project: webRoot},
 	}
@@ -62,6 +63,7 @@ func workModel(t *testing.T, w, h int) model {
 	)}
 	m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
 	m.trackers = ts
+	m = m.setInputs(nil)
 	return update(m, rowsMsg{rows: rows, ttys: ttys})
 }
 
@@ -200,7 +202,9 @@ func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
 	m := newTestModel(t)
 	m.w, m.user = 22, "/u" // 20 columns of content
-	e := entry{kind: sessionEntry, row: row("s", "x", "", 1), project: "/u/code/projects/日本語日本", issue: issues.Issue{ID: 6}}
+	st := &world.Stream{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
+	s := &world.Session{Row: row("s", "x", "", 1), Project: &world.Project{Name: "/w/x"}, Streams: []*world.Stream{st}}
+	e := entry{kind: sessionEntry, sess: s, alias: agentsPrefix}
 	// 6 used, 10 columns of name (15 bytes), 2 of ref and 2 of spaces.
 	if got := m.agentsNote(e, "", false, 6); got != "日本語日本 #6" {
 		t.Fatalf("note %q, want the project's name too", got)
@@ -211,7 +215,7 @@ func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
 }
 
 func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
-	idle := section{Title: "backlog", Tracked: true, Open: 4, Entries: []entry{{kind: projectEntry, project: "/code/backlog"}}}
+	idle := section{Title: "backlog", Tracked: true, Open: 4, Entries: []entry{{kind: projectEntry}}}
 	if got := sectionNote(idle); got != "4 open" {
 		t.Errorf("idle tracked project: %q, want 4 open", got)
 	}

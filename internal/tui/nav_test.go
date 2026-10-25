@@ -294,7 +294,7 @@ func TestThePanesRulesSayWhatRunsThere(t *testing.T) {
 		t.Fatalf("the list's title %q", got)
 	}
 	stage := m.want()
-	if got := f.titles[stage]; !strings.HasPrefix(got, m.ordered()[0].row.Name) || !strings.Contains(got, "idle") {
+	if got := f.titles[stage]; !strings.HasPrefix(got, m.ordered()[0].sess.Name) || !strings.Contains(got, "idle") {
 		t.Fatalf("the session's title %q", got)
 	}
 	if got := tmuxTitle([]titleSeg{{text: "#6 a"}, {"  b", lipgloss.Color("#abc")}}); got != "##6 a#[fg=#aabbcc nobold]  b" {

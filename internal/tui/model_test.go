@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/fleet"
+	"overview/internal/world"
 )
 
 func row(id, name, title string, pid int) fleet.Row {
@@ -238,7 +239,7 @@ func TestClickDoesNotScrollTheList(t *testing.T) {
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 12})
 	m, _ = press(m, "G")
 	for _, e := range m.ordered() {
-		r := e.row
+		r := e.sess
 		y := screenY(m, r.SessionID)
 		if y < 1 || y+1 > 9 {
 			continue // not wholly shown
@@ -357,5 +358,53 @@ func TestNewSessionNeedsADirectory(t *testing.T) {
 	// While searching, c is search text.
 	if m = pressSettled(t, m, "/", "c"); len(f.spawned) != 0 || m.filter != "c" {
 		t.Errorf("c while searching: filter %q", m.filter)
+	}
+}
+
+// paneOf is the pane that shows session r, as the model's World has it.
+func paneOf(m model, r fleet.Row) string {
+	if s := m.world().Sessions[r.SessionID]; s != nil {
+		return s.Pane
+	}
+	return ""
+}
+
+// counts are the header's counts, as the model's World has them.
+func counts(m model) (need, working, idle int) {
+	w := m.world()
+	return w.Need, w.Working, w.Idle
+}
+
+// The World is derived once per change to the inputs, however often the
+// list, the header and the stage ask for it: a key that changes no input
+// derives nothing, and a refresh derives it again.
+func TestTheWorldIsDerivedOncePerChange(t *testing.T) {
+	derives := 0
+	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
+	m.deps = fakeDeps(nil)
+	m.deps.derive = func(in world.Inputs) world.World {
+		derives++
+		return world.Derive(in)
+	}
+	rows := manyRows(4)
+	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = update(m, rowsMsg{rows: rows, ttys: map[int]string{}})
+	m.View()
+	before := derives
+	for _, k := range []string{"j", "j", "k", "?", "esc", "G"} {
+		m, _ = press(m, k)
+		m.View()
+	}
+	if derives != before {
+		t.Fatalf("%d derives across keys that changed no input", derives-before)
+	}
+	m = update(m, rowsMsg{rows: rows[:2], ttys: map[int]string{}})
+	m.View()
+	if derives == before {
+		t.Fatalf("a refresh derived no new World")
+	}
+	t.Logf("a refresh derived %d Worlds", derives-before)
+	if got := len(m.world().Sessions); got != 2 {
+		t.Fatalf("the World has %d sessions after the refresh, want 2", got)
 	}
 }

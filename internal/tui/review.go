@@ -8,6 +8,7 @@ import (
 	"overview/internal/fleet"
 	"overview/internal/review"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 // A session's review runs as overview review view in a split above the
@@ -46,18 +47,18 @@ func reviewCommand(exe, store, target string, r fleet.Row, flags []string) []str
 
 // openReview moves the keyboard into a session's review, opening one
 // above the session when it has none.
-func (m model) openReview(r fleet.Row) (model, tea.Cmd) {
+func (m model) openReview(r *world.Session) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("reviews open only inside overview's tmux"), nil
 	}
-	if p := reviewPane(m.panes, r.SessionID); p != "" {
+	if p := reviewPane(m.in.Panes, r.SessionID); p != "" {
 		m.entering = p
 		return m, nil
 	}
 	if m.opening[r.SessionID] {
 		return m.say("the review of " + r.Name + " is opening"), nil
 	}
-	target := m.paneOf(r)
+	target := r.Pane
 	if target == "" {
 		return m.say("a review opens above a session that runs in overview's tmux"), nil
 	}
@@ -65,7 +66,7 @@ func (m model) openReview(r fleet.Row) (model, tea.Cmd) {
 	if err != nil {
 		return m.say(err.Error()), nil
 	}
-	cmd := reviewCommand(m.exe, store, target, r, m.reviewArgs)
+	cmd := reviewCommand(m.exe, store, target, r.Row, m.reviewArgs)
 	mux, id := m.mux, r.SessionID
 	m.spawns++
 	m.opening = withKey(m.opening, id, true)

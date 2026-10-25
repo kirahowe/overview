@@ -6,27 +6,12 @@ import (
 	"strings"
 
 	"overview/internal/fleet"
+	"overview/internal/world"
 )
 
 // maxHops bounds the walk from a session up to the app that started it, and
 // also ends the walk on a cycle.
 const maxHops = 12
-
-// host is the app an interactive session runs inside when it has no
-// terminal, such as an editor plugin's chat panel. Name is empty when no
-// ancestor is an app bundle.
-type host struct {
-	Name string // "Obsidian"
-	Path string // "/Applications/Obsidian.app"
-}
-
-// label is how the list and the details name the host.
-func (h host) label() string {
-	if h.Name == "" {
-		return "no terminal"
-	}
-	return h.Name
-}
 
 // psTable lists every process as `pid ppid tty comm`.
 func psTable() ([]byte, error) {
@@ -68,8 +53,8 @@ func parseProcs(out string) map[int]proc {
 // that is running but has none was started by another app, which is named
 // from the nearest ancestor inside an app bundle. A session ps does not list is in
 // neither map.
-func places(procs map[int]proc, rows []fleet.Row) (ttys map[int]string, hosts map[int]host) {
-	ttys, hosts = map[int]string{}, map[int]host{}
+func places(procs map[int]proc, rows []fleet.Row) (ttys map[int]string, hosts map[int]world.Host) {
+	ttys, hosts = map[int]string{}, map[int]world.Host{}
 	for _, r := range rows {
 		if r.Background() || r.PID <= 0 {
 			continue
@@ -88,7 +73,7 @@ func places(procs map[int]proc, rows []fleet.Row) (ttys map[int]string, hosts ma
 
 // hostOf walks up from pid, at most maxHops parents, to the first process
 // whose executable sits inside an app bundle. pid itself does not count.
-func hostOf(procs map[int]proc, pid int) host {
+func hostOf(procs map[int]proc, pid int) world.Host {
 	p, ok := procs[pid]
 	for hop := 0; ok && hop < maxHops && p.ppid > 0; hop++ {
 		if p, ok = procs[p.ppid]; ok {
@@ -97,25 +82,25 @@ func hostOf(procs map[int]proc, pid int) host {
 			}
 		}
 	}
-	return host{}
+	return world.Host{}
 }
 
 // appBundle returns the outermost .app in an executable's path. A helper
 // process lives in a bundle nested inside its app's, as in
 // /Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper.app/...,
 // and the outer one is the app the user knows.
-func appBundle(comm string) (host, bool) {
+func appBundle(comm string) (world.Host, bool) {
 	if !strings.HasPrefix(comm, "/") {
-		return host{}, false
+		return world.Host{}, false
 	}
 	i := strings.Index(comm, ".app/")
 	if i < 0 {
-		return host{}, false
+		return world.Host{}, false
 	}
 	path := comm[:i+len(".app")]
 	name := strings.TrimSuffix(path[strings.LastIndex(path, "/")+1:], ".app")
 	if name == "" {
-		return host{}, false
+		return world.Host{}, false
 	}
-	return host{Name: name, Path: path}, true
+	return world.Host{Name: name, Path: path}, true
 }
