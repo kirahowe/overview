@@ -270,6 +270,12 @@ func TestArchEffectsRunOnlyInCmds(t *testing.T) {
 			methods[f.decl.Name.Name] = append(methods[f.decl.Name.Name], f.name)
 		}
 	}
+	for b := range cmdBuilders {
+		ds := byName[b]
+		if len(ds) != 1 || !returnsCmd(ds[0].Type) {
+			t.Errorf("cmdBuilders names %s, which is not one function returning only a tea.Cmd", b)
+		}
+	}
 	seen := map[string]bool{}
 	queue := slices.Clone(effectRoots)
 	for len(queue) > 0 {
@@ -280,8 +286,24 @@ func TestArchEffectsRunOnlyInCmds(t *testing.T) {
 		}
 		seen[name] = true
 		for _, d := range byName[name] {
-			aliases := depAliases(d.Body)
+			aliases := depAliases(d)
 			walkNow(d.Body, func(call *ast.CallExpr) {
+				// An effectful field handed to a function that runs now
+				// is a call out too, unless the function only builds a Cmd.
+				callee := ""
+				switch fn := call.Fun.(type) {
+				case *ast.Ident:
+					callee = fn.Name
+				case *ast.SelectorExpr:
+					callee = fn.Sel.Name
+				}
+				for _, arg := range call.Args {
+					if dep, ok := depOf(arg, aliases); ok {
+						if _, ok := cmdBuilders[callee]; !ok {
+							archFail(t, fset, "Update, View and Init call out to the system only inside a Cmd", name, arg.Pos(), "m."+dep+" passed to "+callee+", which runs now")
+						}
+					}
+				}
 				var fun ast.Expr = call.Fun
 				if ix, ok := fun.(*ast.IndexExpr); ok {
 					fun = ix.X // a generic call
@@ -330,6 +352,21 @@ func TestArchEffectsRunOnlyInCmds(t *testing.T) {
 	}
 }
 
+// cmdBuilders take an effectful field and only build a Cmd around it,
+// which the runtime runs later, by name. Each must return a tea.Cmd and
+// nothing else, which the test checks.
+var cmdBuilders = map[string]string{
+	"listPanes":    "lists tmux's panes in its Cmd",
+	"stageCmd":     "moves the list in its Cmd",
+	"drawCmd":      "writes the holder's tty in its Cmd",
+	"changesCmd":   "runs git or jj in its Cmd",
+	"pinCmd":       "reads and writes the pins in its Cmd",
+	"spawnCmd":     "starts a pane in its Cmd",
+	"zoomCmd":      "zooms the list in its Cmd",
+	"closeCmd":     "closes a window in its Cmd",
+	"readPathsCmd": "reads directories in its Cmd",
+}
+
 // system are the standard library's functions that read the clock or
 // the disk or run a program, by package and name; ".*" is the whole
 // package.
@@ -342,13 +379,15 @@ var system = map[string]bool{
 
 // depOf says which effectful field x is: m.mux gives "mux", m.deps.now
 // gives "deps.now", and a local in aliases gives what it was taken from.
+// The model is known by name: a receiver or parameter of type model,
+// which aliases holds under modelKey.
 func depOf(x ast.Expr, aliases map[string]string) (string, bool) {
 	switch x := x.(type) {
 	case *ast.Ident:
 		dep, ok := aliases[x.Name]
-		return dep, ok
+		return dep, ok && dep != modelKey
 	case *ast.SelectorExpr:
-		if id, ok := x.X.(*ast.Ident); ok && effectfulDeps[x.Sel.Name] && !imports[id.Name] {
+		if id, ok := x.X.(*ast.Ident); ok && effectfulDeps[x.Sel.Name] && aliases[id.Name] == modelKey {
 			return x.Sel.Name, true
 		}
 		if in, ok := depOf(x.X, aliases); ok && !strings.Contains(in, ".") {
@@ -358,10 +397,37 @@ func depOf(x ast.Expr, aliases map[string]string) (string, bool) {
 	return "", false
 }
 
-// depAliases are the locals of body taken from an effectful field, as
-// mux := m.mux or read := m.deps.recentTurns, by name.
-func depAliases(body ast.Node) map[string]string {
+// modelKey marks a name in aliases that is the model itself.
+const modelKey = "model"
+
+// depAliases are the names in fd that stand for the model, a receiver or
+// parameter of type model, and the locals taken from an effectful field
+// of it, as mux := m.mux or read := m.deps.recentTurns. It keeps one map
+// for the whole function and ignores scope, so a later local that reuses
+// an alias's name is still taken for the alias. That errs towards a
+// false failure, which renaming the local fixes, never a missed one.
+func depAliases(fd *ast.FuncDecl) map[string]string {
 	out := map[string]string{}
+	models := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			if id, ok := f.Type.(*ast.Ident); ok && id.Name == "model" {
+				for _, n := range f.Names {
+					out[n.Name] = modelKey
+				}
+			}
+		}
+	}
+	models(fd.Recv)
+	models(fd.Type.Params)
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if fl, ok := n.(*ast.FuncLit); ok {
+			models(fl.Type.Params)
+		}
+		return true
+	})
 	bind := func(lhs ast.Expr, rhs ast.Expr) {
 		id, ok := lhs.(*ast.Ident)
 		if !ok {
@@ -371,7 +437,7 @@ func depAliases(body ast.Node) map[string]string {
 			out[id.Name] = dep
 		}
 	}
-	ast.Inspect(body, func(n ast.Node) bool {
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.AssignStmt:
 			if len(n.Lhs) == len(n.Rhs) {
@@ -405,6 +471,15 @@ func walkNow(body ast.Node, visit func(*ast.CallExpr)) {
 		}
 		return true
 	})
+}
+
+// returnsCmd says whether a func type's one result is a tea.Cmd.
+func returnsCmd(ft *ast.FuncType) bool {
+	if ft.Results == nil || len(ft.Results.List) != 1 {
+		return false
+	}
+	s, ok := ft.Results.List[0].Type.(*ast.SelectorExpr)
+	return ok && fmt.Sprint(s.X) == "tea" && s.Sel.Name == "Cmd"
 }
 
 // returnsMsg says whether a func type's one result is a tea.Msg.

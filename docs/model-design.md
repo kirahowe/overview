@@ -393,7 +393,10 @@ names the rule, the function and the file and line.
   package's calls, calls out to the system. A call out is a call to
   `m.deps`, `m.mux`, `m.home` or `m.issues`, made directly or through a
   local taken from one (`mux, self := m.mux, m.self` and then
-  `mux.Panes()`). Calls to the standard library's `time.Now`,
+  `mux.Panes()`), or one of them handed as an argument to a function
+  that runs now. Only the functions in `cmdBuilders` may take one, each
+  returning nothing but a `tea.Cmd` (`listPanes`, `stageCmd`,
+  `closeCmd` and the like). Calls to the standard library's `time.Now`,
   `time.Since`, `os`, `os/exec` and the `filepath` functions that read
   the disk count too. They may run only inside a func literal that
   returns a `tea.Msg`: a Cmd, or a callback such as `tea.Tick`'s, which
