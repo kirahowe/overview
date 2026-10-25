@@ -63,9 +63,10 @@ type World struct {
 	Hooked              bool     // some live session reports through the hook
 	Trackers            []string // the roots whose trackers Derive needs, sorted
 
-	byName map[string]*Project // every project, listed or not
-	roots  map[string]string
-	user   string
+	byName  map[string]*Project // every project, listed or not
+	tracked map[string]Tracker  // the trackers in the world, by root
+	roots   map[string]string
+	user    string
 }
 
 // Project is one section of the list: every root that shares a display
@@ -79,11 +80,15 @@ type Project struct {
 	// and Failed that the last read of one of those failed.
 	Tracked, Failed bool
 	Pinned          bool           // one of Roots is pinned
+	Pins            []string       // the pinned directories it holds, as Inputs.Pinned gives them, sorted
 	Open            []issues.Issue // the open issues of its tracked roots, by number then root
 	Streams         []*Stream      // its workstreams, by status rank, priority, number, root
 	Sessions        []*Session     // its sessions linked to no workstream and in a terminal
 	Members         []*Session     // every session whose cwd is in it, linked, away or not, working first then newest
 	Terminals       []*Terminal    // its terminals opened for none of its workstreams, by window
+	// AllTerminals is every terminal in it, its own and its workstreams',
+	// by window, as the cockpit's header lists them.
+	AllTerminals []*Terminal
 }
 
 // Empty says whether nothing is listed in the project: a project that
@@ -157,6 +162,7 @@ type Session struct {
 	Streams []*Stream // the open workstreams its links resolve to, each once at its last link; the last is primary
 	Pane    string    // the pane that shows it in the view's session, "" for none
 	Host    *Host     // the app it runs inside, nil when it has a terminal or is a background session
+	TTY     string    // the terminal an interactive session runs in, "" for none
 	// Elsewhere says an interactive session runs in a pane of another
 	// tmux session on the view's server, such as another home's view.
 	Elsewhere bool
@@ -205,6 +211,18 @@ func (w World) Root(dir string) string { return rootOf(w.roots, dir) }
 
 // Name is the display name of the project dir belongs to.
 func (w World) Name(dir string) string { return nameOf(w.user, w.Root(dir)) }
+
+// Short is a directory as the view shows it: under ~ when it is in the
+// user's home.
+func (w World) Short(dir string) string { return fleet.ShortDir(dir, w.user) }
+
+// Tracker is the tracker of root as the world has it: one of a root of
+// a project in it, or of a root a link resolves into. ok is false for a
+// root with no tracker, or one the world does not hold.
+func (w World) Tracker(root string) (t Tracker, ok bool) {
+	t, ok = w.tracked[root]
+	return t, ok
+}
 
 // ProjectOf is the project dir belongs to, listed or not, nil when the
 // world has none with its name.

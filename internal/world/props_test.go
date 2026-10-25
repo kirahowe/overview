@@ -588,6 +588,16 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			for _, tm := range p.Terminals {
 				term(tm)
 			}
+			// AllTerminals is the world's terminals in the project, in order.
+			var all []*Terminal
+			for _, tm := range w.Terminals {
+				if tm.Project == p {
+					all = append(all, tm)
+				}
+			}
+			if !slices.Equal(p.AllTerminals, all) {
+				t.Fatalf("%q's terminals %v, want %v", p.Name, p.AllTerminals, all)
+			}
 		}
 		for _, tm := range w.Terminals {
 			proj(tm.Project)
@@ -649,6 +659,33 @@ func TestPropProjectsAndMembers(t *testing.T) {
 				t.Fatalf("%q listed %v, empty %v, pinned %v", p.Name, listed, p.Empty(), p.Pinned)
 			}
 		}
+		for _, p := range w.byName {
+			// Pins are the pinned directories in it, each once.
+			var pins []string
+			for _, d := range in.Pinned {
+				if d != "" && w.ProjectOf(d) == p && !slices.Contains(pins, d) {
+					pins = append(pins, d)
+				}
+			}
+			slices.Sort(pins)
+			if !slices.Equal(p.Pins, pins) || p.Pinned != (len(pins) > 0) {
+				t.Fatalf("%q pins %v pinned %v, want %v", p.Name, p.Pins, p.Pinned, pins)
+			}
+		}
+		// The world holds the tracker of every root of its projects, and
+		// no other.
+		roots := map[string]bool{}
+		for _, p := range w.byName {
+			for _, r := range p.Roots {
+				roots[r] = true
+			}
+		}
+		for r, tr := range in.Trackers {
+			got, ok := w.Tracker(r)
+			if ok != roots[r] || ok && !reflect.DeepEqual(got, tr) {
+				t.Fatalf("tracker of %q: %+v %v, a project's root %v", r, got, ok, roots[r])
+			}
+		}
 		seen := map[*Session]int{}
 		for _, p := range w.byName {
 			checkSessions(t, p.Name+" members", p.Members)
@@ -674,6 +711,94 @@ func TestPropProjectsAndMembers(t *testing.T) {
 		}
 		if len(seen) != len(w.Sessions) {
 			t.Fatalf("%d members, %d sessions", len(seen), len(w.Sessions))
+		}
+	})
+}
+
+// genTermPanes draws a tmux listing: panes in a few windows of the view's
+// session "ov" and of another, with the list, the holder, attaches and
+// claude ttys among them.
+func genTermPanes(t *rapid.T) []tmux.Pane {
+	n := rapid.IntRange(0, 10).Draw(t, "panes")
+	panes := make([]tmux.Pane, n)
+	for i := range panes {
+		panes[i] = tmux.Pane{
+			ID:      fmt.Sprintf("%%%d", i),
+			TTY:     fmt.Sprintf("ttys%03d", i),
+			Session: rapid.SampledFrom([]string{"ov", "ov", "ov", "other"}).Draw(t, "session"),
+			Window:  fmt.Sprintf("@%d", rapid.IntRange(0, 4).Draw(t, "window")),
+			Command: rapid.SampledFrom([]string{"zsh", "-zsh", "node", "claude", "vim", ""}).Draw(t, "command"),
+			Path:    rapid.SampledFrom([]string{"/w/a", "/w/a/sub", "/w/b", ""}).Draw(t, "path"),
+			Project: rapid.SampledFrom([]string{"", "", "/w/p"}).Draw(t, "project"),
+			Attach:  rapid.SampledFrom([]string{"", "", "", "bg1"}).Draw(t, "attach"),
+			Task:    rapid.SampledFrom([]string{"", "", "/w/p#6"}).Draw(t, "task"),
+		}
+	}
+	return panes
+}
+
+// terminals lists exactly the windows of the view's session that hold a
+// pane besides the list and none of the holder, an attach, a listed
+// claude, or the pane c just opened. Each comes once, in window order,
+// named after its first such pane.
+func TestPropTerminals(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		panes := genTermPanes(t)
+		pick := func(label string) string {
+			if len(panes) == 0 || rapid.Bool().Draw(t, label+"none") {
+				return ""
+			}
+			return rapid.SampledFrom(panes).Draw(t, label).ID
+		}
+		self, holder, opened := pick("self"), pick("holder"), pick("opened")
+		for i := range panes {
+			panes[i].Holder = panes[i].ID == holder
+		}
+		claude := map[string]bool{}
+		for _, p := range panes {
+			if rapid.IntRange(0, 4).Draw(t, "claude") == 0 {
+				claude[p.TTY] = true
+			}
+		}
+		root := func(p string) string { return "root:" + p }
+		got := terminals(panes, "ov", self, opened, claude, root)
+
+		want := map[string][]tmux.Pane{}
+		bad := map[string]bool{}
+		for _, p := range panes {
+			if p.Session != "ov" || p.ID == self {
+				continue
+			}
+			want[p.Window] = append(want[p.Window], p)
+			if p.ID == holder || p.Attach != "" || claude[p.TTY] || p.ID == opened {
+				bad[p.Window] = true
+			}
+		}
+		n := 0
+		for w := range want {
+			if !bad[w] {
+				n++
+			}
+		}
+		if len(got) != n {
+			t.Fatalf("%d terminals, want %d: %+v", len(got), n, got)
+		}
+		for i, tm := range got {
+			ps := want[tm.Window]
+			if len(ps) == 0 || bad[tm.Window] {
+				t.Fatalf("%s is not a terminal: %+v", tm.Window, ps)
+			}
+			if i > 0 && !WindowLess(got[i-1].Window, tm.Window) {
+				t.Fatalf("out of order: %s then %s", got[i-1].Window, tm.Window)
+			}
+			first := ps[0]
+			wantRoot := first.Project
+			if wantRoot == "" {
+				wantRoot = root(first.Path)
+			}
+			if tm.Pane != first.ID || tm.Path != first.Path || tm.Root != wantRoot || tm.task != first.Task || tm.Title != termTitle(ps) {
+				t.Fatalf("terminal %+v from panes %+v", tm, ps)
+			}
 		}
 	})
 }

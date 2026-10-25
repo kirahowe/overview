@@ -407,6 +407,9 @@ func TestTerminalsUnderWorkstreams(t *testing.T) {
 	if w.Terminals[0].Stream != st || w.Terminals[1].Stream != nil {
 		t.Errorf("streams %v %v", w.Terminals[0].Stream, w.Terminals[1].Stream)
 	}
+	// A project's every terminal: its own and its workstreams'.
+	eq(t, "all of app's", windows(w.ProjectOf("/w/app").AllTerminals), []string{"@1", "@3", "@4", "@5"})
+	eq(t, "all of lib's", windows(w.ProjectOf("/w/lib").AllTerminals), []string{"@2"})
 	if s, term := st.Lead(); s != nil || term != w.Terminals[0] {
 		t.Errorf("lead %v %v", s, term)
 	}
@@ -450,6 +453,19 @@ func TestPinnedProjects(t *testing.T) {
 	if !home.Pinned || home.Root != "/p/delta" || home.ID != "delta" || home.Tracked {
 		t.Errorf("~/delta %+v", home)
 	}
+	// Pins keeps a pinned directory as it was given, which is how it is
+	// unpinned.
+	eq(t, "~/delta's pins", home.Pins, []string{"/p/delta/"})
+	eq(t, "alpha's pins", alpha.Pins, []string{"/w/alpha"})
+	if tr, ok := w.Tracker("/w/delta"); !ok || tr.ID != "delta" || !tr.Failed {
+		t.Errorf("delta's tracker %+v %v", tr, ok)
+	}
+	if _, ok := w.Tracker("/w/alpha"); ok {
+		t.Errorf("alpha has no tracker, yet the world holds one")
+	}
+	if p := w.Sessions["s"].Project; len(p.Pins) != 1 {
+		t.Errorf("alpha's session's project %+v", p)
+	}
 }
 
 // Every root with one name is one project, under the least root.
@@ -489,6 +505,9 @@ func TestProjectNames(t *testing.T) {
 	if w.Name("/u/code/projects/app/sub") != "app" || w.Root("/u/notes/") != "/u/notes" || w.Root("") != "" {
 		t.Errorf("lookups %q %q", w.Name("/u/code/projects/app/sub"), w.Root("/u/notes/"))
 	}
+	if w.Short("/u/notes/x") != "~/notes/x" || w.Short("/tmp/x") != "/tmp/x" {
+		t.Errorf("Short %q %q", w.Short("/u/notes/x"), w.Short("/tmp/x"))
+	}
 	if w.ProjectOf("/nowhere") != nil || w.ProjectOf("/u/notes") != w.Sessions["d"].Project {
 		t.Errorf("ProjectOf")
 	}
@@ -516,6 +535,11 @@ func TestSessionPanes(t *testing.T) {
 	for id, want := range map[string]string{"in": "%1", "bg": "%4", "gone": ""} {
 		if got := w.Sessions[id].Pane; got != want {
 			t.Errorf("%s: pane %q, want %q", id, got, want)
+		}
+	}
+	for id, want := range map[string]string{"in": "ttys001", "bg": "", "gone": "ttys002"} {
+		if got := w.Sessions[id].TTY; got != want {
+			t.Errorf("%s: tty %q, want %q", id, got, want)
 		}
 	}
 	if w.Sessions["in"].Elsewhere || !w.Sessions["gone"].Elsewhere || w.Sessions["bg"].Elsewhere {
@@ -569,5 +593,30 @@ func TestParseKey(t *testing.T) {
 	}
 	if !strings.HasSuffix(Key{"/r", 3}.String(), "#3") {
 		t.Errorf("String")
+	}
+}
+
+func TestTermTitle(t *testing.T) {
+	p := func(cmds ...string) []tmux.Pane {
+		var out []tmux.Pane
+		for _, c := range cmds {
+			out = append(out, tmux.Pane{Command: c})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		panes []tmux.Pane
+		want  string
+	}{
+		{p("zsh"), "zsh"},
+		{p("-zsh", "bash"), "zsh"},
+		{p("zsh", "node"), "node"},
+		{p("node", "zsh", "vite", "node"), "node, vite"},
+		{p(""), "shell"},
+		{nil, "shell"},
+	} {
+		if got := termTitle(c.panes); got != c.want {
+			t.Errorf("%v: %q, want %q", c.panes, got, c.want)
+		}
 	}
 }

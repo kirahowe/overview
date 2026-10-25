@@ -133,16 +133,17 @@ func Derive(in Inputs) World {
 	for k := range streams {
 		add(k.Root)
 	}
-	pinned := map[string]bool{}
+	pinned := map[string][]string{} // root → the pinned directories with it
 	for _, p := range in.Pinned {
-		if p != "" {
-			pinned[root(p)] = true
+		if p != "" && !slices.Contains(pinned[root(p)], p) {
+			pinned[root(p)] = append(pinned[root(p)], p)
 		}
 	}
 	w := World{
 		Sessions: map[string]*Session{},
 		Streams:  streams,
 		byName:   map[string]*Project{},
+		tracked:  tracked,
 		roots:    maps.Clone(in.Roots),
 		user:     in.User,
 	}
@@ -150,7 +151,7 @@ func Derive(in Inputs) World {
 		p := &Project{Name: n, Roots: slices.Sorted(maps.Keys(rs))}
 		p.Root = p.Roots[0]
 		for _, r := range p.Roots {
-			p.Pinned = p.Pinned || pinned[r]
+			p.Pins = append(p.Pins, pinned[r]...)
 			t, ok := tracked[r]
 			if !ok {
 				continue
@@ -168,6 +169,8 @@ func Derive(in Inputs) World {
 		if p.ID == "" {
 			p.ID = baseName(p.Root)
 		}
+		slices.Sort(p.Pins)
+		p.Pinned = len(p.Pins) > 0
 		// Roots are sorted and each tracker's numbers are its own, so a
 		// stable sort by number leaves equal numbers in root order.
 		slices.SortStableFunc(p.Open, func(a, b issues.Issue) int { return a.ID - b.ID })
@@ -181,6 +184,9 @@ func Derive(in Inputs) World {
 	// The sessions, in the places they sit.
 	for _, r := range rows {
 		s := &Session{Row: r, Project: w.byName[name(r.Cwd)], Pane: paneOf(in, r), Elsewhere: elsewhere(in, r)}
+		if !r.Background() {
+			s.TTY = in.TTYs[r.PID]
+		}
 		s.Project.Members = append(s.Project.Members, s)
 		if h, ok := in.Hosts[r.PID]; ok && !r.Background() {
 			s.Host = &h
@@ -220,6 +226,7 @@ func Derive(in Inputs) World {
 		} else {
 			t.Project.Terminals = append(t.Project.Terminals, &t.Terminal)
 		}
+		t.Project.AllTerminals = append(t.Project.AllTerminals, &t.Terminal)
 		w.Terminals = append(w.Terminals, &t.Terminal)
 	}
 
@@ -235,6 +242,7 @@ func Derive(in Inputs) World {
 		bySession(p.Sessions)
 		bySession(p.Members)
 		byWindow(p.Terminals)
+		byWindow(p.AllTerminals)
 		// The list shows a project with something in it, or a pinned one.
 		if !p.Empty() || p.Pinned {
 			w.Projects = append(w.Projects, p)
