@@ -84,8 +84,9 @@ spawn does, so a listing taken before the mode cannot undo it.
 
 The cockpit has no panels mode, since it zooms the list's pane and there is
 nothing to move to. `esc` there clears a filter, then closes the cockpit.
-`tab` moves the keys between the list and the issues card, which is a
-plain flag, `cockpit.issues`. The rest of the cards only show.
+`l` moves the keys from the list into the issues card, right of it, and `h`
+back, as they move between panes outside the cockpit. `tab` does either.
+Where the keys are is a plain flag, `cockpit.issues`. The rest of the cards only show.
 
 The earlier design kept a selected panel apart from the active pane, moved
 it with `h j k l` in the view and lit it through the pane option

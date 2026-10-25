@@ -972,7 +972,7 @@ func (m model) panelHints() []hint {
 		if !m.pickStarts() {
 			enter.label = "go to"
 		}
-		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, help}
+		return []hint{enter, {"j k", "move"}, {"h", "list"}, {"esc", "close"}, help}
 	}
 	if m.inPanels() {
 		return []hint{{"hjkl", "move"}, {"enter", "act here"}}
@@ -981,7 +981,11 @@ func (m model) panelHints() []hint {
 	hs := m.entryHints(e, ok)
 	hs = hs[:len(hs)-1] // help goes last, after what is added here
 	if m.cockpit.open {
-		return append(append([]hint{{"o", "close"}}, hs...), help)
+		lead := []hint{{"o", "close"}}
+		if _, tracked := m.world().Tracker(m.target().root); tracked && m.issuesShown() {
+			lead = append(lead, hint{"l", "issues"})
+		}
+		return append(append(lead, hs...), help)
 	}
 	return append(append(hs, hint{"esc", "panels"}), help)
 }
@@ -1141,6 +1145,7 @@ func (m model) helpBox() []string {
 	)...)
 	left = append(left, section("cockpit",
 		entry{"o", "open / close the cockpit"},
+		entry{"l h", "into / out of the issues"},
 		entry{"tab", "list or issues card"},
 		entry{"enter", "on an issue, start or go to it"},
 	)...)

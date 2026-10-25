@@ -1193,7 +1193,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case outCockpit:
 		return m.closeCockpit()
 	case cockpitTab:
-		if m.inIssues() {
+		if into := a.n > 0 || (a.n == 0 && !m.inIssues()); !into {
 			m.cockpit.issues = false
 			return m, nil
 		}

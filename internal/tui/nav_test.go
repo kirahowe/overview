@@ -271,6 +271,36 @@ func TestTheKeysMoveBetweenTheCockpitsListAndCard(t *testing.T) {
 	if m.inIssues() {
 		t.Fatal("a click on the list left the keys in the issues card")
 	}
+	// l and the right arrow go into the card, which is right of the list,
+	// and h and the left arrow come back, without leaving the cockpit.
+	for _, in := range []string{"l", "right"} {
+		for _, out := range []string{"h", "left"} {
+			m = pressSettled(t, m, in)
+			if !m.inIssues() || !m.cockpit.open {
+				t.Fatalf("%s: issues %v open %v", in, m.inIssues(), m.cockpit.open)
+			}
+			m = pressSettled(t, m, in)
+			if !m.inIssues() {
+				t.Fatalf("%s twice left the issues card", in)
+			}
+			m = pressSettled(t, m, out)
+			if m.inIssues() || !m.listHasKeys() || !m.cockpit.open {
+				t.Fatalf("%s: issues %v list %v open %v", out, m.inIssues(), m.listHasKeys(), m.cockpit.open)
+			}
+		}
+	}
+}
+
+// A project that tracks no issues has no card to go into, and l says so
+// rather than doing nothing.
+func TestLInACockpitWithNoIssuesSaysWhy(t *testing.T) {
+	f := newFakeMux()
+	m := navModel(t, f)
+	m = resized(t, m, 150, 40)
+	m = pressSettled(t, m, "o", "l")
+	if !m.cockpit.open || m.inIssues() || m.note != "this project does not track its issues" {
+		t.Fatalf("open %v issues %v note %q", m.cockpit.open, m.inIssues(), m.note)
+	}
 }
 
 // A click on a row puts the keys in the list.

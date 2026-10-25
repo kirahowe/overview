@@ -154,8 +154,9 @@ and the issue's card lists six of its criteria at most.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` and `v` only when the workstream has a
-session. `tab` moves the keyboard into the issues card while the window has
-room to show the card, and `tab` again moves it into the list. There,
+session. `l` or the right arrow moves the keyboard from the list into the
+issues card while the window has room to show the card, and `h` or the
+left arrow moves it back. `tab` does either. There,
 `j` and `k` move between the issues. On an issue that a session already
 works on, `enter` moves the list's cursor to that workstream, and the
 cockpit stays open on it. On any other issue, `enter` starts a session with the

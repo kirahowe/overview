@@ -892,6 +892,13 @@ func TestCockpit(t *testing.T) {
 	if w := r.windowOf(session.id); w != r.windowOf(r.list.id) {
 		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
 	}
+	// l goes right, into the cards. This project tracks no issues, so
+	// there is no card to take the keys, and l says so in the cockpit.
+	r.press("l")
+	waitFor(t, "l saying why it cannot go in", func() (bool, string) {
+		f, s := strings.Fields(zoomed()), r.screen()
+		return len(f) == 3 && f[0] == "1" && strings.Contains(s, "does not track its issues"), s
+	})
 
 	r.press("Escape")
 	waitFor(t, "the list beside the session again", func() (bool, string) {

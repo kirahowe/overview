@@ -67,7 +67,7 @@ const (
 	openReview  // review the selected session's changes in a split above it
 	toCockpit   // open the cockpit for the selected entry
 	outCockpit  // close the cockpit
-	cockpitTab  // move the keyboard between the list and the cockpit's issues card
+	cockpitTab  // move the keyboard into the cockpit's issues card (n 1), out of it (-1), or across (0)
 	cockpitMove // n issues down the issues card, negative for up
 	cockpitPick // start a workstream on the issue under the issues card's cursor
 	enterPanels // put the client in tmux's panels mode, where the keys move the focus
@@ -265,8 +265,9 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 // cockpitKeys translates the keys that mean something else while the
 // cockpit is open, nil for the others: o closes it, and so does esc once
 // no filter is applied to the list, tab moves the keyboard between the
-// list and the issues card, and in that card the arrows move its cursor
-// and enter acts on its issue. The cockpit has no panels mode: it fills
+// list and the issues card, and l and h move it in and out of the card,
+// which is right of the list. In that card the arrows move its cursor and
+// enter acts on its issue. The cockpit has no panels mode: it fills
 // the window, so there is no panel to move to.
 func (m model) cockpitKeys(k string) []action {
 	switch k {
@@ -281,9 +282,16 @@ func (m model) cockpitKeys(k string) []action {
 		return do(cockpitTab)
 	}
 	if !m.inIssues() {
+		// The cards are right of the list, as a pane beside it is
+		// outside the cockpit.
+		if k == "l" || k == "right" {
+			return doN(cockpitTab, 1)
+		}
 		return nil
 	}
 	switch k {
+	case "h", "left":
+		return doN(cockpitTab, -1)
 	case "j", "down":
 		return doN(cockpitMove, 1)
 	case "k", "up":
