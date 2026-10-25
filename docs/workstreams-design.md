@@ -145,10 +145,15 @@ The look changes along the way:
 - The bottom bar lists the keys as `key label • key label`, with the
   keys in the accent colour, and changes with what is selected.
 
+Since then every part of the window has become a panel, as
+[panels-design.md](panels-design.md) describes: the header line is the
+title in the rule along the list's top, and the cockpit's cards are
+panels too, with the same rule.
+
 ## The cockpit
 
 `o` turns the whole window into the cockpit for the selected workstream
-or project, and `o` or `esc` turns it back. The list zooms its own pane
+or project, and `o`, or `esc` out on the panels, turns it back. The list zooms its own pane
 with tmux's `resize-pane -Z`, so the session beside it keeps running and
 comes back exactly as it was. The list stays down the left, and the
 cards take the rest.
@@ -195,7 +200,8 @@ rather than squeezed. To keep the issues card short enough to show,
 each of its groups lists a few issues (three in review, four in
 progress, two blocked, three up next) and counts the rest, and the
 issue card lists six criteria at most. When the issues card is dropped
-anyway, the keyboard goes back to the list, and `tab` leaves it there.
+anyway, the keyboard comes out to the panels, and `tab` says the window
+has no room for the card.
 
 The cards come from running jj, git and `issues`, which the view never
 does on its own goroutine. Commands run for the selected entry when it

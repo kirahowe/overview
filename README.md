@@ -205,7 +205,8 @@ the arrows, select the nearest panel that way, and `enter` goes into the
 selected one: into the list or the agents, where the keys move the
 cursor, or into a pane, where they go to what runs there. On the pane
 that shows the cursor's entry, `enter` does what it does on the entry
-in the list. `esc` comes back out to the panels. In a pane on the right,
+in the list. `esc` comes back out to the panels, once it has cleared
+any search filter. In a pane on the right,
 where `esc` belongs to the program, `ctrl+[` does that instead, and
 however the keyboard comes back to the list, the pane it was in is the
 one selected. The keys that act on the cursor's entry, such as `c`, `t`,
