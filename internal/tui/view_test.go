@@ -224,3 +224,26 @@ func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 		t.Errorf("project with a workstream: %q, want 1 task", got)
 	}
 }
+
+// The list's title warns that the hook is not installed when sessions are
+// listed and none reports through it, since then none can show blocked.
+func TestTheTitleSaysWhenTheHookIsMissing(t *testing.T) {
+	title := func(m model) string {
+		var b strings.Builder
+		for _, s := range m.listTitle() {
+			b.WriteString(s.text)
+		}
+		return b.String()
+	}
+	if got := title(newTestModel(t)); strings.Contains(got, noHook) {
+		t.Errorf("with no sessions: %q", got)
+	}
+	a, b := row("a", "red", "", 1), row("b", "blue", "", 2)
+	if got := title(newTestModel(t, a, b)); !strings.Contains(got, noHook) {
+		t.Errorf("with no hooked session: %q", got)
+	}
+	b.Hooked = true
+	if got := title(newTestModel(t, a, b)); strings.Contains(got, noHook) {
+		t.Errorf("with a hooked session: %q", got)
+	}
+}

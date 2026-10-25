@@ -881,7 +881,9 @@ type titleSeg struct {
 }
 
 // listTitle is the title of the list's panel: the home's name, then how
-// many sessions need you, how many work, and how many are idle.
+// many sessions need you, how many work, and how many are idle, and a
+// warning when no session reports through the hook, as then none can
+// show as blocked.
 func (m model) listTitle() []titleSeg {
 	w := m.world()
 	need, working, idle := w.Need, w.Working, w.Idle
@@ -892,8 +894,15 @@ func (m model) listTitle() []titleSeg {
 	if working > 0 {
 		segs = append(segs, titleSeg{"  ● " + strconv.Itoa(working), pal.Working})
 	}
-	return append(segs, titleSeg{"  ○ " + strconv.Itoa(idle), pal.Muted})
+	segs = append(segs, titleSeg{"  ○ " + strconv.Itoa(idle), pal.Muted})
+	if len(w.Sessions) > 0 && !w.Hooked {
+		segs = append(segs, titleSeg{"  · " + noHook, pal.Asking})
+	}
+	return segs
 }
+
+// noHook is the list's warning when no session reports through the hook.
+const noHook = "hook not installed"
 
 // titleText renders a title as the view draws it into a rule: accent and
 // bold while lit, as tmux draws the rules of its panes.

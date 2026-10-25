@@ -151,11 +151,13 @@ type Project struct {
 	Roots     []string       // every root in the world with this name
 	Name, ID  string
 	Tracked, Failed, Pinned bool
+	Pins      []string       // its pinned directories, as given, sorted
 	Open      []issues.Issue // its open issues, by number then root
 	Streams   []*Stream      // its workstreams, in list order
 	Sessions  []*Session     // sessions in a terminal linked to none of its workstreams
 	Members   []*Session     // every session whose cwd is in it, linked, away or not
 	Terminals []*Terminal    // terminals opened for none of its workstreams
+	AllTerminals []*Terminal // every terminal in it, its workstreams' too, by window
 }
 
 type Key struct {
@@ -178,6 +180,7 @@ type Session struct {
 	Streams   []*Stream // linked open issues, each at its last link; the last is primary
 	Pane      string    // the pane that shows it in the view's session, "" for none
 	Host      *Host     // the app it runs inside, nil when it has a terminal
+	TTY       string    // the terminal an interactive session runs in, "" for none
 	Elsewhere bool      // it runs in a pane of another tmux session on the server
 }
 
@@ -196,7 +199,8 @@ A few helpers read the World without joining anything:
 is what enter goes to (its first session with a pane, else its first
 terminal, else its first session), and `Project.Empty()` says nothing
 is listed in a project. `World.Root(dir)`, `World.Name(dir)` and
-`World.ProjectOf(dir)` look a directory up the way `Derive` does.
+`World.ProjectOf(dir)` look a directory up the way `Derive` does, and
+`World.Short(dir)` shows it as the view does.
 `NameLess`, `ActiveLess`, `StreamLess` and `WindowLess` are the orders
 `Derive` uses.
 
@@ -253,15 +257,31 @@ the same World, and nothing changes a World once it is built.
 The list is `present(World, query) []section`: the World's projects with
 their workstreams, sessions and terminals, then Away, then Agents, each
 kept or dropped by the query. A workstream that matches the query keeps
-everything under it. It does not regroup or reorder anything.
+everything under it. A listed project with nothing in it is a
+placeholder, keyed by its first pin, which `x` unpins. `present` does not
+regroup or reorder anything. Each entry points into the World: a
+`*Session`, `*Terminal`, `*Stream` or `*Project`.
+
+The header's counts are `World.Need`, `Working` and `Idle`. When the
+World has sessions and none is `Hooked`, the list's title says the hook
+is not installed.
 
 The cockpit's target is a `*Stream` or a `*Project` from the World. Its
 header lists `Stream.Sessions` and `Stream.Terminals`, or a project's
-`Members` and `Terminals`. Its changes count
+`Members` and `AllTerminals`. Its changes count
 from `Stream.Started`. Its issues card counts `len(Stream.Sessions)` for
 the other issues. The task picker reads the same `Stream` for the number
 of sessions on each issue, and `enter` goes to that workstream when it
-has any. The stage looks up `Session.Pane`.
+has any. The stage looks up `Session.Pane`, and the holder and the
+details read `Session.Host`, `TTY` and `Elsewhere`.
+
+In the model, `setInputs` is the one place the inputs change. It takes
+the message's change, composes `Roots` from the refreshes' and the pane
+listings' roots, `Trackers` from the reads that landed, and `Opening`
+from the pane `c` opened, and takes a new generation. `m.world()` and
+`m.sections()` are memoized on the generation (and the filter), through
+a cache that every copy of the model shares, so a key press that changes
+no input derives nothing.
 
 ## Control flow
 

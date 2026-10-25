@@ -32,7 +32,9 @@ Three sources feed the view. None of them needs a model.
   `<home>/overview/sessions/`.
 
 A session that has not loaded the hook still appears, with its title,
-prompts and issues. It shows busy or idle only, and never blocked.
+prompts and issues. It shows busy or idle only, and never blocked. When no
+listed session reports through the hook, the list's title says "hook not
+installed".
 
 The digest reads the transcripts changed since the last digest, extracts each
 session's prompts and final replies, and asks a model to sort them into
@@ -467,7 +469,8 @@ Then add the hook to the config directory's `settings.json`, beside any hooks
 already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 `Notification`, `Stop` and `SessionEnd`. It is what lets the view show a
 session as blocked; titles, prompts and issue links come from the
-transcripts and work without it:
+transcripts and work without it. Until a session has loaded it, the
+list's title says "hook not installed":
 
 ```json
 {"hooks": [{"type": "command", "command": "\"$HOME\"/.local/bin/overview hook"}]}
