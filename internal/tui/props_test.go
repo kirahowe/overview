@@ -2023,3 +2023,26 @@ func TestMarkdownKeepsIndents(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// A note that names a directory keeps its message: the directory is cut
+// from its left first, and the words around it stay whole while they and
+// two cells of the path fit.
+func TestPropANotesPathGivesWayFirst(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		path := "/" + strings.Join(rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,10}`), 1, 6).Draw(t, "dirs"), "/")
+		before := rapid.SampledFrom([]string{"", "could not add ", "adding "}).Draw(t, "before")
+		after := rapid.SampledFrom([]string{"", ": no such file or directory", " doesn't track its tasks. issues init there starts it."}).Draw(t, "after")
+		f := footerSpec{cut: -1, note: before + path + after, notePath: path, hints: []hint{{"?", "help"}}}
+		w := rapid.IntRange(10, 120).Draw(t, "w")
+		out := ansi.Strip(layFooter(f, w))
+		if ansi.StringWidth(out) > w {
+			t.Fatalf("%q is wider than %d", out, w)
+		}
+		room := w - (ansi.StringWidth("? help") + 2)
+		if ansi.StringWidth(before+after)+2 <= room {
+			if !strings.Contains(out, before) || !strings.Contains(out, after) {
+				t.Fatalf("at %d the message was cut: %q", w, out)
+			}
+		}
+	})
+}

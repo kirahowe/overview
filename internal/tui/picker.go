@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"overview/internal/world"
 	"path/filepath"
@@ -39,7 +41,8 @@ type pickedMsg struct {
 	paths  []string
 }
 
-// pinnedMsg answers a pin, or an unpin, with the project root it wrote.
+// pinnedMsg answers a pin, or an unpin, with the project root it wrote,
+// or the path it could not add.
 type pinnedMsg struct {
 	root  string
 	err   error
@@ -214,10 +217,21 @@ func pinCmd(read func(string) ([]string, error), pin func(string) error, path st
 	return func() tea.Msg {
 		if typed {
 			if _, err := read(path); err != nil {
-				return pinnedMsg{err: err}
+				return pinnedMsg{root: path, err: err}
 			}
 		}
 		root := repoRoot(resolve(path), exists)
 		return pinnedMsg{root: root, err: pin(root)}
 	}
+}
+
+// pathless is err without the path an *fs.PathError repeats, for a note
+// that names the path itself: "no such file or directory" rather than
+// "open /a/long/path: no such file or directory".
+func pathless(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return err.Error()
 }

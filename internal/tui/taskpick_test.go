@@ -76,7 +76,7 @@ func TestTaskListNotes(t *testing.T) {
 		rows                   int
 	}{
 		{"no tool", tracker{}, false, false, false, "", "Install the issues tool to track tasks.", 0},
-		{"untracked", tracker{}, false, false, true, "", "app doesn't track its tasks. issues init in its root starts it.", 0},
+		{"untracked", tracker{}, false, false, true, "", "app doesn't track its tasks. issues init there starts it.", 0},
 		{"unread", tracker{}, false, true, true, "", "reading…", 0},
 		{"failed", tracker{id: "app", err: errors.New("issues: boom")}, true, false, true, "", "issues failed: issues: boom", 0},
 		{"failed with the last list", tracker{id: "app", issues: some.issues, err: errors.New("boom")}, true, false, true, "", "issues failed: boom", 1},
@@ -205,8 +205,12 @@ func TestSOnAnUntrackedProjectOnlySays(t *testing.T) {
 		t.Fatalf("an untracked project offers s:\n%s", ansi.Strip(m.View()))
 	}
 	m = pressSettled(t, m, "s")
-	if m.taskPick.open || m.note != "/code/plain doesn't track its tasks. issues init in its root starts it." {
-		t.Fatalf("open %v, note %q", m.taskPick.open, m.note)
+	if m.taskPick.open || m.note != "/code/plain doesn't track its tasks. issues init there starts it." || m.notePath != "/code/plain" {
+		t.Fatalf("open %v, note %q, path %q", m.taskPick.open, m.note, m.notePath)
+	}
+	// In a short footer the project's path gives way, not the message.
+	if foot := ansi.Strip(resized(t, m, 60, 20).footer()); !strings.Contains(foot, "…ain doesn't track its tasks. issues init there starts it.") {
+		t.Fatalf("at 60 columns the footer reads %q", foot)
 	}
 	m.issues = nil
 	m = pressSettled(t, m, "s")

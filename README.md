@@ -317,7 +317,10 @@ instead: the picker offers the directories in it, and `tab` completes the
 selected one. `enter` pins the project the selected directory belongs to,
 or the path you typed when nothing matches. A path that ends in `/`, as
 `tab` leaves it, selects nothing until you press `down`, so `enter` pins
-that directory's project. `esc` closes the picker. A
+that directory's project. When the project cannot be added, the picker
+comes back with what you typed, and the footer says why. `esc` closes the
+picker. A note in the footer that names a long directory cuts the
+directory from its left before its message. A
 pinned project stays in the list when nothing runs in it, on a row of its
 own that offers `c` and `t`, and either starts something in it. In a
 project that tracks its tasks the row offers `s` too. `x` on that row asks

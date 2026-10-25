@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -369,4 +371,33 @@ func TestPropThePickerShowsTheEndOfTheQuery(t *testing.T) {
 			t.Fatalf("the query line %q hides the end of %q", lines[0], q)
 		}
 	})
+}
+
+// A failed add says why with the path cut from its left, not the message,
+// and puts the picker back with what was typed, to be fixed.
+func TestAFailedAddKeepsThePickerAndSaysWhy(t *testing.T) {
+	f := newFakeMux()
+	m := pickerModel(t, f)
+	useDirs(&m, fakeDirs{"/": {"code"}})
+	m.deps.readDirs = func(dir string) ([]string, error) {
+		if dir == "/" {
+			return []string{"code"}, nil
+		}
+		return nil, &fs.PathError{Op: "open", Path: dir, Err: syscall.ENOENT}
+	}
+	long := "/private/tmp/qa2/work/a-rather-long-directory-name"
+	m = pressSettled(t, m, append([]string{"a"}, typed(long)...)...)
+	m = pressSettled(t, m, "enter")
+	if !m.pick.open || m.pick.query != long {
+		t.Fatalf("after a failed add: open %v, query %q", m.pick.open, m.pick.query)
+	}
+	if m.note != "could not add "+long+": no such file or directory" {
+		t.Fatalf("note %q", m.note)
+	}
+	m.pick = picker{}
+	m = resized(t, m, 60, 20)
+	foot := ansi.Strip(m.footer())
+	if !strings.Contains(foot, "name: no such file or directory") || !strings.Contains(foot, "could not add …") {
+		t.Fatalf("at 60 columns the footer reads %q", foot)
+	}
 }

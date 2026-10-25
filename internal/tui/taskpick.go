@@ -99,7 +99,7 @@ func taskListOf(name string, t world.Tracker, tracked, reading, tool bool, sessi
 }
 
 func untrackedNote(name string) string {
-	return name + " doesn't track its tasks. issues init in its root starts it."
+	return name + " doesn't track its tasks. issues init there starts it."
 }
 
 // taskOpens says what s does on a project: open the picker, or only say
@@ -141,7 +141,7 @@ func (m model) openTasks(root string) (model, tea.Cmd) {
 	_, tracked := m.world().Tracker(root)
 	open, note := taskOpens(m.name(root), tracked, m.trackerReading(root), m.issues != nil)
 	if !open {
-		return m.say(note), nil
+		return m.sayAbout(note, m.name(root)), nil
 	}
 	// From the cockpit the zoom it holds stays for the picker.
 	m.cockpit, m.cockpitSoon = cockpit{}, false

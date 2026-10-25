@@ -1158,7 +1158,10 @@ type footerSpec struct {
 	mode   []part // where the keyboard is: a search, a picker, the panels mode
 	cut    int    // the mode part cut from its left when the line is short, -1 for none
 	note   string // what the view has to say, in place of the hints
-	hints  []hint
+	// notePath is a directory named in note, cut from its left before
+	// the note is cut at its end, so the message keeps its words.
+	notePath string
+	hints    []hint
 }
 
 // minHints is how many hints the footer keeps however long the rest is.
@@ -1210,6 +1213,12 @@ func layFooter(f footerSpec, w int) string {
 	for len(status) > 0 && width(plain(status, note)) > room {
 		status = status[:len(status)-1]
 	}
+	if over := width(plain(status, note)) - room; over > 0 && f.notePath != "" {
+		if i := strings.Index(note, f.notePath); i >= 0 {
+			pw := ansi.StringWidth(f.notePath)
+			note = note[:i] + keepEnd(f.notePath, max(pw-over, 2)) + note[i+len(f.notePath):]
+		}
+	}
 	if over := width(plain(status, note)) - room; over > 0 && note != "" {
 		keep := max(ansi.StringWidth(note)-over, 2)
 		note = ansi.Truncate(note, keep, "…")
@@ -1252,7 +1261,7 @@ func layFooter(f footerSpec, w int) string {
 // keyboard is, and then the note when there is one, and otherwise the
 // keys for what is selected.
 func (m model) footer() string {
-	f := footerSpec{cut: -1, note: m.note}
+	f := footerSpec{cut: -1, note: m.note, notePath: m.notePath}
 	if w := m.world(); w.Loaded && w.RefreshErr == nil {
 		switch h := m.world().Orchestrator; {
 		case !h.Running:
