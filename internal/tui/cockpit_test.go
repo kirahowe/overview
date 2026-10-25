@@ -557,3 +557,28 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 		t.Fatalf("the cases did not cover the kinds: %v, a workstream with a silent enter %v", kinds, says)
 	}
 }
+
+// A cockpit too short for its last card uses the row it has: the card's
+// rule says how much is under it, rather than a blank line.
+func TestTheCockpitUsesItsLastRow(t *testing.T) {
+	m := workModel(t, 100, 12)
+	m.sel = "task:" + ovRoot + "#6"
+	m.cockpit.open = true
+	text := screenText(m)
+	if last := text[len(text)-2]; !strings.Contains(last, "── Issues ─") || !strings.Contains(last, "↓ 3 more issues ──") {
+		t.Fatalf("the last row of the cards:\n%s", strings.Join(text, "\n"))
+	}
+	for h := 6; h <= 30; h++ {
+		m = resized(t, m, 100, h)
+		cw, ch := m.cardsSize()
+		rows := m.cockpitRows(m.target())
+		lines, _, places := layoutCards(rows, cw, ch, "")
+		total := 0
+		for _, r := range rows {
+			total += len(r)
+		}
+		if len(places) < total && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+			t.Errorf("at 100x%d %d of %d cards show above a blank row", h, len(places), total)
+		}
+	}
+}

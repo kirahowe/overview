@@ -1938,8 +1938,9 @@ func TestATerminalRowKeepsItsName(t *testing.T) {
 }
 
 // A card is left out only when there is no room for it: when the cards
-// shown leave fewer than minCard lines free. A shortened card fills what
-// is left, and a shortened issues card keeps its cursor in view.
+// shown leave no line free. A shortened card fills what is left, and a
+// shortened issues card keeps its cursor in view whenever it has a line
+// besides its rule.
 func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows := genCards(t)
@@ -1961,10 +1962,10 @@ func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 		for _, p := range places {
 			used = max(used, p.r.y+p.r.h)
 		}
-		if len(places) < total && h-used >= minCard {
+		if len(places) < total && h-used >= 1 && w >= 6 {
 			t.Fatalf("%d of %d cards shown at %dx%d with %d lines free", len(places), total, w, h, h-used)
 		}
-		if len(places) == total && w >= 20 {
+		if len(places) == total && w >= 20 && places[len(places)-1].r.h >= 2 {
 			p := places[len(places)-1]
 			if !strings.Contains(ansi.Strip(strings.Join(lines[p.r.y:p.r.y+p.r.h], "\n")), "▸ ") {
 				t.Fatalf("the issues card at %+v hides its cursor:\n%s", p.r, ansi.Strip(strings.Join(lines, "\n")))

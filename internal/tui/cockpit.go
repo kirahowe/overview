@@ -271,7 +271,8 @@ func (m model) cardsSize() (w, h int) {
 func (m model) issuesShown() bool {
 	w, h := m.cardsSize()
 	_, _, places := layoutCards(m.cockpitRows(m.target()), w, h, "")
-	return slices.ContainsFunc(places, func(p placed) bool { return p.id == issuesPanel })
+	// A card cut to its rule alone shows no issue to put the cursor on.
+	return slices.ContainsFunc(places, func(p placed) bool { return p.id == issuesPanel && p.r.h >= 2 })
 }
 
 // inCockpitList says whether a click at column x lands on the list in the

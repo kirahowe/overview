@@ -183,7 +183,10 @@ the blocked ones, the next three ready ones by priority, and how many sit
 in the inbox. A
 project's cockpit shows its root and the kind of repository, its
 sessions and terminals, its issues, and its uncommitted changes. A card
-the window has no room for is left out, from the bottom up. Each group
+the window has no room for is left out, from the bottom up. The last card
+shown fills the rows that are left, cut short with a line that says how
+many more it has, or, with one row left, its rule alone saying `↓ 3 more
+issues`. Each group
 of the issues card lists a few issues and says how many more it has.
 
 The cockpit's issues card can take the keyboard, and the other cards only

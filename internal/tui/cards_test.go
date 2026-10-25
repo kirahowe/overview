@@ -281,11 +281,12 @@ func TestLayoutCardsDropsWhatDoesNotFit(t *testing.T) {
 	rows := [][]card{{box("a", 1)}, {box("b", 2)}, {box("c", 1), box("d", 3)}, {box("e", 1)}}
 	for _, c := range []struct{ w, h, shown int }{
 		{80, 40, 5},
-		{80, 7, 2},  // a 2, b 3, then c and d need 4
-		{80, 10, 4}, // c and d side by side, 4 high; e needs 2 more
+		{80, 7, 4},  // a 2, b 3, then c and d need 4 and get 2
+		{80, 10, 5}, // c and d side by side, 4 high; e needs 2 and gets its rule
 		{60, 10, 4}, // stacked: c 2, then d needs 4 and is shortened to 3
-		{60, 9, 3},  // stacked: c 2, then 2 lines are too few for d
-		{60, 1, 0},
+		{60, 9, 4},  // stacked: c 2, then d gets its rule and a line
+		{60, 1, 1},  // a's rule alone
+		{60, 0, 0},
 	} {
 		lines, rules, places := layoutCards(rows, c.w, c.h, "")
 		if len(places) != c.shown || len(lines) != c.h || len(rules) != c.h {

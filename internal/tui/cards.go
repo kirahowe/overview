@@ -56,10 +56,6 @@ type cardRow struct {
 	first          bool
 }
 
-// minCard is the fewest lines a card is shown in: its rule, a line of its
-// body and a line that says how much more it has.
-const minCard = 3
-
 // lineRows are a body's lines as rows that count themselves.
 func lineRows(body []string) []cardRow {
 	out := make([]cardRow, len(body))
@@ -179,6 +175,38 @@ func blanks(w, h int) []string {
 	return out
 }
 
+// moreNote says how many of unit the rows above and below a card's one
+// shown row leave out, "↑ 2 more · ↓ 3 more issues", or with no row shown
+// (all), how many are under its rule, "↓ 5 more issues". It is "" when
+// nothing is left out.
+func moreNote(above, below []cardRow, unit string, all bool) string {
+	count := func(rs []cardRow) (n int) {
+		for _, r := range rs {
+			n += r.weight
+		}
+		return n
+	}
+	units := func(n int) string {
+		if n != 1 {
+			return unit + "s"
+		}
+		return unit
+	}
+	a, b := count(above), count(below)
+	if all {
+		a, b = 0, a+b
+	}
+	switch {
+	case a > 0 && b > 0:
+		return fmt.Sprintf("↑ %d more · ↓ %d more %s", a, b, units(b))
+	case a > 0:
+		return fmt.Sprintf("↑ %d more %s", a, units(a))
+	case b > 0:
+		return fmt.Sprintf("↓ %d more %s", b, units(b))
+	}
+	return ""
+}
+
 // cardInner is the width a card w wide draws its body at.
 func cardInner(w int) int { return max(w-2, 0) }
 
@@ -192,10 +220,12 @@ type placed struct {
 // cells, and says which lines are the top rules of cards and where each
 // card went. A row of two goes side by side when w has room, with a line
 // between them, and else becomes two rows. A row that does not fit the
-// height left is shown shortened in what is left, when that is at least
-// minCard lines, and else dropped; every row after it is dropped. So a
-// card is left out only when there is no room for it, and what is left
-// out is always the last cards. The card that is sel is drawn lit.
+// height left is shown shortened in what is left: its rule and as many
+// lines as fit, the last saying how many more there are, or on a single
+// line its rule alone, with "↓ n more" in place of its note. Every row
+// after it is dropped, so no line is left blank while a card has more to
+// show, and what is left out is always the last cards. The card that is
+// sel is drawn lit.
 func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []bool, places []placed) {
 	var flat [][]card
 	for _, r := range rows {
@@ -221,16 +251,37 @@ func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []
 		}
 		if len(lines)+tall > h {
 			left := h - len(lines)
-			if left < minCard {
+			if left < 1 {
 				break
 			}
 			tall = left
+			r = slices.Clone(r)
 			for i, c := range r {
 				rs, at, unit := lineRows(bodies[i]), 0, "line"
 				if c.rows != nil {
 					rs, at, unit = c.rows(cardInner(widths[i]))
 				}
-				bodies[i] = shorten(rs, at, tall-1, unit)
+				if tall > 2 || len(rs) <= tall-1 {
+					bodies[i] = shorten(rs, at, tall-1, unit)
+					continue
+				}
+				// The rule and at most one row fit: the row is the one
+				// kept in view, and the rule says what is above and below
+				// it in place of its note.
+				bodies[i] = nil
+				above, below := rs, []cardRow(nil)
+				if tall == 2 {
+					at = max(0, min(at, len(rs)-1))
+					l := rs[at].line
+					if rs[at].labelled != "" {
+						l = rs[at].labelled
+					}
+					bodies[i] = []string{l}
+					above, below = rs[:at], rs[at+1:]
+				}
+				if note := moreNote(above, below, unit, tall == 1); note != "" {
+					r[i].right = dim.Render(note)
+				}
 			}
 		}
 		lit := func(c card) bool { return c.id != "" && c.id == sel }
