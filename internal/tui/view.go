@@ -789,7 +789,7 @@ func (m model) entryLine(e entry, selected bool) string {
 	if away && !r.NeedsYou() {
 		name = dim
 	}
-	left := append(indent, seg{mark + " ", markStyle}, seg{r.Name, name})
+	left := append(indent, seg{mark + " ", markStyle}, seg{r.Label(), name})
 	var right []seg
 	switch {
 	case e.alias == agentsPrefix:

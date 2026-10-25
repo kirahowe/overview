@@ -91,8 +91,9 @@ then its unit, as `1/3`, then the count itself. A project is
 the nearest parent directory with a `.jj` or `.git` in it, or the session's
 own directory when there is none, and projects are in alphabetical order.
 Every entry takes one line. Inside a project, working sessions come before
-idle ones, and the latest activity comes first. A session's row shows its
-state and for how long: `!` blocked, `?` asking, a spinner while it works,
+idle ones, and the latest activity comes first. A session's row is named
+by the title Claude Code gave it, or by its session name until it has one,
+and shows its state and for how long: `!` blocked, `?` asking, a spinner while it works,
 and `○` when idle. A session needs you when it is blocked, or when it is
 idle and its last reply ends with a question. The project's terminals come
 after its sessions, marked `$`, and a project you pinned is listed even

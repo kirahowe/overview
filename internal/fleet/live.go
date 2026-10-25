@@ -157,6 +157,15 @@ func (r Row) Asking() bool {
 	return strings.HasSuffix(reply, "?")
 }
 
+// Label is what the list calls the session: the title Claude Code gave
+// it, or its name until it has one.
+func (r Row) Label() string {
+	if r.Title != "" {
+		return r.Title
+	}
+	return r.Name
+}
+
 // NeedsYou is true for a session that cannot go on without its owner.
 func (r Row) NeedsYou() bool { return r.State == Blocked || r.Asking() }
 

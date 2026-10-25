@@ -550,3 +550,20 @@ func TestNarrowRowsKeepTheirNames(t *testing.T) {
 		}
 	}
 }
+
+func TestASessionRowShowsItsTitle(t *testing.T) {
+	m := newTestModel(t)
+	m.w = 60
+	for _, c := range []struct{ title, want string }{
+		{"Fix the parser's overflow", "Fix the parser's overflow"},
+		{"", "home-opds-4c"},
+	} {
+		r := row("s", "home-opds-4c", "", 1)
+		r.Title = c.title
+		s := &world.Session{Row: r, Project: &world.Project{Name: "home-opds"}}
+		got := ansi.Strip(m.entryLine(entry{kind: sessionEntry, sess: s}, false))
+		if !strings.Contains(got, c.want) || c.title != "" && strings.Contains(got, "home-opds-4c") {
+			t.Errorf("title %q: %q, want %q in place of the name", c.title, got, c.want)
+		}
+	}
+}
