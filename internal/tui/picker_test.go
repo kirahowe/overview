@@ -315,3 +315,58 @@ func TestEnterAfterTabPinsTheDirectory(t *testing.T) {
 		}
 	}
 }
+
+// A long query keeps its end and the caret in view, and two long
+// directories that differ only at the end stay told apart, as a project's
+// heading keeps its end.
+func TestThePickerKeepsTheEndsOfLongPaths(t *testing.T) {
+	m := newTestModel(t)
+	m = update(m, tea.WindowSizeMsg{Width: 60, Height: 20})
+	dir := "/private/tmp/claude-501/-Users-kira-code-projects-overview"
+	m.pick = picker{open: true, query: dir + "/work-", from: dir, read: true,
+		paths: []string{dir + "/work-alpha", dir + "/work-beta"}}
+	got := screenText(m)
+	if !strings.Contains(got[0], "/work-▏") || !strings.HasPrefix(strings.TrimSpace(got[0]), "› …") {
+		t.Errorf("the query line is %q", got[0])
+	}
+	var rows []string
+	for _, l := range got {
+		if strings.Contains(l, "work-alpha") || strings.Contains(l, "work-beta") {
+			rows = append(rows, l)
+		}
+	}
+	if len(rows) != 2 || !strings.Contains(rows[0], "…") {
+		t.Errorf("rows %q, want both, ellipsized at the start", rows)
+	}
+}
+
+// Whatever is typed, at any width, the query's last characters and the
+// caret are on its line, and no line of the picker is wider than the pane.
+func TestPropThePickerShowsTheEndOfTheQuery(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		w := rapid.IntRange(12, 200).Draw(t, "w")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: rapid.IntRange(3, 40).Draw(t, "h")})
+		q := rapid.StringMatching(`/[a-zA-Z0-9/._ 日本-]{0,150}`).Draw(t, "query")
+		dir, _ := splitPathQuery(q, "")
+		var paths []string
+		for _, s := range rapid.SliceOfN(rapid.StringMatching(`[a-z-]{1,80}`), 0, 5).Draw(t, "names") {
+			paths = append(paths, filepath.Join(dir, s))
+		}
+		m.pick = picker{open: true, query: q, from: dir, read: true, paths: paths}
+		lines := strings.Split(ansi.Strip(m.View()), "\n")
+		for i, l := range lines {
+			if ansi.StringWidth(l) > w {
+				t.Fatalf("line %d is %d wide in %d: %q", i, ansi.StringWidth(l), w, l)
+			}
+		}
+		// The end of the query that fits beside "› " and the caret.
+		tail := []rune(q)
+		tail = tail[max(len(tail)-3, 0):]
+		if !strings.Contains(lines[0], string(tail)+"▏") {
+			t.Fatalf("the query line %q hides the end of %q", lines[0], q)
+		}
+	})
+}

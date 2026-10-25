@@ -1728,3 +1728,24 @@ func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
 		}
 	})
 }
+
+// keepEnd never goes past w, keeps text that fits as it is, and otherwise
+// keeps as much of the end as fits after an ellipsis.
+func TestPropKeepEnd(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		s := rapid.StringMatching(`[a-z/日本 -]{0,60}`).Draw(t, "s")
+		w := rapid.IntRange(-2, 70).Draw(t, "w")
+		got := keepEnd(s, w)
+		gw := ansi.StringWidth(got)
+		switch {
+		case gw > max(w, 0):
+			t.Fatalf("keepEnd(%q, %d) = %q, %d wide", s, w, got, gw)
+		case ansi.StringWidth(s) <= w && got != s:
+			t.Fatalf("keepEnd(%q, %d) = %q, though it fits", s, w, got)
+		case ansi.StringWidth(s) > w && w > 0 && (!strings.HasPrefix(got, "…") || !strings.HasSuffix(s, strings.TrimPrefix(got, "…"))):
+			t.Fatalf("keepEnd(%q, %d) = %q, not an end of it", s, w, got)
+		case ansi.StringWidth(s) > w && w > 2 && gw < w-1:
+			t.Fatalf("keepEnd(%q, %d) = %q, wasting room", s, w, got)
+		}
+	})
+}

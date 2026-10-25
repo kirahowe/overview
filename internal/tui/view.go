@@ -109,7 +109,10 @@ func (m model) sessionsView() []string {
 func (m model) pickerView() []string {
 	w, h := m.contentWidth(), m.listHeight()
 	matches := m.pickMatches()
-	lines := []string{m.plain(heading.Render("› ") + fg(pal.Text).Render(m.pick.query) + dim.Render("▏")), m.plain("")}
+	// The query keeps its end and the caret after it, scrolling its start
+	// away, so what is typed always shows.
+	query := keepEnd(m.pick.query, w-3)
+	lines := []string{m.plain(heading.Render("› ") + fg(pal.Text).Render(query) + dim.Render("▏")), m.plain("")}
 	say := func(s string) {
 		for _, l := range wrap(dim.Render(s), w) {
 			lines = append(lines, m.plain(l))
@@ -131,7 +134,8 @@ func (m model) pickerView() []string {
 		sel := max(m.pick.sel, 0)
 		start := window(0, sel, sel+1, len(matches), room)
 		for i := start; i < min(start+room, len(matches)); i++ {
-			lines = append(lines, m.line([]seg{{"  " + m.short(matches[i]), fg(pal.Text)}}, nil, false, i == m.pick.sel))
+			// A long directory keeps its end, as a project's heading does.
+			lines = append(lines, m.line([]seg{{"  " + keepEnd(m.short(matches[i]), w-2), fg(pal.Text)}}, nil, false, i == m.pick.sel))
 		}
 	}
 	return lines
@@ -389,7 +393,7 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 			for _, s := range right {
 				text += s.text
 			}
-			right = []seg{{"…" + ansi.TruncateLeft(text, rw-room+1, ""), right[len(right)-1].style}}
+			right = []seg{{keepEnd(text, room), right[len(right)-1].style}}
 		default:
 			right = nil
 		}
@@ -452,9 +456,7 @@ func (m model) rule(title string, style lipgloss.Style, note string) string {
 		room -= nw + 1
 	}
 	// A long title keeps its end, where a project's name is.
-	if tw := ansi.StringWidth(title); tw > max(room, 1) {
-		title = "…" + ansi.TruncateLeft(title, tw-max(room, 1)+1, "")
-	}
+	title = keepEnd(title, max(room, 1))
 	n := max(room-ansi.StringWidth(title)+1, 0)
 	s := style.Render(title) + " " + fg(pal.Border).Render(strings.Repeat("─", n))
 	if note != "" {
@@ -1452,6 +1454,29 @@ func centre(screen, over []string, w int) []string {
 }
 
 // Text helpers.
+
+// keepEnd cuts plain s to at most w cells by dropping its start, with an
+// ellipsis where it cut, so a path keeps the part that tells it apart
+// and typed text keeps its end, where the caret is.
+func keepEnd(s string, w int) string {
+	switch {
+	case ansi.StringWidth(s) <= w:
+		return s
+	case w <= 0:
+		return ""
+	}
+	rs := []rune(s)
+	i, used := len(rs), 1 // the ellipsis
+	for i > 0 {
+		rw := ansi.StringWidth(string(rs[i-1]))
+		if used+rw > w {
+			break
+		}
+		used += rw
+		i--
+	}
+	return "…" + string(rs[i:])
+}
 
 // fit cuts s to w cells and pads it to exactly w, so panes line up.
 func fit(s string, w int) string {

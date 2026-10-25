@@ -454,11 +454,7 @@ func fileLines(files []fileStat, uncommitted, w int) []string {
 		}
 		// A long path keeps its end, where the file's name is.
 		room := max(w-ansi.StringWidth(counts)-1, 1)
-		p := f.path
-		if pw := ansi.StringWidth(p); pw > room {
-			p = "…" + ansi.TruncateLeft(p, pw-room+1, "")
-		}
-		out = append(out, spread(fg(pal.Text).Render(p), counts, w))
+		out = append(out, spread(fg(pal.Text).Render(keepEnd(f.path, room)), counts, w))
 	}
 	if more := len(fs) - n; more > 0 {
 		out = append(out, dim.Render(fmt.Sprintf("… %d more files", more)))
