@@ -1,9 +1,6 @@
 package fleet
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -12,10 +9,10 @@ import (
 	"unicode"
 )
 
-// maxTasks is how many linked issues a session's tasks file reads as.
+// maxTasks is how many linked issues a session reads as.
 const maxTasks = 8
 
-// TaskRef names an issue a session took on, as the hook saw it. Project is
+// TaskRef names an issue a session took on, as a transcript shows it. Project is
 // the issues project id when the reference gave one; Dir is the directory the
 // command named (made absolute against the event's cwd) or else the event's cwd.
 // Linked is when the session first took it on, zero when that is unknown.
@@ -31,38 +28,6 @@ type TaskRef struct {
 func (r TaskRef) Same(o TaskRef) bool {
 	return r.Project == o.Project && r.Dir == o.Dir && r.ID == o.ID
 }
-
-// EventTasks returns the issues an event shows the session taking on. The
-// event's own cwd wins over fallbackCwd, the one the session record holds.
-func EventTasks(ev HookEvent, fallbackCwd string) []TaskRef {
-	cwd := ev.Cwd
-	if cwd == "" {
-		cwd = fallbackCwd
-	}
-	switch ev.Name {
-	case "UserPromptSubmit":
-		if r, ok := OpeningTask(ev.Prompt, cwd); ok {
-			return []TaskRef{r}
-		}
-	case "PostToolUse":
-		if ev.ToolName != "Bash" {
-			return nil
-		}
-		var in struct {
-			Command string `json:"command"`
-		}
-		if json.Unmarshal(ev.ToolInput, &in) != nil {
-			return nil
-		}
-		return IssuesStarts(in.Command, cwd)
-	}
-	return nil
-}
-
-// A session's tasks file is a log the hook only appends to, one ref as a
-// JSON object per line. The session's own hook and those of its parallel
-// subagents all link to it, and an append of one short line is atomic, so
-// no link can drop another the way a read, merge and rewrite would.
 
 // FoldTasks is the task list that lines, read in order, add up to: each
 // ref once, as late as it was last linked, with the first time it was
@@ -82,89 +47,6 @@ func FoldTasks(lines []TaskRef) []TaskRef {
 		out = out[len(out)-maxTasks:]
 	}
 	return out
-}
-
-// TasksToAppend is the lines the hook appends to link refs, at now, to a
-// session whose tasks file folds to cur. It appends the fewest, a suffix
-// of refs in the order they would be linked, that leave the file folding
-// to the same refs in the same order as appending all of them would. So
-// an event seen twice writes nothing the second time, and neither does a
-// replayed `issues start 3 && issues start 4`. A ref linked before keeps
-// its first time.
-func TasksToAppend(cur, refs []TaskRef, now time.Time) []TaskRef {
-	// Linking a ref twice in one batch is the same as linking it at its
-	// last place.
-	var b []TaskRef
-	for i, r := range refs {
-		if slices.IndexFunc(refs[i+1:], r.Same) >= 0 {
-			continue
-		}
-		r.Linked = now
-		if k := slices.IndexFunc(cur, r.Same); k >= 0 && !cur[k].Linked.IsZero() {
-			r.Linked = cur[k].Linked
-		}
-		b = append(b, r)
-	}
-	target := FoldTasks(append(slices.Clone(cur), b...))
-	for k := len(b); k > 0; k-- {
-		if slices.EqualFunc(FoldTasks(append(slices.Clone(cur), b[k:]...)), target, TaskRef.Same) {
-			return b[k:]
-		}
-	}
-	return b
-}
-
-// ParseTasks reads a tasks file's lines. A line that does not parse, such
-// as one cut short by a full disk, is skipped.
-func ParseTasks(b []byte) []TaskRef {
-	var out []TaskRef
-	for _, line := range bytes.Split(b, []byte("\n")) {
-		var r TaskRef
-		if len(bytes.TrimSpace(line)) > 0 && json.Unmarshal(line, &r) == nil && r.ID > 0 {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-func (h Home) tasksFile(id string) string {
-	return filepath.Join(h.sessionsDir(), filepath.Base(id)+".tasks")
-}
-
-// readTasks is the session's tasks file's lines, nil when it has none.
-func (h Home) readTasks(id string) []TaskRef {
-	b, err := os.ReadFile(h.tasksFile(id))
-	if err != nil {
-		return nil
-	}
-	return ParseTasks(b)
-}
-
-// loadTasks is the issues the session has taken on.
-func (h Home) loadTasks(id string) []TaskRef { return FoldTasks(h.readTasks(id)) }
-
-// linkTasks links what ev shows to its session. It appends to the
-// session's tasks file, one write per line, only when a link changes what
-// the file folds to. It never rewrites the file, so no append is lost.
-func (h Home) linkTasks(ev HookEvent, fallbackCwd string, now time.Time) {
-	refs := EventTasks(ev, fallbackCwd)
-	if len(refs) == 0 {
-		return
-	}
-	add := TasksToAppend(h.loadTasks(ev.SessionID), refs, now)
-	if len(add) == 0 || os.MkdirAll(h.sessionsDir(), 0o755) != nil {
-		return
-	}
-	f, err := os.OpenFile(h.tasksFile(ev.SessionID), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		return
-	}
-	for _, r := range add {
-		if b, err := json.Marshal(r); err == nil {
-			_, _ = f.Write(append(b, '\n'))
-		}
-	}
-	f.Close()
 }
 
 // OpeningTask reports the issue named by the opening line overview writes

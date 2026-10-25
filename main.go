@@ -303,7 +303,7 @@ func themes(cfg config.Config, rest []string) error {
 }
 
 func printSessions(home fleet.Home, user string) error {
-	rows, err := home.Rows()
+	rows, err := home.Rows(fleet.NewTranscripts())
 	if err != nil {
 		return err
 	}

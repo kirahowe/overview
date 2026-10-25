@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -674,10 +673,10 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 
 // Workstreams, end to end: a project with .issues lists its issue in
 // progress before its session, with no session under it. c on it starts
-// claude with the opening prompt that names the issue. Once overview hook
-// reads that prompt, the session is listed under the workstream. t opens
-// a terminal that is listed under it, and an issues start that the hook
-// reads moves the other session there too. Last, s on a tracked project
+// claude with the opening prompt that names the issue. Once that prompt
+// is in the session's transcript, the session is listed under the
+// workstream. t opens a terminal that is listed under it, and an issues
+// start in the other session's transcript moves it there too. Last, s on a tracked project
 // pinned with nothing running opens the task picker, and enter on the
 // issue typed for starts claude on it.
 func TestWorkstreams(t *testing.T) {
@@ -739,7 +738,8 @@ func TestWorkstreams(t *testing.T) {
 		t.Fatalf("the session started as %q", got)
 	}
 
-	// The fake claude has no hook, so the new session is listed unlinked.
+	// Nothing has been written to the new session's transcript yet, so it
+	// is listed unlinked.
 	r.lists(t, r.work, session, started)
 	r.ov.must("select-pane", "-t", r.list.id)
 	waitFor(t, "the new session in the list", func() (bool, string) {
@@ -747,10 +747,11 @@ func TestWorkstreams(t *testing.T) {
 		return strings.Contains(s, "e2e-1"), s
 	})
 
-	// The hook links a session whose prompt names the issue, and the list
-	// moves it under the workstream.
-	r.hook(t, map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "cwd": r.work,
-		"transcript_path": filepath.Join(r.home, "projects", "work", "s-1.jsonl"), "prompt": "Work on work#6: keep width"})
+	// The session's transcript opens with the prompt that names the issue,
+	// as Claude Code writes it, and the list moves the session under the
+	// workstream.
+	r.transcript(t, "s-1", map[string]any{"type": "user", "isSidechain": false, "timestamp": "2026-10-23T17:44:47.677Z",
+		"cwd": r.work, "message": map[string]any{"role": "user", "content": "Work on work#6: keep width"}})
 	waitFor(t, "the linked session under the workstream", func() (bool, string) {
 		s := r.screen()
 		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "e2e-1"), strings.Index(s, "e2e-0")
@@ -772,11 +773,14 @@ func TestWorkstreams(t *testing.T) {
 		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
 	})
 
-	// An agent's issues start links the other session, which goes under
-	// the workstream too, before its terminal.
-	r.hook(t, map[string]any{"hook_event_name": "PostToolUse", "session_id": "s-0", "cwd": r.work,
-		"transcript_path": filepath.Join(r.home, "projects", "work", "s-0.jsonl"),
-		"tool_name":       "Bash", "tool_input": map[string]any{"command": "issues start 6"}})
+	// An issues start that ran and succeeded in the other session's
+	// transcript links it too, and it goes under the workstream before the
+	// terminal.
+	r.transcript(t, "s-0",
+		map[string]any{"type": "assistant", "timestamp": "2026-10-23T17:50:00.000Z", "cwd": r.work, "message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": map[string]any{"command": "issues start 6"}}}}},
+		map[string]any{"type": "user", "timestamp": "2026-10-23T17:50:02.000Z", "message": map[string]any{"content": []any{
+			map[string]any{"tool_use_id": "toolu_1", "type": "tool_result", "content": "started", "is_error": false}}}})
 	waitFor(t, "both sessions under the workstream", func() (bool, string) {
 		s := r.screen()
 		i, term := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ ")
@@ -835,17 +839,27 @@ func TestWorkstreams(t *testing.T) {
 	})
 }
 
-// hook runs overview hook on a payload, as Claude Code would.
-func (r *rig) hook(t *testing.T, payload map[string]any) {
+// transcript appends lines to a session's transcript, as Claude Code
+// writes them, under the rig's config directory.
+func (r *rig) transcript(t *testing.T, session string, lines ...map[string]any) {
 	t.Helper()
-	b, err := json.Marshal(payload)
+	path := filepath.Join(r.home, "projects", "work", session+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(r.bin, "hook")
-	cmd.Stdin = bytes.NewReader(b)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("overview hook: %v\n%s", err, out)
+	defer f.Close()
+	for _, l := range lines {
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

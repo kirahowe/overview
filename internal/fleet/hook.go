@@ -20,31 +20,21 @@ func Hook(r io.Reader) {
 	if json.Unmarshal(payload, &ev) != nil || ev.SessionID == "" {
 		return
 	}
+	// Subagent hooks say nothing about the session's own state.
+	if ev.AgentID != "" {
+		return
+	}
 	home, ok := hookHome(ev)
 	if !ok {
 		return
 	}
 	prev := home.loadSession(ev.SessionID)
 	now := time.Now().UTC().Truncate(time.Second)
-	// Subagent hooks carry an agent id. They say nothing about the session's
-	// own state, but an orchestrator hands `issues start` to its subagents,
-	// so what they start is linked to the parent. Links live in their own
-	// file, so this never rewrites the parent's record and cannot clobber
-	// what the parent's own hook wrote meanwhile. A parent with no record
-	// yet gets nothing made for it here.
-	if ev.AgentID != "" {
-		if prev.ID != "" {
-			home.linkTasks(ev, prev.Cwd, now)
-		}
-		return
-	}
 	next, changed := Apply(prev, ev, now)
 	if next.State == Ended {
 		os.Remove(home.sessionFile(ev.SessionID))
-		os.Remove(home.tasksFile(ev.SessionID))
 		return
 	}
-	home.linkTasks(ev, next.Cwd, now)
 	if changed {
 		_ = home.saveSession(next)
 	}

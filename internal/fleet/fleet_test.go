@@ -41,9 +41,6 @@ func TestApplyFollowsATurn(t *testing.T) {
 		}
 		s = next
 	}
-	if s.LastPrompt != "fix the parser" {
-		t.Fatalf("prompt not flattened: %q", s.LastPrompt)
-	}
 }
 
 // The transcript path in the payload is all that names a session's home.
@@ -54,7 +51,7 @@ func TestHookWritesOnlyUnderItsOwnHome(t *testing.T) {
 	Hook(strings.NewReader(`{"hook_event_name":"Stop","session_id":"s1","agent_id":"sub","transcript_path":"` + path + `"}`))
 
 	got := kira.Sessions()["s1"]
-	if got.State != Working || got.LastPrompt != "hello" {
+	if got.State != Working {
 		t.Fatalf("unexpected record: %+v", got)
 	}
 	if n := len(seeq.Sessions()); n != 0 {
@@ -120,9 +117,9 @@ func TestReadThreadKeepsOnlyTurnsInTheWindow(t *testing.T) {
 		t.Fatalf("unexpected turns: %+v", th.Turns)
 	}
 
-	m, ok := transcriptMeta(path)
+	m, ok := NewTranscripts().Facts(path)
 	if !ok || m.Title != "Add a test" || m.LastPrompt != "add a test" || m.LastReply != "Test added and passing." {
-		t.Fatalf("unexpected meta: %+v", m)
+		t.Fatalf("unexpected facts: %+v", m)
 	}
 	if turns := RecentTurns(path, 5); len(turns) != 2 || turns[0].Prompt != "old prompt" {
 		t.Fatalf("unexpected recent turns: %+v", turns)

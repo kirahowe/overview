@@ -19,15 +19,15 @@ const (
 	Ended   State = "ended"
 )
 
-// Session is what the hooks have recorded about one session. It is the only
-// thing the hook writes, one small file per session.
+// Session is what the hooks have recorded about one session: the state no
+// other source shows. It is the only thing the hook writes, one small file
+// per session.
 type Session struct {
 	ID         string    `json:"session_id"`
 	Cwd        string    `json:"cwd,omitempty"`
 	State      State     `json:"state"`
 	Since      time.Time `json:"since"`
 	Reason     string    `json:"reason,omitempty"`
-	LastPrompt string    `json:"last_prompt,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
 }
 
@@ -41,10 +41,6 @@ type HookEvent struct {
 	NotificationType string `json:"notification_type"`
 	Message          string `json:"message"`
 	AgentID          string `json:"agent_id"`
-	// ToolName and ToolInput describe a tool call. For Bash the input is
-	// {"command": "..."}.
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 // Apply folds one hook event into a session's record and reports whether
@@ -66,7 +62,6 @@ func Apply(s Session, ev HookEvent, now time.Time) (Session, bool) {
 		}
 	case "UserPromptSubmit":
 		next.State = Working
-		next.LastPrompt = clip(ev.Prompt, 300)
 	case "PreToolUse", "PostToolUse":
 		// A tool running again is the only sign that a prompt was answered.
 		if s.State == Blocked {

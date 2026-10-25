@@ -23,14 +23,16 @@ Three sources feed the view. None of them needs a model.
 
 - `claude agents --json` says which sessions are running and whether each is
   busy or idle.
-- A hook records what that listing cannot show, mainly that a session is
-  blocked on a permission prompt. Each session has one small file in
-  `<home>/overview/sessions/`, and a second, `<id>.tasks`, once it is
-  linked to an issue.
-- The session's transcript supplies its title and last prompt.
+- Each session's transcript says what it has said and done: its title, last
+  prompt and last reply, and the issues it took on. overview reads a
+  transcript once and then only the lines appended since, and reads a
+  session's subagent transcripts the same way.
+- A hook records the one thing neither shows, that a session is blocked on
+  a permission prompt. Each session has one small file in
+  `<home>/overview/sessions/`.
 
-A session that has not loaded the hook still appears. It shows busy or idle
-only, and never blocked.
+A session that has not loaded the hook still appears, with its title,
+prompts and issues. It shows busy or idle only, and never blocked.
 
 The digest reads the transcripts changed since the last digest, extracts each
 session's prompts and final replies, and asks a model to sort them into
@@ -98,9 +100,9 @@ ones, and by priority within each. The sessions and terminals of a
 workstream follow its row, indented, and a workstream with none says `no
 sessions`. A session works on an issue when a prompt, the first or any
 later one, starts with `Work on <project>#<n>`, or when it or one of its
-subagents runs `issues start <n>`. The hook keeps these links in
-`<id>.tasks`, beside the session's record. The file is append-only, the
-hook never rewrites it, and the session's end removes it. One linked to several open
+subagents runs `issues start <n>` through the Bash tool and the call did
+not fail. overview reads both from the transcripts, so the links do not
+depend on the hook. One linked to several open
 issues, as an orchestrating session running several tasks may be, is
 listed under each, and its primary entry is under the one it was linked
 to last. When an issue is done or dropped, its workstream goes, and its
@@ -463,7 +465,9 @@ go build -o bin/overview . && ln -sf "$PWD/bin/overview" ~/.local/bin/overview
 
 Then add the hook to the config directory's `settings.json`, beside any hooks
 already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
-`Notification`, `Stop` and `SessionEnd`:
+`Notification`, `Stop` and `SessionEnd`. It is what lets the view show a
+session as blocked; titles, prompts and issue links come from the
+transcripts and work without it:
 
 ```json
 {"hooks": [{"type": "command", "command": "\"$HOME\"/.local/bin/overview hook"}]}

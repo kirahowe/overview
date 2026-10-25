@@ -165,7 +165,7 @@ func (h Home) Activity() (text string, since time.Time, quiet bool, err error) {
 	if len(threads) == 0 {
 		return "", since, true, h.saveCursor(now)
 	}
-	rows, err := h.Rows()
+	rows, err := h.Rows(NewTranscripts())
 	if err != nil {
 		return "", since, false, err
 	}

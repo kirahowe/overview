@@ -47,25 +47,29 @@ agent to do anything new:
 - An agent picks up an issue itself with `issues start 6`, as the issues
   skill already tells it to.
 
-The hook sees both. It reads every prompt on `UserPromptSubmit` and
-every Bash command on `PostToolUse`. A prompt links its session when it
-starts with `Work on <project>#<n>`, whether it is the first prompt or a
-later one, and a command links it when it runs `issues start <n>`. The
-hook records the reference in `<id>.tasks`, beside the session's record,
-so the record itself is never rewritten for a link. The file is a log the hook only appends to: each link is one JSON line,
-with the time the issue was first linked, written in a single append, so a
-session and its parallel subagents linking at once never drop each other's
-links. The hook never rewrites the file, because a read-then-rewrite would
-lose appends made in between. The reader keeps each reference once, where
-it was last linked, with its first time, and the newest eight. The hook
-appends a link only when it changes which references the file reads as or
-their order, so replaying `issues start 3 && issues start 4` adds
-nothing. The session's end removes the file. That is string
-matching on input the hook already receives, with no subprocess, so it
-keeps to the hook rules. `issues start` can name its project with `-C`,
-`--dir` or `--project`, so the hook records what the command gave and
-the view resolves it to a project. Mentioning an issue anywhere else, in
-a prompt or a command, links nothing.
+The transcript shows both. overview reads each session's transcript
+incrementally, from the byte offset it last reached, and links from two
+shapes of line. A prompt in the main conversation links its session when
+it starts with `Work on <project>#<n>`, whether it is the first prompt or
+a later one. A Bash tool call links it when its command runs `issues start
+<n>` and the matching tool result was not an error, so a start that failed
+links nothing. The time of a link is the line's timestamp, and the
+directory is the cwd the transcript recorded for the line, which `cd` in
+the command moves. A session's subagents keep their transcripts in
+`<session>/subagents/`. Their `issues start`s link the parent, which is
+how an orchestrating session takes on several issues, and their prompts
+link nothing. The links of all of a session's transcripts are ordered by
+time, and the reader keeps each reference once, where it was last linked,
+with its first time, and the newest eight. `issues start` can name its
+project with `-C`, `--dir` or `--project`, so the link records what the
+command gave and the view resolves it to a project. Mentioning an issue
+anywhere else, in a prompt or a command, links nothing, and neither does a
+command that only quotes `issues start`.
+
+The hook no longer takes part. It used to write the links to a file
+beside the session's record, which left every session unlinked wherever
+the hook was not installed. It now records only the blocked state and its
+reason.
 
 A session linked to several open issues appears under each of them,
 since an orchestrating session can run several tasks at once. Its
@@ -220,7 +224,7 @@ commands do, and `issues` behind a seam of its own. It is called as
 
 ## Phases
 
-1. Workstreams in the list, with the restyle. The hook's two parsers,
+1. Workstreams in the list, with the restyle. The two parsers,
    the issues seam, grouping a project's entries under its issues, and
    the two halves of the list. Property tests for the parsers, the
    grouping and the cursor moving through both halves.

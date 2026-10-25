@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -186,11 +185,6 @@ func TestOpeningTask(t *testing.T) {
 	}
 }
 
-func bashEvent(cmd string) HookEvent {
-	in, _ := json.Marshal(map[string]string{"command": cmd})
-	return HookEvent{Name: "PostToolUse", ToolName: "Bash", ToolInput: in}
-}
-
 func TestFoldTasks(t *testing.T) {
 	at := func(m int) time.Time { return time.Unix(1_700_000_000+int64(m)*60, 0).UTC() }
 	a, b := TaskRef{Dir: "/w", ID: 1, Linked: at(0)}, TaskRef{Dir: "/w", ID: 2, Linked: at(1)}
@@ -214,77 +208,6 @@ func TestFoldTasks(t *testing.T) {
 	}
 }
 
-func TestTasksToAppend(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0).UTC()
-	a, b := TaskRef{Dir: "/w", ID: 1}, TaskRef{Dir: "/w", ID: 2}
-	got := TasksToAppend(nil, []TaskRef{a, b}, now)
-	if len(got) != 2 || !got[0].Same(a) || !got[1].Same(b) || !got[0].Linked.Equal(now) {
-		t.Fatalf("got %+v", got)
-	}
-	cur := FoldTasks(got)
-	if add := TasksToAppend(cur, []TaskRef{b}, now.Add(time.Hour)); len(add) != 0 {
-		t.Fatalf("relinking the last ref appended %+v", add)
-	}
-	add := TasksToAppend(cur, []TaskRef{a}, now.Add(time.Hour))
-	if len(add) != 1 || !add[0].Linked.Equal(now) {
-		t.Fatalf("relinking a appended %+v, want its first time", add)
-	}
-	if add := TasksToAppend(cur, nil, now); len(add) != 0 {
-		t.Fatalf("no refs appended %+v", add)
-	}
-}
-
-func TestParseTasksSkipsBadLines(t *testing.T) {
-	got := ParseTasks([]byte("{\"dir\":\"/w\",\"id\":1}\n{\"dir\":\"/w\",\"id\n\n{\"id\":2,\"linked\":\"2026-10-23T10:00:00Z\"}\n"))
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 || got[1].Linked.IsZero() {
-		t.Fatalf("got %+v", got)
-	}
-}
-
-// Links that arrive together, from a session and its subagents, each
-// append a line, and none drops another. The file only grows: the hook
-// never rewrites it, and a link that changes nothing appends nothing.
-func TestLinkTasksOnlyAppends(t *testing.T) {
-	h := Home{Dir: t.TempDir()}
-	now := time.Unix(1_700_000_000, 0).UTC()
-	ev := func(id int) HookEvent { return withID(bashEvent(fmt.Sprint("issues start ", id))) }
-	h.linkTasks(ev(1), "/w", now)
-	h.linkTasks(ev(2), "/w", now.Add(time.Minute))
-	h.linkTasks(ev(2), "/w", now.Add(2*time.Minute))
-	if lines := h.readTasks("s1"); len(lines) != 2 {
-		t.Fatalf("lines %+v", lines)
-	}
-	for i := 0; i < 100; i++ {
-		h.linkTasks(ev(1+i%2), "/w", now.Add(time.Duration(i+3)*time.Hour))
-	}
-	if lines := h.readTasks("s1"); len(lines) != 102 {
-		t.Fatalf("%d lines, want every alternation appended", len(lines))
-	}
-	got := h.loadTasks("s1")
-	if len(got) != 2 || !got[0].Linked.Equal(now.Add(time.Minute)) && !got[0].Linked.Equal(now) {
-		t.Fatalf("tasks %+v", got)
-	}
-}
-
-// A replayed `issues start 3 && issues start 4` changes nothing the second
-// time, though the last ref is not the one it starts with.
-func TestTasksToAppendReplayedPair(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0).UTC()
-	pair := []TaskRef{{Dir: "/w", ID: 3}, {Dir: "/w", ID: 4}}
-	first := TasksToAppend(nil, pair, now)
-	if len(first) != 2 {
-		t.Fatalf("first %+v", first)
-	}
-	if again := TasksToAppend(FoldTasks(first), pair, now.Add(time.Hour)); len(again) != 0 {
-		t.Fatalf("replay appends %+v", again)
-	}
-}
-
-func withID(ev HookEvent) HookEvent {
-	ev.SessionID = "s1"
-	return ev
-}
-
 // refs is rs without their link times.
 func refs(rs []TaskRef) []TaskRef {
 	out := make([]TaskRef, len(rs))
@@ -293,35 +216,6 @@ func refs(rs []TaskRef) []TaskRef {
 		out[i] = r
 	}
 	return out
-}
-
-func TestEventTasks(t *testing.T) {
-	got := EventTasks(bashEvent("issues start 1; issues start 2"), "/w")
-	if !reflect.DeepEqual(got, []TaskRef{{Dir: "/w", ID: 1}, {Dir: "/w", ID: 2}}) {
-		t.Fatalf("got %+v", got)
-	}
-	// The event's cwd wins over the record's.
-	ev := bashEvent("issues start 5")
-	ev.Cwd = "/ev"
-	if got := EventTasks(ev, "/w"); len(got) != 1 || got[0].Dir != "/ev" {
-		t.Fatalf("dir %+v", got)
-	}
-	// Only Bash, only PostToolUse, only valid input.
-	for _, ev := range []HookEvent{
-		{Name: "PostToolUse", ToolName: "Read", ToolInput: bashEvent("issues start 1").ToolInput},
-		{Name: "PreToolUse", ToolName: "Bash", ToolInput: bashEvent("issues start 1").ToolInput},
-		{Name: "PostToolUse", ToolName: "Bash", ToolInput: json.RawMessage(`"issues start 1"`)},
-		{Name: "PostToolUse", ToolName: "Bash"},
-		{Name: "UserPromptSubmit", Prompt: "run issues start 1"},
-	} {
-		if got := EventTasks(ev, "/w"); len(got) != 0 {
-			t.Errorf("%+v linked %+v", ev, got)
-		}
-	}
-	got = EventTasks(HookEvent{Name: "UserPromptSubmit", Cwd: "/w", Prompt: "Work on p#2: x"}, "")
-	if !reflect.DeepEqual(got, []TaskRef{{Project: "p", Dir: "/w", ID: 2}}) {
-		t.Fatalf("prompt link: %+v", got)
-	}
 }
 
 func hookPayload(t *testing.T, path string, fields map[string]any) *strings.Reader {
@@ -335,7 +229,7 @@ func hookPayload(t *testing.T, path string, fields map[string]any) *strings.Read
 	return strings.NewReader(string(b))
 }
 
-func TestHookLinksTasksFromSubagentsAndWritesOnlyOnChange(t *testing.T) {
+func TestHookWritesOnlyOnChangeAndNothingForSubagents(t *testing.T) {
 	h := Home{Dir: t.TempDir()}
 	path := filepath.Join(h.Dir, "projects", "-x", "s1.jsonl")
 	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "UserPromptSubmit", "cwd": "/x", "prompt": "go"}))
@@ -352,93 +246,31 @@ func TestHookLinksTasksFromSubagentsAndWritesOnlyOnChange(t *testing.T) {
 			t.Fatalf("%s: the record was rewritten", why)
 		}
 	}
-
 	bash := func(cmd string, agent string) map[string]any {
 		return map[string]any{
 			"hook_event_name": "PostToolUse", "cwd": "/x", "agent_id": agent,
 			"tool_name": "Bash", "tool_input": map[string]string{"command": cmd},
 		}
 	}
-	Hook(hookPayload(t, path, bash("go test ./...", "sub")))
-	unchanged("a Bash event that starts nothing")
-	Hook(hookPayload(t, path, bash("go test ./...", "")))
-	unchanged("a main-session Bash event that starts nothing")
-
 	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
-	got := h.loadSession("s1")
-	if tasks := h.loadTasks("s1"); !reflect.DeepEqual(refs(tasks), []TaskRef{{Dir: "/x", ID: 7}}) || tasks[0].Linked.IsZero() {
-		t.Fatalf("subagent start not linked: %+v", tasks)
-	}
-	if got.State != Working || got.LastPrompt != "go" {
-		t.Fatalf("a subagent event changed the state: %+v", got)
-	}
-	if err := os.Chtimes(file, old, old); err != nil {
-		t.Fatal(err)
-	}
-	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
-	unchanged("the same event twice")
+	unchanged("a subagent's tool call")
 	Hook(hookPayload(t, path, bash("issues start 7", "")))
-	unchanged("the same start from the main session")
+	unchanged("a tool call that changes no state")
+	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "UserPromptSubmit", "cwd": "/x", "prompt": "another"}))
+	unchanged("a second prompt in the same state")
 
-	tasksFile := h.tasksFile("s1")
-	tf, err := os.Stat(tasksFile)
-	if err != nil {
-		t.Fatal(err)
+	// The hook writes the record and nothing beside it.
+	entries, _ := os.ReadDir(h.sessionsDir())
+	if len(entries) != 1 || entries[0].Name() != "s1.json" {
+		t.Fatalf("sessions dir holds %v", entries)
 	}
-	if err := os.Chtimes(tasksFile, old, old); err != nil {
-		t.Fatal(err)
-	}
-	Hook(hookPayload(t, path, bash("issues start 7", "sub")))
-	if fi, _ := os.Stat(tasksFile); !fi.ModTime().Equal(old) {
-		t.Fatalf("relinking rewrote the tasks file (%v)", tf.ModTime())
-	}
-
 	// A subagent of a session with no record makes none.
-	Hook(strings.NewReader(`{"hook_event_name":"PostToolUse","session_id":"nobody","agent_id":"a","cwd":"/x","tool_name":"Bash","tool_input":{"command":"issues start 1"},"transcript_path":"` + filepath.Join(h.Dir, "projects", "-x", "nobody.jsonl") + `"}`))
+	Hook(strings.NewReader(`{"hook_event_name":"PostToolUse","session_id":"nobody","agent_id":"a","cwd":"/x","transcript_path":"` + filepath.Join(h.Dir, "projects", "-x", "nobody.jsonl") + `"}`))
 	if _, ok := h.Sessions()["nobody"]; ok {
 		t.Fatal("a subagent created a session record")
 	}
-	if _, err := os.Stat(h.tasksFile("nobody")); err == nil {
-		t.Fatal("a subagent created a tasks file for an unknown session")
-	}
-}
-
-func TestHookSubagentLinkNeverRewritesTheSessionRecord(t *testing.T) {
-	h := Home{Dir: t.TempDir()}
-	path := filepath.Join(h.Dir, "projects", "-x", "s1.jsonl")
-	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "UserPromptSubmit", "cwd": "/x", "prompt": "go"}))
-	before, err := os.ReadFile(h.sessionFile("s1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	Hook(hookPayload(t, path, map[string]any{
-		"hook_event_name": "PostToolUse", "cwd": "/x", "agent_id": "sub",
-		"tool_name": "Bash", "tool_input": map[string]string{"command": "issues start 7"},
-	}))
-	after, err := os.ReadFile(h.sessionFile("s1"))
-	if err != nil || string(after) != string(before) {
-		t.Fatalf("record changed:\n%s\n%s", before, after)
-	}
-	if got := h.loadTasks("s1"); !reflect.DeepEqual(refs(got), []TaskRef{{Dir: "/x", ID: 7}}) {
-		t.Fatalf("tasks %+v", got)
-	}
-	// Sessions ignores the tasks file, and the rows carry its tasks.
-	if len(h.Sessions()) != 1 {
-		t.Fatalf("sessions: %+v", h.Sessions())
-	}
-	// A main-session link goes to the same file, and the session's end
-	// removes both files.
-	Hook(hookPayload(t, path, map[string]any{
-		"hook_event_name": "PostToolUse", "cwd": "/x",
-		"tool_name": "Bash", "tool_input": map[string]string{"command": "issues start 8"},
-	}))
-	if got := h.loadTasks("s1"); len(got) != 2 || got[1].ID != 8 {
-		t.Fatalf("tasks %+v", got)
-	}
 	Hook(hookPayload(t, path, map[string]any{"hook_event_name": "SessionEnd", "cwd": "/x"}))
-	for _, f := range []string{h.sessionFile("s1"), h.tasksFile("s1")} {
-		if _, err := os.Stat(f); err == nil {
-			t.Fatalf("%s survived SessionEnd", f)
-		}
+	if _, err := os.Stat(file); err == nil {
+		t.Fatal("record survived SessionEnd")
 	}
 }

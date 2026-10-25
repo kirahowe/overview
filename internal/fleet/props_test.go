@@ -52,7 +52,6 @@ func genSession() *rapid.Generator[Session] {
 			State:      genState().Draw(t, "state"),
 			Since:      genTime().Draw(t, "since"),
 			Reason:     text().Draw(t, "reason"),
-			LastPrompt: text().Draw(t, "prompt"),
 			Transcript: text().Draw(t, "transcript"),
 		}
 	})
@@ -109,9 +108,6 @@ func TestPropApplyInvariants(t *testing.T) {
 			}
 			if knownEvent(ev.Name) && next.State != Blocked && next.Reason != "" {
 				t.Fatalf("event %d %q: reason %q outside Blocked (%s)", i, ev.Name, next.Reason, next.State)
-			}
-			if utf8.RuneCountInString(next.LastPrompt) > 300 && next.LastPrompt != s.LastPrompt {
-				t.Fatalf("event %d: prompt longer than 300 runes", i)
 			}
 			if next.State == Blocked && next.Reason != s.Reason && utf8.RuneCountInString(next.Reason) > 200 {
 				t.Fatalf("event %d: reason longer than 200 runes", i)
@@ -270,7 +266,7 @@ func TestPropSessionRoundTrip(t *testing.T) {
 		}
 		got := h.loadSession(s.ID)
 		if got.ID != s.ID || got.Cwd != s.Cwd || got.State != s.State ||
-			got.Reason != s.Reason || got.LastPrompt != s.LastPrompt || got.Transcript != s.Transcript ||
+			got.Reason != s.Reason || got.Transcript != s.Transcript ||
 			!got.Since.Equal(s.Since) {
 			t.Fatalf("round trip changed the session:\n saved  %+v\n loaded %+v", s, got)
 		}
@@ -452,141 +448,300 @@ func TestPropOpeningTaskRoundTrip(t *testing.T) {
 	})
 }
 
-func genTaskEvent() *rapid.Generator[HookEvent] {
-	return rapid.Custom(func(t *rapid.T) HookEvent {
-		id := strconv.Itoa(rapid.IntRange(1, 12).Draw(t, "id"))
-		switch rapid.IntRange(0, 2).Draw(t, "kind") {
-		case 0:
-			return HookEvent{Name: "UserPromptSubmit", Cwd: rapid.SampledFrom([]string{"", "/a", "/b"}).Draw(t, "cwd"),
-				Prompt: "Work on " + rapid.SampledFrom([]string{"p", "q"}).Draw(t, "proj") + "#" + id}
-		case 1:
-			cmd := rapid.SampledFrom([]string{"issues start ", "cd /z && issues start ", "issues -C /y start ", "issues --project p start ", "ls "}).Draw(t, "cmd") + id
-			in, _ := json.Marshal(map[string]string{"command": cmd})
-			return HookEvent{Name: "PostToolUse", ToolName: "Bash", ToolInput: in, Cwd: rapid.SampledFrom([]string{"", "/a"}).Draw(t, "cwd")}
-		}
-		return genEvent().Draw(t, "any")
-	})
+// A generated transcript: its lines, each ending in a newline, and the
+// links the two link shapes make in it, in the order their results arrive.
+type genTr struct {
+	lines []string
+	want  []TaskRef
 }
 
-func genRef() *rapid.Generator[TaskRef] {
-	return rapid.Custom(func(t *rapid.T) TaskRef {
-		r := TaskRef{Project: rapid.SampledFrom([]string{"", "p"}).Draw(t, "project"),
-			Dir: rapid.SampledFrom([]string{"/a", "/b"}).Draw(t, "dir"), ID: rapid.IntRange(1, 12).Draw(t, "id")}
-		if rapid.Bool().Draw(t, "timed") {
-			r.Linked = time.Unix(1_700_000_000+int64(rapid.IntRange(0, 100).Draw(t, "at")), 0).UTC()
-		}
-		return r
-	})
+func (g genTr) bytes() []byte { return []byte(strings.Join(g.lines, "")) }
+
+var trBase = time.Date(2026, 10, 23, 17, 0, 0, 0, time.UTC)
+
+func trLine(v map[string]any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(b) + "\n"
 }
 
-// Appending what TasksToAppend says, batch by batch, keeps the folded
-// list short, each ref once, the last ref linked last, and a second
-// append of the same batch adds nothing.
-func TestPropTasksLog(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		var lines []TaskRef
-		now := time.Unix(1_800_000_000, 0).UTC()
-		for i, batch := range rapid.SliceOfN(rapid.SliceOfN(genRef(), 0, 4), 1, 20).Draw(t, "batches") {
-			lines = append(lines, TasksToAppend(FoldTasks(lines), batch, now)...)
-			cur := FoldTasks(lines)
-			if len(cur) > maxTasks {
-				t.Fatalf("batch %d: %d tasks", i, len(cur))
-			}
-			for j, r := range cur {
-				if slices.IndexFunc(cur, r.Same) != j {
-					t.Fatalf("batch %d: duplicate %+v in %+v", i, r, cur)
+// genTranscript draws a transcript in the shape Claude Code writes it,
+// with prompts, replies, titles, Bash calls and their results (answered
+// in any order, some of them errors), lines of kinds the fold ignores,
+// and sidechain and meta lines.
+func genTranscript() *rapid.Generator[genTr] {
+	type call struct {
+		id   string
+		refs []TaskRef
+	}
+	return rapid.Custom(func(t *rapid.T) genTr {
+		var g genTr
+		var open []call
+		n := rapid.IntRange(0, 40).Draw(t, "n")
+		for i := 0; i < n; i++ {
+			at := trBase.Add(time.Duration(i) * time.Second).Format("2006-01-02T15:04:05.000Z")
+			cwd := rapid.SampledFrom([]string{"/w/a", "/w/b"}).Draw(t, "cwd")
+			num := rapid.IntRange(1, 9).Draw(t, "num")
+			ns := strconv.Itoa(num)
+			var line string
+			switch rapid.IntRange(0, 11).Draw(t, "kind") {
+			case 0, 1: // an opening prompt, as a string or as text blocks
+				var content any = "Work on p#" + ns + ": " + text().Draw(t, "title")
+				if rapid.Bool().Draw(t, "blocks") {
+					content = []any{map[string]any{"type": "text", "text": content}}
 				}
-			}
-			if len(batch) > 0 && !cur[len(cur)-1].Same(batch[len(batch)-1]) {
-				t.Fatalf("batch %d: last ref %+v is not last in %+v", i, batch[len(batch)-1], cur)
-			}
-			if len(batch) > 0 {
-				if again := TasksToAppend(cur, batch[len(batch)-1:], now); len(again) != 0 {
-					t.Fatalf("batch %d: linking the last ref again appends %+v", i, again)
+				line = trLine(map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"role": "user", "content": content}})
+				g.want = append(g.want, TaskRef{Project: "p", Dir: cwd, ID: num, Linked: mustTime(at)})
+			case 2: // prompts that only mention an issue, or are not the user's
+				prompt := rapid.SampledFrom([]string{"please work on p#" + ns, "Work on p#" + ns + "x", text().Draw(t, "text"), "issues start " + ns}).Draw(t, "prompt")
+				line = trLine(map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": prompt}})
+			case 3: // an opening prompt in a sidechain or a meta line
+				v := map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": "Work on p#" + ns}}
+				v[rapid.SampledFrom([]string{"isSidechain", "isMeta"}).Draw(t, "flag")] = true
+				line = trLine(v)
+			case 4, 5: // Bash calls
+				cmd, refs := "", []TaskRef(nil)
+				switch rapid.IntRange(0, 5).Draw(t, "cmd") {
+				case 0:
+					cmd, refs = "issues start "+ns, []TaskRef{{Dir: cwd, ID: num}}
+				case 1:
+					cmd, refs = "cd /z && issues start "+ns, []TaskRef{{Dir: "/z", ID: num}}
+				case 2:
+					cmd, refs = "issues -C /y start "+ns, []TaskRef{{Dir: "/y", ID: num}}
+				case 3:
+					cmd = `echo "issues start ` + ns + `"`
+				case 4:
+					cmd = "cat <<EOF\nissues start " + ns + "\nEOF"
+				default:
+					cmd = "ls -la # issues start " + ns
 				}
+				id := "toolu_" + strconv.Itoa(i)
+				line = trLine(map[string]any{"type": "assistant", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": []any{
+					map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": cmd}},
+				}}})
+				open = append(open, call{id, refs})
+			case 6, 7: // a result, in any order
+				if len(open) == 0 {
+					continue
+				}
+				k := rapid.IntRange(0, len(open)-1).Draw(t, "which")
+				c := open[k]
+				open = slices.Delete(open, k, k+1)
+				isErr := rapid.Bool().Draw(t, "error")
+				line = trLine(map[string]any{"type": "user", "timestamp": at, "message": map[string]any{"content": []any{
+					map[string]any{"tool_use_id": c.id, "type": "tool_result", "content": "ok", "is_error": isErr},
+				}}})
+				if !isErr {
+					for _, r := range c.refs {
+						r.Linked = mustTime(at)
+						g.want = append(g.want, r)
+					}
+				}
+			case 8:
+				line = trLine(map[string]any{"type": "assistant", "timestamp": at, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": text().Draw(t, "reply")}}}})
+			case 9:
+				line = trLine(map[string]any{"type": rapid.SampledFrom([]string{"ai-title", "last-prompt"}).Draw(t, "meta"),
+					"aiTitle": text().Draw(t, "title"), "lastPrompt": text().Draw(t, "last")})
+			case 10: // a kind of line the fold ignores
+				line = trLine(map[string]any{"type": "progress", "timestamp": at, "data": text().Draw(t, "data")})
+			default:
+				line = "not json at all\n"
 			}
-			// Folding what it folded to changes nothing.
-			if !reflect.DeepEqual(FoldTasks(cur), cur) {
-				t.Fatalf("batch %d: folding is not idempotent: %+v", i, cur)
-			}
+			g.lines = append(g.lines, line)
+		}
+		return g
+	})
+}
+
+func mustTime(s string) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		panic(err)
+	}
+	return at
+}
+
+// factsOf is what a file's lines have added up to, without the file.
+func factsOf(f *tfile) Facts {
+	g := f.fold
+	return Facts{Title: g.title, LastPrompt: g.lastPrompt, LastReply: g.reply, ReplyAt: g.replyAt, Links: FoldTasks(g.links)}
+}
+
+// sameFacts compares facts, taking times by their instant and not by their
+// representation, and leaving out the modification time.
+func sameFacts(a, b Facts) bool {
+	a.Modified, b.Modified = time.Time{}, time.Time{}
+	if !a.ReplyAt.Equal(b.ReplyAt) || len(a.Links) != len(b.Links) {
+		return false
+	}
+	for i := range a.Links {
+		if !a.Links[i].Same(b.Links[i]) || !a.Links[i].Linked.Equal(b.Links[i].Linked) {
+			return false
+		}
+	}
+	return a.Title == b.Title && a.LastPrompt == b.LastPrompt && a.LastReply == b.LastReply
+}
+
+// splits cuts b into pieces at drawn points, which fall mid-line as often
+// as not.
+func splits(t *rapid.T, b []byte) [][]byte {
+	var cuts []int
+	for range rapid.IntRange(0, 6).Draw(t, "cuts") {
+		cuts = append(cuts, rapid.IntRange(0, len(b)).Draw(t, "cut"))
+	}
+	slices.Sort(cuts)
+	var out [][]byte
+	prev := 0
+	for _, c := range cuts {
+		out = append(out, b[prev:c])
+		prev = c
+	}
+	return append(out, b[prev:])
+}
+
+// Folding a transcript in pieces, cut anywhere, gives the facts that
+// folding it whole gives.
+func TestPropFoldChunksEqualWhole(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		g := genTranscript().Draw(t, "transcript")
+		whole := newTfile(false)
+		whole.feed(g.bytes())
+		parts := newTfile(false)
+		for _, p := range splits(t, g.bytes()) {
+			parts.feed(p)
+		}
+		if !sameFacts(factsOf(whole), factsOf(parts)) {
+			t.Fatalf("chunked:\n%+v\nwhole:\n%+v", factsOf(parts), factsOf(whole))
 		}
 	})
 }
 
-// Appending what TasksToAppend returns, then asking again with the same
-// refs, returns nothing, and the file folds to what appending every ref
-// would have folded to, ignoring times.
-func TestPropTasksToAppendMinimal(t *testing.T) {
+// Links come from the two shapes and no others: what the fold links is
+// what the generator knows it wrote as a prompt or as a Bash call whose
+// result was not an error. A command that only mentions `issues start`,
+// an errored result, a sidechain or meta prompt link nothing.
+func TestPropLinksComeOnlyFromTheTwoShapes(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		base := rapid.SliceOfN(genRef(), 0, 12).Draw(t, "base")
-		batch := rapid.SliceOfN(genRef(), 0, 12).Draw(t, "batch")
-		now := time.Unix(1_800_000_000, 0).UTC()
-		cur := FoldTasks(base)
-		add := TasksToAppend(cur, batch, now)
-		lines := append(slices.Clone(base), add...)
-		if again := TasksToAppend(FoldTasks(lines), batch, now.Add(time.Hour)); len(again) != 0 {
-			t.Fatalf("second call appends %+v", again)
-		}
-		all := FoldTasks(append(slices.Clone(base), batch...))
-		if got := FoldTasks(lines); !reflect.DeepEqual(refs(got), refs(all)) {
-			t.Fatalf("folds to %+v, appending every ref gives %+v", got, all)
+		g := genTranscript().Draw(t, "transcript")
+		f := newTfile(false)
+		f.feed(g.bytes())
+		got := factsOf(f)
+		want := Facts{Links: FoldTasks(g.want)}
+		if !sameFacts(Facts{Links: got.Links}, want) {
+			t.Fatalf("links %+v, want %+v", got.Links, want.Links)
 		}
 	})
 }
 
-// Two hooks that read the file at once and append their own links, in
-// any interleaving of their lines, leave both links in it, and a ref
-// linked before keeps its first time.
-func TestPropConcurrentLinksKeepBoth(t *testing.T) {
+// writeAtomically replaces path with a new file, as an editor that
+// renames over the old one does.
+func writeAtomically(t *rapid.T, path string, b []byte) {
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func freshFacts(t *rapid.T, path string) Facts {
+	f, ok := NewTranscripts().Facts(path)
+	if !ok {
+		t.Fatalf("no facts for %s", path)
+	}
+	return f
+}
+
+// Reading the file again after each append, cut anywhere, gives the facts
+// of reading the final file once.
+func TestPropAppendingBetweenReadsEqualsReadingOnce(t *testing.T) {
+	root, n := t.TempDir(), 0
 	rapid.Check(t, func(t *rapid.T) {
-		base := rapid.SliceOfN(genRef(), 0, 6).Draw(t, "base")
-		cur := FoldTasks(base)
-		a := rapid.SliceOfN(genRef(), 1, 3).Draw(t, "a")
-		b := rapid.SliceOfN(genRef(), 1, 3).Draw(t, "b")
-		now := time.Unix(1_800_000_000, 0).UTC()
-		la, lb := TasksToAppend(cur, a, now), TasksToAppend(cur, b, now.Add(time.Second))
-		var lines []TaskRef
-		i, j := 0, 0
-		for i < len(la) || j < len(lb) {
-			if j == len(lb) || i < len(la) && rapid.Bool().Draw(t, "a first") {
-				lines, i = append(lines, la[i]), i+1
-			} else {
-				lines, j = append(lines, lb[j]), j+1
+		n++
+		path := filepath.Join(root, fmt.Sprintf("s%d.jsonl", n))
+		g := genTranscript().Draw(t, "transcript")
+		idx := NewTranscripts()
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		for _, p := range splits(t, g.bytes()) {
+			f.Write(p)
+			if _, ok := idx.Facts(path); !ok {
+				t.Fatal("no facts")
 			}
 		}
-		got := FoldTasks(append(slices.Clone(base), lines...))
-		for _, r := range append(slices.Clone(a), b...) {
-			k := slices.IndexFunc(got, r.Same)
-			if k < 0 {
-				t.Fatalf("%+v was dropped: %+v", r, got)
-			}
-			if c := slices.IndexFunc(cur, r.Same); c >= 0 && !cur[c].Linked.IsZero() && !got[k].Linked.Equal(cur[c].Linked) {
-				t.Fatalf("%+v lost its first time %v: %+v", r, cur[c].Linked, got[k])
-			}
+		got, _ := idx.Facts(path)
+		if want := freshFacts(t, path); !sameFacts(got, want) {
+			t.Fatalf("incremental:\n%+v\nonce:\n%+v", got, want)
 		}
 	})
 }
 
-// Events never change the state through linking: Apply does not know about
-// tasks at all, and EventTasks is pure.
-func TestPropEventTasksAndApply(t *testing.T) {
+// A file that shrank, or was replaced, gives the facts of its new content.
+func TestPropShrunkOrReplacedFileIsReadAgain(t *testing.T) {
+	root, n := t.TempDir(), 0
 	rapid.Check(t, func(t *rapid.T) {
-		s := Session{}
-		now := time.Unix(1_700_000_000, 0).UTC()
-		for i, ev := range rapid.SliceOfN(genTaskEvent(), 1, 30).Draw(t, "events") {
-			ev.SessionID = "s"
-			a, b := EventTasks(ev, s.Cwd), EventTasks(ev, s.Cwd)
-			if !reflect.DeepEqual(a, b) {
-				t.Fatalf("event %d: EventTasks is not deterministic", i)
+		n++
+		path := filepath.Join(root, fmt.Sprintf("s%d.jsonl", n))
+		a := genTranscript().Draw(t, "first").bytes()
+		b := genTranscript().Draw(t, "second").bytes()
+		if err := os.WriteFile(path, a, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		idx := NewTranscripts()
+		idx.Facts(path)
+		// Truncating in place is seen when the file got shorter than what
+		// was read. Any other rewrite comes as a new file.
+		if len(b) < len(a) && rapid.Bool().Draw(t, "in place") {
+			if err := os.WriteFile(path, b, 0o644); err != nil {
+				t.Fatal(err)
 			}
-			applied, changed := Apply(s, ev, now)
-			if changed != (applied != s) {
-				t.Fatalf("event %d: changed=%v for %+v -> %+v", i, changed, s, applied)
-			}
-			if _, again := Apply(applied, ev, now); again && knownEvent(ev.Name) {
-				t.Fatalf("event %d: Apply is not idempotent", i)
-			}
-			s = applied
+		} else {
+			writeAtomically(t, path, b)
+		}
+		got, _ := idx.Facts(path)
+		if want := freshFacts(t, path); !sameFacts(got, want) {
+			t.Fatalf("after the rewrite:\n%+v\nnew content read once:\n%+v", got, want)
+		}
+	})
+}
+
+// Subagent transcripts link their parent only through Bash calls. Their
+// prompts, sidechain or not, link nothing.
+func TestPropSubagentPromptsNeverLink(t *testing.T) {
+	root, n := t.TempDir(), 0
+	rapid.Check(t, func(t *rapid.T) {
+		n++
+		path := filepath.Join(root, fmt.Sprintf("s%d.jsonl", n))
+		g := genTranscript().Draw(t, "main")
+		if err := os.WriteFile(path, g.bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := freshFacts(t, path)
+
+		dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var sub strings.Builder
+		for i, p := range rapid.SliceOfN(rapid.IntRange(1, 9), 1, 6).Draw(t, "prompts") {
+			sub.WriteString(trLine(map[string]any{"type": "user", "isSidechain": rapid.Bool().Draw(t, "sidechain"),
+				"timestamp": trBase.Add(time.Duration(i) * time.Second).Format(time.RFC3339), "cwd": "/w/a",
+				"message": map[string]any{"role": "user", "content": "Work on p#" + strconv.Itoa(p) + ": x"}}))
+		}
+		if err := os.WriteFile(filepath.Join(dir, "agent-1.jsonl"), []byte(sub.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if after := freshFacts(t, path); !sameFacts(before, after) {
+			t.Fatalf("subagent prompts changed the facts:\n%+v\n%+v", before, after)
 		}
 	})
 }

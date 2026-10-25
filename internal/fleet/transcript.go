@@ -80,64 +80,6 @@ func (h Home) FindTranscript(sessionID string) string {
 	return m[0]
 }
 
-type meta struct {
-	Title      string
-	LastPrompt string
-	LastReply  string
-	ReplyAt    time.Time
-	Modified   time.Time
-}
-
-var metaCache sync.Map // path -> meta
-
-// transcriptMeta reads the session title and last prompt that Claude Code
-// keeps appending to the transcript. Only the tail is read, and the result is
-// reused until the file changes, since the view asks every couple of seconds.
-func transcriptMeta(path string) (meta, bool) {
-	if path == "" {
-		return meta{}, false
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return meta{}, false
-	}
-	if c, ok := metaCache.Load(path); ok && c.(meta).Modified.Equal(info.ModTime()) {
-		return c.(meta), true
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return meta{}, false
-	}
-	defer f.Close()
-	const tail = 512 << 10
-	if info.Size() > tail {
-		// The first line read after the seek is a fragment and fails to parse.
-		f.Seek(info.Size()-tail, io.SeekStart)
-	}
-	m := meta{Modified: info.ModTime()}
-	eachEntry(f, func(e entry) {
-		switch e.Type {
-		case "ai-title":
-			m.Title = e.AiTitle
-		case "last-prompt":
-			m.LastPrompt = clip(e.LastPrompt, 300)
-		}
-		if e.IsSidechain || e.IsMeta {
-			return
-		}
-		// A new prompt makes the reply before it stale.
-		switch t := e.text(); {
-		case t == "":
-		case e.Type == "user":
-			m.LastReply, m.ReplyAt = "", time.Time{}
-		case e.Type == "assistant":
-			m.LastReply, m.ReplyAt = t, e.Timestamp
-		}
-	})
-	metaCache.Store(path, m)
-	return m, true
-}
-
 // Turn is one prompt and the last thing the session said in answer to it.
 type Turn struct {
 	At      time.Time

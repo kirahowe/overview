@@ -114,6 +114,9 @@ type model struct {
 	// The details are rebuilt only when what they show changes, not on
 	// every spinner frame. A pointer, because the model is passed by value.
 	cache *detailCache
+	// transcripts keeps what the refreshes have read of the transcripts. A
+	// pointer, because the model is passed by value.
+	transcripts *fleet.Transcripts
 
 	deps deps
 	// cwd is where c starts a session when the list is empty.
@@ -275,7 +278,7 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps()}
+	return model{home: home, llm: llm, cache: &detailCache{}, transcripts: fleet.NewTranscripts(), deps: systemDeps()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -383,7 +386,7 @@ func nextFrame() tea.Cmd {
 }
 
 func (m model) refresh() tea.Msg {
-	rows, err := m.home.Rows()
+	rows, err := m.home.Rows(m.transcripts)
 	if err != nil {
 		return rowsMsg{err: err}
 	}

@@ -59,8 +59,8 @@ func (h Home) Live() ([]Live, error) {
 	return live, nil
 }
 
-// Row is one session in the view: the live listing joined with what the hooks
-// recorded and what its transcript says.
+// Row is one session in the view: the live listing joined with what the hook
+// recorded and what its transcripts say.
 type Row struct {
 	Live
 	State      State
@@ -76,12 +76,13 @@ type Row struct {
 	// Hooked is false for a session that has not reported through the hook,
 	// which leaves only Claude Code's own busy or idle to go on.
 	Hooked bool
-	// Tasks are the issues the session took on, oldest first.
+	// Tasks are the issues its transcripts show it taking on, oldest first.
 	Tasks []TaskRef
 }
 
-// Rows builds the view's rows, ordered by directory and then name.
-func (h Home) Rows() ([]Row, error) {
+// Rows builds the view's rows, ordered by directory and then name. t reads
+// the transcripts, and keeps what it read for the next call.
+func (h Home) Rows(t *Transcripts) ([]Row, error) {
 	live, err := h.Live()
 	if err != nil {
 		return nil, err
@@ -92,22 +93,17 @@ func (h Home) Rows() ([]Row, error) {
 		r := Row{Live: l}
 		rec, ok := recorded[l.SessionID]
 		r.Hooked = ok
-		r.LastPrompt = rec.LastPrompt
-		r.Tasks = h.loadTasks(l.SessionID)
 		r.State, r.Since, r.Reason = liveState(l, rec)
 		path := rec.Transcript
 		if path == "" {
 			path = h.FindTranscript(l.SessionID)
 		}
 		r.Transcript = path
-		if meta, ok := transcriptMeta(path); ok {
-			r.Title = meta.Title
-			r.LastReply, r.LastReplyAt = meta.LastReply, meta.ReplyAt
-			if r.LastPrompt == "" {
-				r.LastPrompt = meta.LastPrompt
-			}
+		if f, ok := t.Facts(path); ok {
+			r.Title, r.LastPrompt, r.Tasks = f.Title, f.LastPrompt, f.Links
+			r.LastReply, r.LastReplyAt = f.LastReply, f.ReplyAt
 			if r.Since.IsZero() {
-				r.Since = meta.Modified
+				r.Since = f.Modified
 			}
 		}
 		if r.Since.IsZero() {
