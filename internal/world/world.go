@@ -60,8 +60,11 @@ type World struct {
 	// Need counts the sessions that need you and the workstreams in
 	// review. Working and Idle count each other session once.
 	Need, Working, Idle int
-	Hooked              bool     // some live session reports through the hook
-	Trackers            []string // the roots whose trackers Derive needs, sorted
+	// NoHook says interactive sessions are listed and none reports through
+	// the hook, so none of them can show as blocked on a prompt. Background
+	// sessions report that through Claude Code and need no hook.
+	NoHook   bool
+	Trackers []string // the roots whose trackers Derive needs, sorted
 
 	byName  map[string]*Project // every project, listed or not
 	tracked map[string]Tracker  // the trackers in the world, by root

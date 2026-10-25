@@ -258,8 +258,10 @@ func Derive(in Inputs) World {
 	sort.Slice(w.Agents, func(i, j int) bool { return needsFirst(w.Agents[i].Row, w.Agents[j].Row) })
 
 	// The counts, and whether the hook reports.
+	hooked, interactive := false, false
 	for _, s := range w.Agents {
-		w.Hooked = w.Hooked || s.Hooked
+		hooked = hooked || s.Hooked
+		interactive = interactive || !s.Background()
 		switch {
 		case s.NeedsYou():
 			w.Need++
@@ -269,6 +271,7 @@ func Derive(in Inputs) World {
 			w.Idle++
 		}
 	}
+	w.NoHook = interactive && !hooked
 	for _, s := range streams {
 		if s.Issue.Status == issues.Review {
 			w.Need++

@@ -784,7 +784,8 @@ func (m model) detailLines(r *world.Session, w int) []string {
 
 	meta := []string{m.short(r.Cwd)}
 	meta = append(meta, "started "+Ago(time.UnixMilli(r.StartedAt))+" ago")
-	if !r.Hooked {
+	// Only an interactive session needs the hook to show as blocked.
+	if !r.Hooked && !r.Background() {
 		meta = append(meta, "no hook")
 	}
 	if r.Title != "" {
@@ -895,13 +896,14 @@ func (m model) listTitle() []titleSeg {
 		segs = append(segs, titleSeg{"  ● " + strconv.Itoa(working), pal.Working})
 	}
 	segs = append(segs, titleSeg{"  ○ " + strconv.Itoa(idle), pal.Muted})
-	if len(w.Sessions) > 0 && !w.Hooked {
+	if w.NoHook {
 		segs = append(segs, titleSeg{"  · " + noHook, pal.Asking})
 	}
 	return segs
 }
 
-// noHook is the list's warning when no session reports through the hook.
+// noHook is the list's warning when interactive sessions are listed and
+// none reports through the hook, so none of them can show as blocked.
 const noHook = "hook not installed"
 
 // titleText renders a title as the view draws it into a rule: accent and

@@ -199,8 +199,9 @@ func TestTheOrchestratorIsNotInTheWorld(t *testing.T) {
 	if _, ok := w.Streams[Key{"/w/app", 7}]; ok {
 		t.Errorf("the orchestrator's link made a workstream")
 	}
-	if w.Working != 0 || w.Idle != 1 || w.Hooked {
-		t.Errorf("counts %d %d, hooked %v", w.Working, w.Idle, w.Hooked)
+	// The orchestrator's hook does not stand for a's.
+	if w.Working != 0 || w.Idle != 1 || !w.NoHook {
+		t.Errorf("counts %d %d, no hook %v", w.Working, w.Idle, w.NoHook)
 	}
 	if len(w.Terminals) != 0 {
 		t.Errorf("the orchestrator's pane is a terminal: %v", windows(w.Terminals))
@@ -556,14 +557,25 @@ func TestCountsSkipTerminalsAndPlaceholders(t *testing.T) {
 	}
 }
 
-func TestHooked(t *testing.T) {
+// The hook is missing only when an interactive session is listed and no
+// session reports through it. Background sessions report blocked through
+// Claude Code, so they alone never need it.
+func TestNoHook(t *testing.T) {
 	a, b := sess("a", "/w"), sess("b", "/w")
-	if Derive(Inputs{Rows: []fleet.Row{a, b}}).Hooked {
-		t.Errorf("hooked with no hooked session")
+	if !Derive(Inputs{Rows: []fleet.Row{a, b}}).NoHook {
+		t.Errorf("no hook not reported with no hooked session")
 	}
 	b.Hooked = true
-	if !Derive(Inputs{Rows: []fleet.Row{a, b}}).Hooked {
-		t.Errorf("not hooked")
+	if Derive(Inputs{Rows: []fleet.Row{a, b}}).NoHook {
+		t.Errorf("no hook reported with a hooked session")
+	}
+	bg := sess("bg", "/w")
+	bg.Kind, bg.ID = "background", "bg1"
+	if Derive(Inputs{Rows: []fleet.Row{bg}}).NoHook {
+		t.Errorf("no hook reported with only a background session")
+	}
+	if Derive(Inputs{}).NoHook {
+		t.Errorf("no hook reported with no sessions")
 	}
 }
 

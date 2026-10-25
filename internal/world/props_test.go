@@ -199,7 +199,7 @@ type canon struct {
 	Streams   map[string]canonStream
 	Terminals []canonTerminal
 	Counts    [3]int
-	Hooked    bool
+	NoHook    bool
 	Trackers  []string
 }
 
@@ -237,7 +237,7 @@ type canonTerminal struct {
 func toCanon(w World) canon {
 	c := canon{
 		Away: sessionIDs(w.Away), Agents: sessionIDs(w.Agents), Sessions: map[string]canonSession{},
-		Streams: map[string]canonStream{}, Counts: [3]int{w.Need, w.Working, w.Idle}, Hooked: w.Hooked, Trackers: w.Trackers,
+		Streams: map[string]canonStream{}, Counts: [3]int{w.Need, w.Working, w.Idle}, NoHook: w.NoHook, Trackers: w.Trackers,
 	}
 	for _, p := range w.Projects {
 		c.Projects = append(c.Projects, canonProject{p.Root, p.Name, p.ID, p.Roots, p.Tracked, p.Failed, p.Pinned, p.Open,
@@ -436,9 +436,10 @@ func TestPropCountsAreARecount(t *testing.T) {
 		in := genInputs(t)
 		w := Derive(in)
 		need, working, idle := 0, 0, 0
-		hooked := false
+		hooked, interactive := false, false
 		for _, s := range w.Agents {
 			hooked = hooked || s.Hooked
+			interactive = interactive || !s.Background()
 			switch {
 			case s.NeedsYou():
 				need++
@@ -453,8 +454,8 @@ func TestPropCountsAreARecount(t *testing.T) {
 				need++
 			}
 		}
-		if w.Need != need || w.Working != working || w.Idle != idle || w.Hooked != hooked {
-			t.Fatalf("counts %d %d %d %v, want %d %d %d %v", w.Need, w.Working, w.Idle, w.Hooked, need, working, idle, hooked)
+		if noHook := interactive && !hooked; w.Need != need || w.Working != working || w.Idle != idle || w.NoHook != noHook {
+			t.Fatalf("counts %d %d %d %v, want %d %d %d %v", w.Need, w.Working, w.Idle, w.NoHook, need, working, idle, noHook)
 		}
 	})
 }

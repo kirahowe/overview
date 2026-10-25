@@ -93,9 +93,11 @@ keep their rule that a false link is worse than a missed one.
 The hook records only what no other source can show: that a session is
 blocked on a prompt, with the reason. Its record keeps the state, when it
 began and the reason. It writes no links and no prompts. A session that
-has never reported through the hook is `Hooked == false`. When no live
-session is hooked, the header says the hook is not installed, since the
-view then cannot show a blocked session.
+has never reported through the hook is `Hooked == false`. Claude Code
+reports a background session's blocked state itself, so only interactive
+sessions need the hook. When interactive sessions are listed and none is
+hooked, the header says the hook is not installed, since the view then
+cannot show any of them as blocked.
 
 ### Everything else
 
@@ -142,7 +144,7 @@ type World struct {
 	Streams   map[Key]*Stream
 	Terminals []*Terminal         // every terminal once, by window
 	Need, Working, Idle int
-	Hooked    bool                // some live session reports through the hook
+	NoHook    bool                // interactive sessions are listed and none reports through the hook
 	Trackers  []string            // the roots whose trackers Derive needs, sorted
 }
 
@@ -262,9 +264,8 @@ placeholder, keyed by its first pin, which `x` unpins. `present` does not
 regroup or reorder anything. Each entry points into the World: a
 `*Session`, `*Terminal`, `*Stream` or `*Project`.
 
-The header's counts are `World.Need`, `Working` and `Idle`. When the
-World has sessions and none is `Hooked`, the list's title says the hook
-is not installed.
+The header's counts are `World.Need`, `Working` and `Idle`. When
+`World.NoHook` is set, the list's title says the hook is not installed.
 
 The cockpit's target is a `*Stream` or a `*Project` from the World. Its
 header lists `Stream.Sessions` and `Stream.Terminals`, or a project's

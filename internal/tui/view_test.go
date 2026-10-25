@@ -246,4 +246,10 @@ func TestTheTitleSaysWhenTheHookIsMissing(t *testing.T) {
 	if got := title(newTestModel(t, a, b)); strings.Contains(got, noHook) {
 		t.Errorf("with a hooked session: %q", got)
 	}
+	// Background sessions report blocked through Claude Code.
+	bg := row("c", "green", "", 3)
+	bg.Kind, bg.ID = "background", "bg1"
+	if got := title(newTestModel(t, bg)); strings.Contains(got, noHook) {
+		t.Errorf("with only a background session: %q", got)
+	}
 }

@@ -32,9 +32,11 @@ Three sources feed the view. None of them needs a model.
   `<home>/overview/sessions/`.
 
 A session that has not loaded the hook still appears, with its title,
-prompts and issues. It shows busy or idle only, and never blocked. When no
-listed session reports through the hook, the list's title says "hook not
-installed".
+prompts and issues. A background session still shows as blocked, since
+Claude Code reports that itself. An interactive session, one running in a
+pane, shows only busy or idle, so a permission prompt looks like work.
+When interactive sessions are listed and none reports through the hook,
+the list's title says "hook not installed".
 
 The digest reads the transcripts changed since the last digest, extracts each
 session's prompts and final replies, and asks a model to sort them into
@@ -468,10 +470,11 @@ go build -o bin/overview . && ln -sf "$PWD/bin/overview" ~/.local/bin/overview
 
 Then add the hook to the config directory's `settings.json`, beside any hooks
 already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
-`Notification`, `Stop` and `SessionEnd`. It is what lets the view show a
-session as blocked; titles, prompts and issue links come from the
-transcripts and work without it. Until a session has loaded it, the
-list's title says "hook not installed":
+`Notification`, `Stop` and `SessionEnd`. It is what lets the view show an
+interactive session as blocked on a permission prompt. Titles, prompts
+and issue links come from the transcripts, and a background session's
+blocked state from Claude Code, so those work without it. Until a session
+has loaded it, the list's title says "hook not installed":
 
 ```json
 {"hooks": [{"type": "command", "command": "\"$HOME\"/.local/bin/overview hook"}]}
