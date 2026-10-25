@@ -172,9 +172,7 @@ func Derive(in Inputs) World {
 		// stable sort by number leaves equal numbers in root order.
 		slices.SortStableFunc(p.Open, func(a, b issues.Issue) int { return a.ID - b.ID })
 		w.byName[n] = p
-		w.Projects = append(w.Projects, p)
 	}
-	sort.Slice(w.Projects, func(i, j int) bool { return NameLess(w.Projects[i].Name, w.Projects[j].Name) })
 	for _, s := range streams {
 		s.Project = w.byName[nameOf(in.User, s.Root)]
 		s.Project.Streams = append(s.Project.Streams, s)
@@ -183,6 +181,7 @@ func Derive(in Inputs) World {
 	// The sessions, in the places they sit.
 	for _, r := range rows {
 		s := &Session{Row: r, Project: w.byName[name(r.Cwd)], Pane: paneOf(in, r), Elsewhere: elsewhere(in, r)}
+		s.Project.Members = append(s.Project.Members, s)
 		if h, ok := in.Hosts[r.PID]; ok && !r.Background() {
 			s.Host = &h
 		}
@@ -231,11 +230,17 @@ func Derive(in Inputs) World {
 	byWindow := func(ts []*Terminal) {
 		sort.Slice(ts, func(i, j int) bool { return WindowLess(ts[i].Window, ts[j].Window) })
 	}
-	for _, p := range w.Projects {
+	for _, p := range w.byName {
 		sort.Slice(p.Streams, func(i, j int) bool { return StreamLess(p.Streams[i], p.Streams[j]) })
 		bySession(p.Sessions)
+		bySession(p.Members)
 		byWindow(p.Terminals)
+		// The list shows a project with something in it, or a pinned one.
+		if !p.Empty() || p.Pinned {
+			w.Projects = append(w.Projects, p)
+		}
 	}
+	sort.Slice(w.Projects, func(i, j int) bool { return NameLess(w.Projects[i].Name, w.Projects[j].Name) })
 	for _, s := range streams {
 		bySession(s.Sessions)
 		byWindow(s.Terminals)
@@ -262,10 +267,10 @@ func Derive(in Inputs) World {
 		}
 	}
 
-	// The trackers a refresh reads: every project root, and the roots of
-	// the directories links name, whose ids a link may need.
+	// The trackers a refresh reads: the roots of every project, listed or
+	// not, and of the directories links name, whose ids a link may need.
 	trackerRoots := map[string]bool{}
-	for _, p := range w.Projects {
+	for _, p := range w.byName {
 		for _, r := range p.Roots {
 			trackerRoots[r] = true
 		}

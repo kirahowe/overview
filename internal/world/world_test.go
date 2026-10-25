@@ -168,12 +168,16 @@ func TestALinkIntoAnotherProject(t *testing.T) {
 		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(3, issues.Ready))},
 		Pinned:   []string{"/w/app"},
 	})
-	eq(t, "projects", names(w.Projects), []string{"/w/app", "/w/lib"})
-	app, lib := w.Projects[0], w.Projects[1]
+	// lib has nothing listed in it, so the list leaves it out, but it is
+	// still s's project and s is its member.
+	eq(t, "projects", names(w.Projects), []string{"/w/app"})
+	app, lib := w.Projects[0], w.ProjectOf("/w/lib")
 	eq(t, "app's streams", streamKeys(app.Streams), []string{"/w/app#3"})
-	if w.Sessions["s"].Project != lib || !lib.Empty() || app.Empty() {
-		t.Errorf("s in %v; lib empty %v, app empty %v", w.Sessions["s"].Project.Name, lib.Empty(), app.Empty())
+	if lib == nil || w.Sessions["s"].Project != lib || !lib.Empty() || app.Empty() {
+		t.Fatalf("s in %v; lib %+v", w.Sessions["s"].Project.Name, lib)
 	}
+	eq(t, "lib's members", sessionIDs(lib.Members), []string{"s"})
+	eq(t, "app's members", sessionIDs(app.Members), nil)
 }
 
 // The orchestrator is in no list, its links make no workstream and it
@@ -325,6 +329,11 @@ func TestAwaySessions(t *testing.T) {
 		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(1, issues.Ready))},
 	})
 	eq(t, "away", sessionIDs(w.Away), []string{"away"})
+	eq(t, "members", sessionIDs(w.Projects[0].Members), []string{"away", "bg", "linked"})
+	// A project with only an away session is not listed.
+	if w := Derive(Inputs{Rows: []fleet.Row{away}, Hosts: map[int]Host{3: {}}}); len(w.Projects) != 0 || w.ProjectOf("/w/app") == nil {
+		t.Errorf("an away session's project: listed %v", names(w.Projects))
+	}
 	eq(t, "project", sessionIDs(w.Projects[0].Sessions), []string{"bg"})
 	eq(t, "#1", sessionIDs(w.Streams[Key{"/w/app", 1}].Sessions), []string{"linked"})
 	if h := w.Sessions["away"].Host; h == nil || h.Label() != "Notes" {

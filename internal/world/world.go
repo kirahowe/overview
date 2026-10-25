@@ -46,7 +46,12 @@ type Tracker struct {
 // Derive has built it, and every pointer in it points into the same
 // World.
 type World struct {
-	Projects  []*Project          // by name, as NameLess orders names
+	// Projects are the projects the list shows, by name as NameLess
+	// orders names: each with a workstream, a session or a terminal in
+	// it, and each pinned one. A project with only away sessions, or only
+	// sessions linked into another project's workstreams, is not listed,
+	// but is still its sessions' Project and ProjectOf finds it.
+	Projects  []*Project
 	Away      []*Session          // unlinked sessions that other apps run, working first then newest
 	Agents    []*Session          // every session once: needs you, working, idle
 	Sessions  map[string]*Session // by session id
@@ -58,7 +63,7 @@ type World struct {
 	Hooked              bool     // some live session reports through the hook
 	Trackers            []string // the roots whose trackers Derive needs, sorted
 
-	byName map[string]*Project
+	byName map[string]*Project // every project, listed or not
 	roots  map[string]string
 	user   string
 }
@@ -77,12 +82,14 @@ type Project struct {
 	Open            []issues.Issue // the open issues of its tracked roots, by number then root
 	Streams         []*Stream      // its workstreams, by status rank, priority, number, root
 	Sessions        []*Session     // its sessions linked to no workstream and in a terminal
+	Members         []*Session     // every session whose cwd is in it, linked, away or not, working first then newest
 	Terminals       []*Terminal    // its terminals opened for none of its workstreams, by window
 }
 
 // Empty says whether nothing is listed in the project: a project that
 // only has away sessions, or sessions linked to another project's issues,
-// or a pinned one with nothing running yet.
+// or a pinned one with nothing running yet. Of these, World.Projects
+// lists only the pinned ones.
 func (p *Project) Empty() bool {
 	return len(p.Streams) == 0 && len(p.Sessions) == 0 && len(p.Terminals) == 0
 }
@@ -199,8 +206,8 @@ func (w World) Root(dir string) string { return rootOf(w.roots, dir) }
 // Name is the display name of the project dir belongs to.
 func (w World) Name(dir string) string { return nameOf(w.user, w.Root(dir)) }
 
-// ProjectOf is the project dir belongs to, nil when the world has none
-// with its name.
+// ProjectOf is the project dir belongs to, listed or not, nil when the
+// world has none with its name.
 func (w World) ProjectOf(dir string) *Project { return w.byName[w.Name(dir)] }
 
 func rootOf(roots map[string]string, dir string) string {

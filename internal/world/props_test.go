@@ -511,14 +511,18 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 		in := genInputs(t)
 		w := Derive(in)
 		projects := map[*Project]bool{}
-		for _, p := range w.Projects {
-			if projects[p] || w.byName[p.Name] != p {
-				t.Fatalf("project %q twice or not by name", p.Name)
+		for n, p := range w.byName {
+			if projects[p] || p.Name != n {
+				t.Fatalf("project %q twice or filed under %q", p.Name, n)
 			}
 			projects[p] = true
 		}
-		if len(w.byName) != len(w.Projects) {
-			t.Fatalf("%d projects by name, %d listed", len(w.byName), len(w.Projects))
+		listed := map[*Project]bool{}
+		for _, p := range w.Projects {
+			if listed[p] || w.byName[p.Name] != p {
+				t.Fatalf("project %q listed twice or not by name", p.Name)
+			}
+			listed[p] = true
 		}
 		terms := map[*Terminal]bool{}
 		for _, tm := range w.Terminals {
@@ -571,11 +575,14 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 				term(tm)
 			}
 		}
-		for _, p := range w.Projects {
+		for _, p := range w.byName {
 			for _, st := range p.Streams {
 				stream(st)
 			}
 			for _, s := range p.Sessions {
+				sess(s)
+			}
+			for _, s := range p.Members {
 				sess(s)
 			}
 			for _, tm := range p.Terminals {
@@ -601,7 +608,7 @@ func TestPropTrackerRoots(t *testing.T) {
 		in := genInputs(t)
 		w := Derive(in)
 		want := map[string]bool{}
-		for _, p := range w.Projects {
+		for _, p := range w.byName {
 			for _, r := range p.Roots {
 				want[r] = true
 			}
@@ -627,4 +634,46 @@ func TestDeriveCopiesRoots(t *testing.T) {
 	if w.Root("/w/a/b") != "/w/a" {
 		t.Fatalf("the world saw its input change")
 	}
+}
+
+// Projects lists exactly the projects with something in them and the
+// pinned ones. The Members lists partition the sessions by project, and
+// every member is in its project's Sessions, in Away or under a
+// workstream.
+func TestPropProjectsAndMembers(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := genInputs(t)
+		w := Derive(in)
+		for _, p := range w.byName {
+			if listed := count(w.Projects, p) == 1; listed != (!p.Empty() || p.Pinned) {
+				t.Fatalf("%q listed %v, empty %v, pinned %v", p.Name, listed, p.Empty(), p.Pinned)
+			}
+		}
+		seen := map[*Session]int{}
+		for _, p := range w.byName {
+			checkSessions(t, p.Name+" members", p.Members)
+			for _, s := range p.Members {
+				seen[s]++
+				if s.Project != p {
+					t.Fatalf("%s is a member of %q but in %q", s.SessionID, p.Name, s.Project.Name)
+				}
+				if count(p.Sessions, s)+count(w.Away, s) == 0 && len(s.Streams) == 0 {
+					t.Fatalf("member %s is placed nowhere", s.SessionID)
+				}
+			}
+			for _, s := range p.Sessions {
+				if count(p.Members, s) != 1 {
+					t.Fatalf("%s is in %q's sessions but not its members", s.SessionID, p.Name)
+				}
+			}
+		}
+		for _, s := range w.Sessions {
+			if seen[s] != 1 {
+				t.Fatalf("%s is a member %d times", s.SessionID, seen[s])
+			}
+		}
+		if len(seen) != len(w.Sessions) {
+			t.Fatalf("%d members, %d sessions", len(seen), len(w.Sessions))
+		}
+	})
 }
