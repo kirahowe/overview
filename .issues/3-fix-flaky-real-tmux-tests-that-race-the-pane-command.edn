@@ -1,0 +1,11 @@
+{:id 3
+ :title "Fix flaky real-tmux tests that race the pane command"
+ :status :inbox
+ :type :bug
+ :priority :p1
+ :created "2026-10-25"
+ :updated "2026-10-25"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "3-fix-flaky-real-tmux-tests-that-race-the-pane-command.md"}
