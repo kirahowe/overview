@@ -201,18 +201,20 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
-Keys. The keyboard starts out on the panels. `h`, `j`, `k` and `l`, or
-the arrows, select the nearest panel that way, and `enter` goes into the
-selected one: into the list or the agents, where the keys move the
+Keys. The keyboard starts out in the list, and comes back to it from a
+pane on the right however it comes back: by `ctrl+[`, by a tmux key that
+selects the list's pane, or by a click. In a pane `esc` belongs to the
+program, which is why `ctrl+[` is the way back. `esc` in the list goes
+out to the panels, once it has cleared any search
+filter, and the footer then says `panels`. There `h`, `j`, `k` and `l`,
+or the arrows, select the nearest panel that way, and `enter` goes into
+the selected one: into the list or the agents, where the keys move the
 cursor, or into a pane, where they go to what runs there. On the pane
 that shows the cursor's entry, `enter` does what it does on the entry
-in the list. `esc` comes back out to the panels, once it has cleared
-any search filter. In a pane on the right,
-where `esc` belongs to the program, `ctrl+[` does that instead, and
-however the keyboard comes back to the list, the pane it was in is the
-one selected. The keys that act on the cursor's entry, such as `c`, `t`,
-`v` or `o`, work out on the panels too, and `n` there also selects the
-pane of the entry it goes to, so `enter` goes straight into it.
+in the list. The cursor's row has a background only while the keys move
+it. The keys that act on the cursor's entry, such as `c`, `t`, `v` or
+`o`, work out on the panels too, and `n` there also selects the pane of
+the entry it goes to, so `enter` goes straight into it.
 
 In the list, `j`/`k` move, and walk on from the projects into the agents.
 `n` jumps to the next session that needs you or workstream in review,

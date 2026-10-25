@@ -403,7 +403,11 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 	bg := func(st lipgloss.Style) lipgloss.Style { return st }
 	bar := " "
 	if selected {
-		bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
+		// Out on the panels the row loses its background, so a lit row
+		// always means the keys move it.
+		if m.blurred || m.listHasKeys() {
+			bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
+		}
 		edge := pal.CursorBg
 		if !m.listHasKeys() {
 			edge = pal.Border
@@ -1077,6 +1081,9 @@ func (m model) footer() string {
 		if m.filter != "" {
 			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		}
+		if !m.nav.inside && !m.blurred {
+			lead = append(lead, heading.Render("panels"))
+		}
 		hints = m.panelHints()
 	}
 	return m.plain(hintLine(lead, hints, m.contentWidth()))
@@ -1097,7 +1104,7 @@ func (m model) helpBox() []string {
 		entry{"h j k l", "move between panels"},
 		entry{"enter", "go into the panel"},
 		entry{"esc", "back out to the panels"},
-		entry{"ctrl+[", "back from a session"},
+		entry{"ctrl+[", "back to the list"},
 	), section("in the list",
 		entry{"j k", "move"},
 		entry{"n N", "next / previous waiting"},

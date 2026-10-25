@@ -269,7 +269,7 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps()}
+	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps(), nav: nav{inside: true}}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,

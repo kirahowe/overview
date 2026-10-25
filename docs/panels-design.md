@@ -51,11 +51,20 @@ does for the panes themselves.
 
 ## Moving between panels
 
-The keyboard starts out on the panels. `h j k l` select the nearest panel
-that way, `enter` goes into the selected one, and `esc` comes back out.
-In a tmux pane `esc` belongs to the program, so `ctrl+[` comes back from
-there, as it always has, and however the keyboard comes back, the pane it
-left is the one selected.
+The keyboard starts out in the list, and `esc` takes it out to the
+panels. There `h j k l` select the nearest panel that way, and `enter`
+goes into the selected one. In a tmux pane `esc` belongs to the program,
+so `ctrl+[` comes back from there. However the keyboard comes back to the
+view's pane, by `ctrl+[`, a tmux key or a click, it lands in the list on
+the cursor, so `j` and `k` move it at once. The pane it left is the
+panel a move back to the right returns to. Out on the panels the footer
+says `panels` and the cursor's row loses its background, so a row with a
+background always means the keys move it.
+
+The panels were first the place the keyboard came back to, with the pane
+it left selected. That made `j` and `k` look for a panel above or below
+the session, find none, and do nothing, which left the keyboard stuck
+with no sign of why.
 
 The panels are the projects and the agents, the tmux panes of the list's
 window, and in the cockpit the cards that take keys: the header and the

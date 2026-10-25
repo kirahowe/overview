@@ -305,10 +305,8 @@ func TestOverviewInTmux(t *testing.T) {
 		return ""
 	}
 	window := inWindow(first.id)
-	// Back from the session the keys are out on the panels, with the
-	// session selected: h selects the list, enter goes into it, and j
-	// moves its cursor.
-	ov.must("send-keys", "-t", list.id, "h", "Enter", "j")
+	// The keys are in the list, so j moves its cursor.
+	ov.must("send-keys", "-t", list.id, "j")
 	waitFor(t, "the list beside the second session, as wide", func() (bool, string) {
 		return beside(ov.panes(), second.id, 57)
 	})
@@ -844,8 +842,9 @@ func (r *rig) hook(t *testing.T, payload map[string]any) {
 }
 
 // The cockpit, end to end: o zooms the list's pane to fill its window and
-// draws the cards beside the list, and esc ends the zoom, leaving the list
-// beside the session as it was.
+// draws the cards beside the list, and esc, once it has taken the keys out
+// of the list to the panels, ends the zoom, leaving the list beside the
+// session as it was.
 func TestCockpit(t *testing.T) {
 	r := launch(t, "o")
 	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
@@ -873,7 +872,7 @@ func TestCockpit(t *testing.T) {
 		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
 	}
 
-	r.press("Escape")
+	r.press("Escape", "Escape")
 	waitFor(t, "the list beside the session again", func() (bool, string) {
 		ok, say := beside(r.ov.panes(), session.id, width)
 		f := strings.Fields(zoomed())
