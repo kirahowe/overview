@@ -160,16 +160,16 @@ func (r Row) Asking() bool {
 // NeedsYou is true for a session that cannot go on without its owner.
 func (r Row) NeedsYou() bool { return r.State == Blocked || r.Asking() }
 
-// AttachCmd opens a background session in the terminal. The session is
-// resumed in place if it had stopped, and keeps its hooks.
-func (h Home) AttachCmd(l Live) *exec.Cmd { return h.claude("attach", l.ID) }
+// AttachArgs is the command line that opens a background session in the
+// terminal. The session is resumed in place if it had stopped, and keeps
+// its hooks. Like NewArgs, it only builds the line, which a pane runs
+// with ClaudeEnv, and looks nothing up.
+func (h Home) AttachArgs(l Live) []string { return []string{h.Claude, "attach", l.ID} }
 
-// NewCmd starts a new interactive session, which joins the fleet.
-func (h Home) NewCmd() *exec.Cmd { return h.claude() }
-
-// NewCmdWith starts a new interactive session with prompt as its first
-// message.
-func (h Home) NewCmdWith(prompt string) *exec.Cmd { return h.claude(prompt) }
+// NewArgs is the command line that starts a new interactive session,
+// which joins the fleet, with prompt as its first message when one is
+// given.
+func (h Home) NewArgs(prompt ...string) []string { return append([]string{h.Claude}, prompt...) }
 
 // Stop stops a background session. Its conversation is kept.
 func (h Home) Stop(l Live) error { return h.stopSession(l) }

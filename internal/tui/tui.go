@@ -118,6 +118,9 @@ type model struct {
 
 	note   string
 	noteAt time.Time
+	// now is when the message being handled arrived. Update reads the
+	// clock once, at the door, so nothing after it reads the time itself.
+	now time.Time
 
 	// The details are rebuilt only when what they show changes, not on
 	// every spinner frame. A pointer, because the model is passed by value.
@@ -470,7 +473,7 @@ func (m model) runDigest() tea.Msg {
 }
 
 func (m model) say(note string) model {
-	m.note, m.noteAt = note, m.deps.now()
+	m.note, m.noteAt = note, m.now
 	return m
 }
 
@@ -773,6 +776,9 @@ func follow(ps []place, stage, sel string) (string, bool) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The time is read here, at the door, so the steps after it are pure
+	// in it: a note, a click and a tracker read are all stamped with it.
+	m.now = m.deps.now()
 	// reduce: the message changes the inputs or the UI state. The World is
 	// derived when settle first asks for it, once per generation.
 	before := m
@@ -829,10 +835,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tmux's panels mode does not bind the mouse, so a mouse event
 		// that reaches the view has taken the client out of it.
 		m.panels = false
-		// The input's time is read here, at the door, so apply stays pure.
 		// The mouse proves the user is at the list, but a wheel over it
-		// leaves the keyboard where it was.
-		at := m.deps.now()
+		// leaves the keyboard where it was. A click is stamped with the
+		// time Update read at the door, so apply stays pure.
+		at := m.now
 		return m.input(pointerHere, func(m model) []action { return m.mouseActions(msg, at) })
 	case noteMsg:
 		m = m.say(string(msg))
@@ -1389,9 +1395,9 @@ func (m model) act(e entry) (model, tea.Cmd) {
 	if !row.Background() {
 		return m.say(m.stageHint(row)), nil
 	}
-	attach := m.home.AttachCmd(row.Live)
+	attach := m.home.AttachArgs(row.Live)
 	return m.say("attaching to " + row.Name + "…").startPane(spawn{kind: spawnAttach, key: row.ID, sel: m.sel, name: row.Name,
-		session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach.Args})
+		session: m.session, dir: row.Cwd, env: m.claudeEnv(), command: attach})
 }
 
 // claudeEnv is what a pane overview starts is given, so a claude in it,
@@ -1409,7 +1415,7 @@ func (m model) start(dir string) (model, tea.Cmd) {
 	}
 	where := m.name(dir)
 	return m.say("starting a session in " + where + "…").startPane(spawn{kind: spawnSession, name: "a session in " + where,
-		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewCmd().Args})
+		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewArgs()})
 }
 
 // startOn runs a new claude at root on a workstream's issue: its first
@@ -1426,7 +1432,7 @@ func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
 		note = "starting a session on " + ref + ", which won't link by itself: the project id has a space or a #"
 	}
 	return m.say(note).startPane(spawn{kind: spawnSession, name: "a session on " + ref,
-		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewCmdWith(prompt).Args})
+		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewArgs(prompt)})
 }
 
 // openTerminal starts tmux's default shell at dir, a project's root, in a

@@ -124,7 +124,7 @@ func (m model) readTrackers() (model, tea.Cmd) {
 			continue
 		}
 		m.reading = withRead(m.reading, root, true)
-		old, run, d, now := m.trackers[root], m.issues, m.deps, m.deps.now()
+		old, run, d, now := m.trackers[root], m.issues, m.deps, m.now
 		cmds = append(cmds, func() tea.Msg {
 			t, ok := readTracker(old, root, run, d, now)
 			return trackerMsg{root, t, ok}

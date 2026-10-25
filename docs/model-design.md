@@ -343,6 +343,10 @@ The model holds three kinds of state, and nothing else:
    World's `Trackers` when the count has moved since it last asked.
 
 Nothing in steps 2 to 4 changes inputs, so one message makes one World.
+Before step 1, `Update` reads the clock once into `m.now`, and every
+step stamps what it needs with that: a note, a click, a tracker read.
+`apply` itself runs nothing. The command lines it hands a spawn, such as
+`Home.NewArgs`, are only built, with no lookup on the `PATH`.
 
 ## Testing
 
