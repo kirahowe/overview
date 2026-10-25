@@ -169,13 +169,14 @@ func (m model) projectID(root string) string {
 }
 
 // opening is the first prompt of a session started on a workstream, which
-// the hook reads to link it: "Work on overview#6: <title>".
+// its transcript links it by: "Work on overview#6: <title>".
 func opening(projectID string, i issues.Issue) string {
 	return fmt.Sprintf("Work on %s#%d: %s", projectID, i.ID, i.Title)
 }
 
-// opens says whether the hook reads prompt back as the opening of a
-// session on project id's issue i, so it links the session by itself.
+// opens says whether a transcript's reader takes prompt back as the
+// opening of a session on project id's issue i, so it links the session by
+// itself.
 func opens(prompt, id string, i issues.Issue) bool {
 	r, ok := fleet.OpeningTask(prompt, "")
 	return ok && r.Project == id && r.ID == i.ID

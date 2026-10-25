@@ -149,11 +149,6 @@ func keepLast[T any](xs []T) []T {
 	return xs
 }
 
-// streamOf is the workstream of issue id at root, nil when there is none.
-func (m model) streamOf(root string, id int) *world.Stream {
-	return m.world().Streams[world.Key{Root: root, ID: id}]
-}
-
 // sessionsOn counts the sessions working on issue i of the project at
 // root, as the cockpit's issues card and the task picker show them.
 func (m model) sessionsOn(root string) func(issues.Issue) int {

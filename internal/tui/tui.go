@@ -1411,8 +1411,8 @@ func (m model) start(dir string) (model, tea.Cmd) {
 }
 
 // startOn runs a new claude at root on a workstream's issue: its first
-// prompt names the issue, which links the session to it once the hook
-// reads it.
+// prompt names the issue, which links the session to it once its
+// transcript is read.
 func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil

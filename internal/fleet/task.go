@@ -96,7 +96,7 @@ func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 // reader for the common shapes, not a shell: no expansion, and command
 // substitutions and heredoc bodies are opaque. A `cd <dir>` or `pushd
 // <dir>` earlier in the string moves the directory later commands use. A
-// `cd` the hook cannot follow (home, `-`, a variable), a `popd`, and a
+// `cd` the reader cannot follow (home, `-`, a variable), a `popd`, and a
 // group or subshell, whose `cd` may or may not last past it, leave the
 // directory unknown, and a start after one links only when it names an
 // absolute directory itself. So does a `cd` behind a keyword or wrapper
@@ -154,7 +154,7 @@ func IssuesStarts(command, cwd string) []TaskRef {
 // unwrapCommand strips the control keywords and wrappers off the front of
 // a simple command. wrapped says one was there, so a `cd` that follows may
 // not run, or not last. It reports false when the command may change the
-// directory in a way the hook cannot follow: a loop, case or function
+// directory in a way the reader cannot follow: a loop, case or function
 // head, eval, source, or a wrapper in front of anything but `issues`.
 func unwrapCommand(argv []string) (rest []string, wrapped, ok bool) {
 	for len(argv) > 0 {
@@ -197,13 +197,13 @@ func isAssignment(w string) bool {
 	return true
 }
 
-// opaqueWord reports whether the hook cannot know what a word expands to.
+// opaqueWord reports whether the reader cannot know what a word expands to.
 func opaqueWord(w string) bool {
 	return strings.HasPrefix(w, "~") || strings.ContainsAny(w, "$`")
 }
 
 // resolveDir makes dir absolute against cwd. It reports false for a dir the
-// hook cannot expand (~, $VAR, substitutions, empty) and for a relative dir
+// reader cannot expand (~, $VAR, substitutions, empty) and for a relative dir
 // when cwd is not an absolute path to resolve it against.
 func resolveDir(cwd, dir string) (string, bool) {
 	switch {
