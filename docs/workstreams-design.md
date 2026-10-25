@@ -181,10 +181,11 @@ For a workstream, in this order:
 
 - The header: the issue's reference, title, status and priority, how
   long the workstream has run, the state of each of its sessions, and
-  the keys that act on it (`enter` attach, `v` review, `c` claude, `t`
-  terminal).
+  the keys that act on it: `c` claude and `t` terminal, plus `enter`
+  attach and `v` review once the workstream has a session. A workstream
+  with only terminals offers the first two.
 - The issue: its details from `issues show`, with the acceptance
-  criteria and which are checked.
+  criteria, those still to do first, and how many are checked.
 - Changes: the diff since the workstream was taken on, the earliest
   time any of its sessions linked to it, as a stat per file, and how
   much is still uncommitted. Work that subagents do in other worktrees
@@ -207,7 +208,7 @@ A card the window has no room for is dropped, from the bottom up,
 rather than squeezed. To keep the issues card short enough to show,
 each of its groups lists a few issues (three in review, four in
 progress, two blocked, three up next) and counts the rest, and the
-issue card lists six criteria at most. When the issues card is dropped
+issue card shows four lines of the issue's summary. When the issues card is dropped
 anyway, the keyboard goes back to the list, and `tab` says the window
 has no room for the card.
 

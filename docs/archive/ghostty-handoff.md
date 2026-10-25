@@ -1,3 +1,5 @@
+> Historical. The code this describes (internal/ghostty, internal/tui/jump.go, scripts/e2e-ghostty) was removed on 2026-10-18, when overview moved into tmux.
+
 # Handoff: overview as the command centre for stock Ghostty
 
 Written 2026-10-17 at the end of a planning session in the `agents` repo.

@@ -140,10 +140,10 @@ setting as a flag, as `overview view` is.
   appear as it writes them.
 
 Keys: `j`/`k` move, `ctrl+d`/`ctrl+u` page, `g`/`G` go to the ends,
-`]`/`[` jump between files, `}`/`{` between hunks, `n`/`N` between notes.
+`space` also pages, `]`/`[` jump between files, `}`/`{` between hunks, `n`/`N` between notes.
 `enter` (or `c`) writes a note on the line, or a reply on a note. `v`
-starts a range. `x` resolves or reopens a note, `e` edits an unsent one,
-`s` sends, `m` switches split and unified, `b` changes the base, `z`
+starts a range, and `esc` drops it. `x` resolves or reopens a note, `e` edits an unsent one,
+`s` sends, `m` switches split and unified, `b` changes the base, `R` reloads, `z`
 changes the pane's size, `h` shows resolved notes, `?` lists every key
 and `q` closes the review. In the note editor `enter` saves, `ctrl+j`
 starts a new line and `esc` cancels, asking first when there is text.
