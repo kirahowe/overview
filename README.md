@@ -57,8 +57,8 @@ The window is made of panels, and each has a rule along its top with its
 title in it: the list, the agents, the session beside them and any split
 of its window, and the cockpit's cards. tmux draws the rules of its panes,
 and the view draws the same rule for the panels it draws itself. The
-panel that is selected, or that has the keyboard, has its rule in the
-accent colour.
+panel that is selected, or that has the keyboard, has its rule and the
+whole border beside it in the accent colour.
 
 The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list

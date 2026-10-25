@@ -735,11 +735,11 @@ func TestSetZoomIsIdempotent(t *testing.T) {
 	}
 }
 
-// Frame draws each pane's rule in the border colour, and in the accent
+// Frame draws each pane's borders in the border colour, and in the accent
 // colour for the pane the view selected and for a pane other than the
 // view's that has the keyboard. The view's own pane lights only when it
 // is selected, since it has the keyboard while the user moves between
-// panes.
+// panes, or when another is, for the border they share.
 func TestFrameLightsTheSelectedPane(t *testing.T) {
 	s := testServer(t)
 	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
@@ -769,7 +769,9 @@ func TestFrameLightsTheSelectedPane(t *testing.T) {
 	if err := s.SetPaneOptions([]PaneSet{{beside.ID, SelectOption, "1"}, {beside.ID, TitleOption, "claude"}}); err != nil {
 		t.Fatal(err)
 	}
-	if a, b := style(list.ID), style(beside.ID); a != border || b != accent {
+	// The list has the keyboard, so tmux styles the border the two share
+	// from it, and it draws that border lit for the pane beside.
+	if a, b := style(list.ID), style(beside.ID); a != accent || b != accent {
 		t.Fatalf("beside selected: list %q, beside %q", a, b)
 	}
 	if got := strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", beside.ID, "#{"+TitleOption+"}"))); got != "claude" {
@@ -793,6 +795,122 @@ func TestFrameLightsTheSelectedPane(t *testing.T) {
 	if err := s.SetPaneOptions([]PaneSet{{"%999", SelectOption, "1"}}); err == nil {
 		t.Fatal("setting an option on a pane that is not there did not fail")
 	}
+}
+
+// What a client of a framed window shows: the border between the list and
+// the pane beside it is lit whole, top to bottom, whenever either is lit.
+// tmux's own indicator would light only half of it. A second server's
+// pane is the client, so the test reads the colours tmux draws.
+func TestFrameLightsTheWholeBorder(t *testing.T) {
+	sock := tmuxtest.New(t, "")
+	s := At(sock.Path, "/dev/null")
+	list := strings.TrimSpace(must(t)(s.run("new-session", "-d", "-s", "ov", "-x", "40", "-y", "12", "-P", "-F", "#{pane_id}", "sleep", "300")))
+	beside := strings.TrimSpace(must(t)(s.run("split-window", "-h", "-d", "-t", list, "-P", "-F", "#{pane_id}", "sleep", "300")))
+	if err := s.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := strconv.Atoi(strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", list, "#{pane_width}"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t)(s.run("set-option", "-g", "status", "off"))
+	client := tmuxtest.New(t, "")
+	client.Must("new-session", "-d", "-x", "40", "-y", "12", "tmux", "-S", sock.Path, "-f", "/dev/null", "attach", "-t", "ov")
+	client.Must("set-option", "-g", "status", "off")
+
+	const accent, border = "255;0;0", "17;17;17"
+	// screen waits for the client to draw what the step set up: the
+	// border's top cell in want.
+	screen := func(step, want string) [][]drawn {
+		t.Helper()
+		var rows [][]drawn
+		for range 100 {
+			rows = cells(client.Must("capture-pane", "-e", "-p"))
+			if len(rows) > 1 && len(rows[0]) > col && rows[0][col].fg == want {
+				return rows
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("%s: the border's top is not %s:\n%v", step, want, rows)
+		return nil
+	}
+	check := func(step, edge, listRule, besideRule string) {
+		t.Helper()
+		rows := screen(step, edge)
+		for y := 1; y < len(rows) && len(rows[y]) > col; y++ {
+			if c := rows[y][col]; c.r != "│" || c.fg != edge {
+				t.Fatalf("%s: row %d of the border is %q in %s, want %s", step, y, c.r, c.fg, edge)
+			}
+		}
+		if c := rows[0][col-1]; c.r != "─" || c.fg != listRule {
+			t.Fatalf("%s: the end of the list's rule is %q in %s, want %s", step, c.r, c.fg, listRule)
+		}
+		if last := rows[0][len(rows[0])-1]; last.r != "─" || last.fg != besideRule {
+			t.Fatalf("%s: the end of the rule beside is %q in %s, want %s", step, last.r, last.fg, besideRule)
+		}
+	}
+	set := func(sets ...PaneSet) {
+		t.Helper()
+		if err := s.SetPaneOptions(sets); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(t)(s.run("select-pane", "-t", list))
+	check("nothing selected", border, border, border)
+	set(PaneSet{list, SelectOption, "1"})
+	check("the list selected", accent, accent, border)
+	set(PaneSet{list, SelectOption, ""}, PaneSet{beside, SelectOption, "1"})
+	check("beside selected", accent, border, accent)
+	set(PaneSet{beside, SelectOption, ""})
+	check("nothing selected again", border, border, border)
+	must(t)(s.run("select-pane", "-t", beside))
+	check("the keyboard beside", accent, border, accent)
+}
+
+// drawn is one cell of a captured screen: its character and its
+// foreground, as the r;g;b of an SGR sequence, "" for the default.
+type drawn struct{ r, fg string }
+
+// cells splits what capture-pane -e prints into rows of cells, following
+// the foreground colours tmux sets.
+func cells(out string) [][]drawn {
+	var rows [][]drawn
+	for _, line := range strings.Split(out, "\n") {
+		var row []drawn
+		fg := ""
+		for rs := []rune(line); len(rs) > 0; {
+			if rs[0] != '\x1b' || len(rs) < 2 || rs[1] != '[' {
+				row = append(row, drawn{string(rs[0]), fg})
+				rs = rs[1:]
+				continue
+			}
+			end := 2
+			for end < len(rs) && (rs[end] < 0x40 || rs[end] > 0x7e) {
+				end++
+			}
+			if end < len(rs) && rs[end] == 'm' {
+				params := strings.Split(string(rs[2:end]), ";")
+				for i := 0; i < len(params); i++ {
+					switch {
+					case params[i] == "" || params[i] == "0" || params[i] == "39":
+						fg = ""
+					case params[i] == "38" && i+4 < len(params) && params[i+1] == "2":
+						fg = strings.Join(params[i+2:i+5], ";")
+						i += 4
+					case params[i] == "38" && i+2 < len(params):
+						fg = "5;" + params[i+2]
+						i += 2
+					}
+				}
+			}
+			rs = rs[min(end+1, len(rs)):]
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // A zoomed list draws its own frame, so the window's rules go with the

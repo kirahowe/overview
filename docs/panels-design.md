@@ -35,6 +35,16 @@ the pane option `@overview-select`, which the style formats read; tmux
 lights the pane with the keyboard by itself, except the view's own,
 which has the keyboard whenever the user is choosing a panel.
 
+The border between two panes is lit along its whole length. tmux's
+`pane-border-indicators` would light only half of it in a window of two
+panes, so `tmux.Frame` turns them off. tmux then styles a shared border
+from the active pane. While the user chooses a panel, that is the view's
+pane, so the view's pane draws its borders lit whenever any pane in its
+window is selected. Each rule's fill comes from `pane-border-format`,
+not the border style, so the view's rule stays unlit. The two cells
+before its title are the exception: tmux styles them from the view's
+pane as well, and they light with the border.
+
 `frames` works out every pane's title and selection from the model, and
 `reframe` sends tmux only what changed, one Cmd at a time, as `restage`
 does for the panes themselves.
