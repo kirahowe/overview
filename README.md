@@ -88,9 +88,10 @@ with nothing in it. A session that another app started, such as an editor
 plugin's chat panel, has no terminal. Unless it works on a task, it goes
 in a section of its own, "in other apps", dimmed and named after the app
 that runs it. When the entry under the cursor goes away, the cursor moves
-to the one after it, or to the one before it when it was last. When it
-was the last entry of a pinned project, the cursor stays on the
-project's placeholder.
+to the one after it in its project, or to the one before it when it was
+last. When nothing it was beside is left, it goes to the first entry
+now in the project: the placeholder of a pinned project that has
+emptied, or the session that took a placeholder's place.
 
 The agents are a panel of their own, under the projects. They hold every
 session in the list once more, in order of priority: those that need you
@@ -306,8 +307,8 @@ or the path you typed when nothing matches. A path that ends in `/`, as
 that directory's project. `esc` closes the picker. A
 pinned project stays in the list when nothing runs in it, on a row of its
 own that offers `c` and `t`, and either starts something in it. In a
-project that tracks its tasks the row offers `s` too. `x` on that row unpins
-the project. The pinned projects are kept in `<home>/overview/projects`.
+project that tracks its tasks the row offers `s` too. `x` on that row asks
+to unpin the project, and `y` does it. The pinned projects are kept in `<home>/overview/projects`.
 
 `s` starts work on one of a project's tasks. On any entry of a project
 that tracks its tasks, a picker takes the list's place and lists the

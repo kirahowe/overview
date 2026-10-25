@@ -608,9 +608,10 @@ func (m model) keepNear(before model) model {
 // is not in now. A session's entry that has gone goes to another entry
 // of the same session, as samePlace finds it, and a workstream that has
 // gone to the first session under it that is still listed, so the cursor
-// stays with the session it was on. Otherwise it is nearest: a cursor on
-// an entry of its own stays among those, out of the agents list, while
-// there are any.
+// stays with the session it was on. Otherwise it stays in its project,
+// as sameProject finds, and else it is nearest: a cursor on an entry of
+// its own stays among those, out of the agents list, while there are
+// any.
 func nearKey(old, now []entry, sel string) (string, bool) {
 	listed := map[string]bool{}
 	for _, e := range now {
@@ -619,7 +620,7 @@ func nearKey(old, now []entry, sel string) (string, bool) {
 	if key, ok := samePlace(old, now, sel); ok {
 		return key, true
 	}
-	if key, ok := placeholderFor(old, now, sel); ok {
+	if key, ok := sameProject(old, now, sel); ok {
 		return key, true
 	}
 	var keys []string
@@ -635,11 +636,14 @@ func nearKey(old, now []entry, sel string) (string, bool) {
 	return key, ok
 }
 
-// placeholderFor is the placeholder in now that took the place of sel,
-// an entry of old: when sel was the last entry of a pinned project, the
-// project's placeholder now stands where it stood, so the cursor stays
-// in that project. An agents alias has no project section to stay in.
-func placeholderFor(old, now []entry, sel string) (string, bool) {
+// sameProject is where the cursor goes when sel, an entry of old in a
+// project's section, is not in now: to the nearest entry of old in that
+// project still listed, after it and then before it, or else to the
+// first entry now listed in the project. So the last terminal of a
+// pinned project leaves the cursor on the placeholder that takes its
+// place, and a session that starts in a project with only a placeholder
+// takes the cursor from it. An agents alias has no section to stay in.
+func sameProject(old, now []entry, sel string) (string, bool) {
 	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
 	if i < 0 || old[i].alias == agentsPrefix {
 		return "", false
@@ -648,8 +652,22 @@ func placeholderFor(old, now []entry, sel string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
+	in := func(e entry) bool { return e.alias != agentsPrefix && e.projectName() == name }
+	listed := map[string]bool{}
 	for _, e := range now {
-		if e.kind == projectEntry && e.proj.Name == name {
+		if in(e) {
+			listed[e.key()] = true
+		}
+	}
+	var keys []string
+	for _, e := range old {
+		keys = append(keys, e.key())
+	}
+	if key, ok := nearest(keys, sel, func(k string) bool { return listed[k] }); ok {
+		return key, true
+	}
+	for _, e := range now {
+		if in(e) {
 			return e.key(), true
 		}
 	}
@@ -1046,7 +1064,11 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.helpTop = max(0, min(a.n, m.helpMax()))
 	case dismiss:
 		if m.confirm != "" {
+			unpin := strings.HasPrefix(m.confirm, "project:")
 			m.confirm = ""
+			if unpin {
+				return m.say("left it pinned"), nil
+			}
 			return m.say("left it running"), nil
 		}
 		m.help = false
@@ -1059,6 +1081,11 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			}
 			if c.kind == terminalEntry && m.mux != nil {
 				return m.say("closing " + c.term.Title + "…"), m.closeTerminal(c.term)
+			}
+			if c.kind == projectEntry {
+				m.pins++
+				home, root := m.home, c.pin()
+				return m, func() tea.Msg { return pinnedMsg{root: root, err: home.UnpinProject(root), unpin: true} }
 			}
 		}
 		if s := m.world().Sessions[key]; s != nil {
@@ -1155,9 +1182,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		case ok && e.kind == terminalEntry:
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
-			m.pins++
-			home, root := m.home, e.pin()
-			return m, func() tea.Msg { return pinnedMsg{root: root, err: home.UnpinProject(root), unpin: true} }
+			m.confirm = e.key()
 		case ok && e.kind == workstreamEntry:
 			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:

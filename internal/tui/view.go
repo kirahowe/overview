@@ -1403,6 +1403,12 @@ func (m model) confirmBox() []string {
 			body = append(body, "", red.Render("y")+dim.Render(" close   ")+dim.Render("any other key cancels"))
 			return box("close terminal", "", body, w, len(body)+2, true)
 		}
+		if e.kind == projectEntry && e.key() == m.confirm {
+			body := []string{bold.Foreground(pal.Text).Render("Unpin " + e.proj.Name + "?")}
+			body = append(body, wrap(dim.Render("Nothing runs in it, so it leaves the list. a pins it again."), w-4)...)
+			body = append(body, "", red.Render("y")+dim.Render(" unpin   ")+dim.Render("any other key cancels"))
+			return box("unpin project", "", body, w, len(body)+2, true)
+		}
 	}
 	name := m.confirm
 	if s := m.world().Sessions[m.confirm]; s != nil {

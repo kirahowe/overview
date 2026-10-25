@@ -1373,16 +1373,31 @@ func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 	})
 }
 
-// When the entry under the cursor goes and leaves its pinned project
-// empty, the cursor goes to the project's placeholder, which stands where
-// the entry stood, and never to another project's entry.
-func TestPropTheCursorStaysInAProjectThatEmpties(t *testing.T) {
+// When the entry under the cursor goes and anything is still listed in
+// its project, the cursor stays in that project: on the nearest of its
+// entries, on the placeholder that took the place of its last one, or on
+// what replaced a placeholder. Only a session that is still listed
+// elsewhere, which samePlace follows, takes it out.
+func TestPropTheCursorStaysInItsProject(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
-		old := flatten(present(listWorld(rows, terms, pinned, nil), ""))
+		genLinks(t, rows)
+		is := genIssues(t)
+		old := flatten(present(listWorld(rows, terms, pinned, worldTrackers(is)), ""))
 		left := slices.DeleteFunc(slices.Clone(terms), func(tmux.Pane) bool { return rapid.Bool().Draw(t, "close") })
 		rows = slices.DeleteFunc(slices.Clone(rows), func(fleet.Row) bool { return rapid.Bool().Draw(t, "end") })
-		now := flatten(present(listWorld(rows, left, pinned, nil), ""))
+		if rapid.Bool().Draw(t, "start") {
+			for _, r := range genRows(t) {
+				if !slices.ContainsFunc(rows, func(o fleet.Row) bool { return o.SessionID == r.SessionID }) {
+					rows = append(rows, r)
+				}
+			}
+		}
+		next := map[string][]issues.Issue{}
+		for _, root := range slices.Sorted(maps.Keys(is)) {
+			next[root] = slices.DeleteFunc(slices.Clone(is[root]), func(issues.Issue) bool { return rapid.Bool().Draw(t, "done") })
+		}
+		now := flatten(present(listWorld(rows, left, pinned, worldTrackers(next)), ""))
 		listed := map[string]bool{}
 		for _, e := range now {
 			listed[e.key()] = true
@@ -1391,13 +1406,17 @@ func TestPropTheCursorStaysInAProjectThatEmpties(t *testing.T) {
 			if listed[was.key()] || was.alias == agentsPrefix {
 				continue
 			}
-			name := was.projectName()
-			at := slices.IndexFunc(now, func(e entry) bool { return e.kind == projectEntry && e.proj.Name == name })
-			if name == "" || at < 0 {
+			if _, ok := samePlace(old, now, was.key()); ok {
 				continue
 			}
-			if got, ok := nearKey(old, now, was.key()); !ok || got != now[at].key() {
-				t.Fatalf("on %s in %s, moved to %s (%v), not its placeholder %s", was.key(), name, got, ok, now[at].key())
+			name := was.projectName()
+			if name == "" || !slices.ContainsFunc(now, func(e entry) bool { return e.alias != agentsPrefix && e.projectName() == name }) {
+				continue
+			}
+			got, ok := nearKey(old, now, was.key())
+			at := slices.IndexFunc(now, func(e entry) bool { return e.key() == got })
+			if !ok || at < 0 || now[at].projectName() != name {
+				t.Fatalf("on %s in %s, moved to %s (%v), out of the project", was.key(), name, got, ok)
 			}
 		}
 	})

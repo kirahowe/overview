@@ -1313,10 +1313,18 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || f.panes[f.find(m.opened.ID)].Project != "/code/empty" {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
-	// x unpins it at once.
+	// x asks first, and anything but y leaves it pinned.
 	m, cmd = press(m, "esc", "g", "x")
-	if cmd == nil || m.confirm != "" {
+	if m.confirm != "project:/code/empty" || !strings.Contains(ansi.Strip(m.View()), "Unpin /code/empty?") {
 		t.Fatalf("x on the placeholder: confirm %q", m.confirm)
+	}
+	if m, _ = press(m, "n"); m.confirm != "" || m.note != "left it pinned" || len(m.home.Projects()) != 1 {
+		t.Fatalf("n: confirm %q note %q pinned %v", m.confirm, m.note, m.home.Projects())
+	}
+	// y unpins it.
+	m, cmd = press(m, "x", "y")
+	if cmd == nil || m.confirm != "" {
+		t.Fatalf("x y on the placeholder: confirm %q", m.confirm)
 	}
 	msg := cmd().(pinnedMsg)
 	if msg.err != nil || !msg.unpin || msg.root != "/code/empty" || len(m.home.Projects()) != 0 {
@@ -1361,8 +1369,26 @@ func TestClosingAPinnedProjectsLastTerminalKeepsTheCursorThere(t *testing.T) {
 	if m.sel != "project:/code/gamma" {
 		t.Fatalf("sel %s after closing %s, want gamma's placeholder", m.sel, gamma)
 	}
-	if m = pressSettled(t, m, "x"); m.confirm == beta {
-		t.Fatal("a second x asks to close beta's terminal")
+	if m = pressSettled(t, m, "x"); m.confirm != "project:/code/gamma" || !strings.Contains(ansi.Strip(m.View()), "Unpin /code/gamma?") {
+		t.Fatalf("a second x asks about %q, want to unpin gamma", m.confirm)
+	}
+}
+
+// A session that starts in a pinned project with only its placeholder
+// takes the cursor from the placeholder, so it stays in that project.
+func TestASessionStartingInAPinnedProjectTakesItsPlaceholdersCursor(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	m, cmd := step(m, rowsMsg{pinned: []string{"/code/beta", "/code/gamma"}})
+	m = settle(t, m, cmd)
+	m = selectKey(t, m, "project:/code/beta")
+	s := row("s1", "red", "auth", 11)
+	s.Cwd = "/code/beta"
+	f.add("ov", "ttys011")
+	m, cmd = step(m, rowsMsg{rows: []fleet.Row{s}, ttys: map[int]string{11: "ttys011"}, pinned: m.in.Pinned})
+	m = settle(t, m, cmd)
+	if m.sel != "s1" {
+		t.Fatalf("sel %s, want the session that started in beta", m.sel)
 	}
 }
 
