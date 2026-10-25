@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -648,42 +649,76 @@ func TestARuleSaysTheIssuesFailed(t *testing.T) {
 }
 
 // The footer's enter hint says what enter does on every entry, in the
-// list and in the cockpit, and is left out where enter only says how to
-// start something: on #4, with no session, enter opens the cockpit, and
-// in the cockpit it only says so.
+// list, in the cockpit and while searching, and is left out where enter
+// only says how to start something: on #4, with no session, enter opens
+// the cockpit, and in the cockpit it only says so. A search for zebra
+// shows only the background session under #6, so enter attaches to it,
+// though s1 leads #6 in the whole list.
 func TestTheEnterHintSaysWhatEnterDoes(t *testing.T) {
 	f := newFakeMux()
 	m := taskModel(t, f)
-	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background", Cwd: "/code/app"}, State: fleet.Idle}
-	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), bg), ttys: m.in.TTYs, pinned: []string{"/code/empty"}})
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "zebra", Kind: "background", Cwd: "/code/app"}, State: fleet.Idle}
+	bg.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
+	obs := row("obs", "claude-bd", "", 63381)
+	obs.Cwd = "/"
+	m.deps.reveal = func(string) error { return nil }
+	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), bg, obs), ttys: m.in.TTYs, pinned: []string{"/code/empty"},
+		hosts: map[int]world.Host{63381: {Name: "Obsidian", Path: "/Applications/Obsidian.app"}}})
 	m = settle(t, m, cmd)
-	m = pressSettled(t, selectKey(t, m, "s2"), "t")
+	m = pressSettled(t, selectKey(t, resized(t, m, 120, 30), "s2"), "t")
+	said := regexp.MustCompile(`enter (open app|type|attach|cockpit)`)
+	check := func(at model, where string) string {
+		t.Helper()
+		at.note = ""
+		label := ""
+		if got := said.FindStringSubmatch(ansi.Strip(at.footer())); got != nil {
+			label = got[1]
+		}
+		after, _ := at.apply(action{do: open})
+		did := ""
+		switch {
+		case after.entering != "":
+			did = "type"
+		case strings.HasPrefix(after.note, "attaching"):
+			did = "attach"
+		case strings.HasPrefix(after.note, "opening"):
+			did = "open app"
+		case after.cockpit.open && !at.cockpit.open:
+			did = "cockpit"
+		}
+		if label != did {
+			t.Errorf("%s: the footer says enter %q, enter did %q (note %q)", where, label, did, after.note)
+		}
+		return did
+	}
+	seen := map[string]bool{}
 	for _, cockpit := range []bool{false, true} {
 		for _, e := range m.ordered() {
 			at := selectKey(t, m, e.key())
 			if cockpit {
 				at = pressSettled(t, at, "o")
 			}
-			label := ""
-			for _, h := range at.panelHints() {
-				if h.key == "enter" {
-					label = h.label
-				}
-			}
-			after, _ := at.apply(action{do: open})
-			did := ""
-			switch {
-			case after.entering != "":
-				did = "type"
-			case strings.HasPrefix(after.note, "attaching"):
-				did = "attach"
-			case after.cockpit.open && !at.cockpit.open:
-				did = "cockpit"
-			}
-			if label != did {
-				t.Errorf("cockpit %v, on %s: the footer says enter %q, enter did %q (note %q)", cockpit, e.key(), label, did, after.note)
-			}
+			seen[check(at, fmt.Sprintf("cockpit %v, on %s", cockpit, e.key()))] = true
 		}
+	}
+	for _, q := range []string{"zebra", "#6", "obsidian", "red", "empty"} {
+		at := pressSettled(t, m, append([]string{"/"}, typed(q)...)...)
+		seen[check(at, "searching "+q)] = true
+		at = pressSettled(t, at, "down")
+		seen[check(at, "searching "+q+", one down")] = true
+	}
+	for _, k := range []string{"", "type", "attach", "open app", "cockpit"} {
+		if !seen[k] {
+			t.Errorf("no entry where enter does %q", k)
+		}
+	}
+	// The search for zebra puts the cursor on #6, and enter attaches.
+	at := pressSettled(t, m, append([]string{"/"}, typed("zebra")...)...)
+	if e, _, _ := at.selected(at.ordered()); e.key() != "task:/code/app#6" {
+		t.Fatalf("searching zebra, the cursor is on %s", e.key())
+	}
+	if after, _ := at.apply(action{do: open}); !strings.HasPrefix(after.note, "attaching to zebra") {
+		t.Fatalf("enter on #6 searching zebra: note %q, entering %q", after.note, after.entering)
 	}
 }
 

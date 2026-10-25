@@ -1115,6 +1115,12 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case clearFilter:
 		m.filter = ""
 	case open:
+		// What enter does is decided on the list as the user sees it, as
+		// the footer's hint is, before a search is cleared.
+		var k enterKind
+		if ok {
+			e, k = m.enterOn(e)
+		}
 		if m.filtering {
 			// Act on the match under the cursor, then show everything
 			// again so coming back finds the full list.
@@ -1126,7 +1132,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		return m.act(e)
+		return m.carry(e, k)
 	case click:
 		double := a.id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
 		m.clickID, m.clickAt = a.id, a.at
@@ -1462,9 +1468,8 @@ func (m model) enterOn(e entry) (entry, enterKind) {
 	return e, enterAttach
 }
 
-// act does what enterOn decided for an entry.
-func (m model) act(e entry) (model, tea.Cmd) {
-	e, k := m.enterOn(e)
+// carry does k, what enterOn decided, to e, the entry it decided on.
+func (m model) carry(e entry, k enterKind) (model, tea.Cmd) {
 	switch k {
 	case enterCockpit:
 		return m.openCockpit()
