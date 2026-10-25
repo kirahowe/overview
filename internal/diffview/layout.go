@@ -165,10 +165,13 @@ type spot struct {
 	text string // the line's text, so a line that moved is found again
 	note string
 	// head says the spot is a header, of the file or, when hunk is not
-	// -1, of its hunk-th hunk. A header has no line of its own, so it is
-	// found again as itself and never as the nearest line.
-	head bool
-	hunk int
+	// -1, of its hunk-th hunk, which started at oldStart and newStart
+	// under section. A header has no line of its own, so it is found
+	// again as itself and never as the nearest line.
+	head               bool
+	hunk               int
+	oldStart, newStart int
+	section            string
 }
 
 // spotOf is the spot an item is at.
@@ -183,6 +186,10 @@ func spotOf(files []diff.File, it item) spot {
 	s := spot{path: f.Path()}
 	if it.kind != rowItem {
 		s.head, s.hunk = true, it.hunk
+		if it.kind == hunkItem {
+			h := f.Hunks[it.hunk]
+			s.oldStart, s.newStart, s.section = h.OldStart, h.NewStart, h.Section
+		}
 		return s
 	}
 	lines := f.Hunks[it.hunk].Lines
@@ -197,24 +204,14 @@ func spotOf(files []diff.File, it item) spot {
 // find is the index of the item best matching s: its note, else the row
 // of its file nearest its line number with the same text, as when lines
 // were added above it, else the row nearest the number, else the file's
-// header. A header is found as the same header, else its file's. ok is
-// false when s's file is gone too.
+// header. ok is false when s's file is gone too.
 func find(items []item, files []diff.File, s spot) (int, bool) {
+	if s.head {
+		return findHeader(items, files, s)
+	}
 	const far = 1 << 30
 	best, bestDist := -1, far
 	for i, it := range items {
-		if s.head {
-			if it.file < 0 || files[it.file].Path() != s.path || it.kind == rowItem || it.kind == noteItem {
-				continue
-			}
-			if s.hunk >= 0 && it.kind == hunkItem && it.hunk == s.hunk {
-				return i, true
-			}
-			if best < 0 {
-				best = i
-			}
-			continue
-		}
 		if s.note != "" {
 			if it.kind == noteItem && it.note == s.note {
 				return i, true
@@ -257,6 +254,39 @@ func find(items []item, files []diff.File, s spot) (int, bool) {
 		}
 	}
 	return best, best >= 0
+}
+
+// findHeader finds a header spot: a hunk's header as the one of its file
+// that starts nearest where it did, the same section first and the same
+// place in the file breaking ties, since a reload can add or drop hunks
+// above it; else, or for the file's own header, the file's header.
+func findHeader(items []item, files []diff.File, s spot) (int, bool) {
+	abs := func(n int) int { return max(n, -n) }
+	file, best := -1, -1
+	var bestKey [3]int
+	for i, it := range items {
+		if it.file < 0 || files[it.file].Path() != s.path {
+			continue
+		}
+		if it.kind == fileItem && file < 0 {
+			file = i
+		}
+		if s.hunk < 0 || it.kind != hunkItem {
+			continue
+		}
+		h := files[it.file].Hunks[it.hunk]
+		key := [3]int{abs(h.OldStart-s.oldStart) + abs(h.NewStart-s.newStart), 1, abs(it.hunk - s.hunk)}
+		if h.Section == s.section {
+			key[1] = 0
+		}
+		if best < 0 || key[0] < bestKey[0] || (key[0] == bestKey[0] && (key[1] < bestKey[1] || (key[1] == bestKey[1] && key[2] < bestKey[2]))) {
+			best, bestKey = i, key
+		}
+	}
+	if best >= 0 {
+		return best, true
+	}
+	return file, file >= 0
 }
 
 // nextSelectable is the first selectable item from i going in step dir,

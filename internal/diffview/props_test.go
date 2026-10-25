@@ -953,9 +953,10 @@ func TestCursorStaysOnItsSpotProperty(t *testing.T) {
 	})
 }
 
-// Whatever notes arrive, the hunk header over the cursor stays drawn when
-// a jump put it at the top of the screen: notes go under lines, and the
-// header the screen starts at is found again as itself.
+// Whatever notes arrive, and whatever hunks a reload adds or drops around
+// it, the hunk header over the cursor stays drawn when a jump put it at
+// the top of the screen: notes go under lines, and the header the screen
+// starts at is found again as itself, by where it starts.
 func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
 	base := t.TempDir()
 	theme := testTheme(t)
@@ -964,7 +965,12 @@ func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		files := genFiles(t)
+		ps := rapid.Permutation(paths).Draw(t, "paths")
+		var files []diff.File
+		for i := range rapid.IntRange(1, 3).Draw(t, "files") {
+			// Numbered from 30, so a hunk fits above the first.
+			files = append(files, genFile(t, ps[i], 30))
+		}
 		f := newFixture(dir, "")
 		m := newModel(baseConfig(theme, f), f.deps())
 		m, cmd := step(m, tea.WindowSizeMsg{Width: rapid.IntRange(40, 200).Draw(t, "w"), Height: rapid.IntRange(14, 50).Draw(t, "h")})
@@ -981,10 +987,13 @@ func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
 			t.Skip("no hunk at the top")
 		}
 		header := spotOf(m.laidOut, m.items[m.top])
+		same := func(a spot) bool {
+			return a.path == header.path && a.oldStart == header.oldStart && a.newStart == header.newStart && a.section == header.section
+		}
 		drawn := func(m model) bool {
 			_, owners := m.frame()
 			for _, o := range owners {
-				if o >= 0 && m.items[o].kind == hunkItem && spotOf(m.laidOut, m.items[o]) == header {
+				if o >= 0 && m.items[o].kind == hunkItem && same(spotOf(m.laidOut, m.items[o])) {
 					return true
 				}
 			}
@@ -999,6 +1008,37 @@ func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
 			if !drawn(m) {
 				t.Fatalf("round %d: the hunk header %+v is gone:\n%s", k, header, screen(m))
 			}
+		}
+
+		// A reload adds a hunk at the top of the header's file, or drops
+		// another of its hunks.
+		fi, hi := m.items[m.top].file, m.items[m.top].hunk
+		next := append([]diff.File{}, files...)
+		g := next[fi]
+		g.Hunks = append([]diff.Hunk{}, g.Hunks...)
+		if rapid.Bool().Draw(t, "add") {
+			only := []diff.Kind{diff.Context}
+			if g.Hunks[0].OldStart == 0 {
+				only = []diff.Kind{diff.Added}
+			} else if g.Hunks[0].NewStart == 0 {
+				only = []diff.Kind{diff.Removed}
+			}
+			if above := genHunks(t, 1, only); len(above) > 0 {
+				g.Hunks = append([]diff.Hunk{above[0]}, g.Hunks...)
+			}
+		} else if len(g.Hunks) > 1 {
+			drop := rapid.IntRange(0, len(g.Hunks)-2).Draw(t, "drop")
+			if drop >= hi {
+				drop++
+			}
+			g.Hunks = append(g.Hunks[:drop], g.Hunks[drop+1:]...)
+		}
+		next[fi] = g
+		m, _ = step(m, keyMsg("R"))
+		m, cmd = step(m, loadedMsg{gen: m.gen, base: "b", files: next})
+		m = drain(t, m, cmd)
+		if !drawn(m) {
+			t.Fatalf("after the reload the hunk header %+v is gone:\n%s", header, screen(m))
 		}
 	})
 }
