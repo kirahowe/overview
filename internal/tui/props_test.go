@@ -1883,12 +1883,20 @@ func TestATerminalRowKeepsItsName(t *testing.T) {
 
 // A card is left out only when there is no room for it: when the cards
 // shown leave fewer than minCard lines free. A shortened card fills what
-// is left.
+// is left, and a shortened issues card keeps its cursor in view.
 func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows := genCards(t)
+		var others []issues.Issue
+		for i := range rapid.IntRange(1, 12).Draw(t, "issues") {
+			others = append(others, issues.Issue{ID: i + 1, Title: "issue", Status: rapid.SampledFrom([]string{issues.Ready, issues.InProgress, issues.Review, issues.Blocked}).Draw(t, "status")})
+		}
+		pick := rapid.IntRange(0, len(pickable(others))-1).Draw(t, "pick")
+		focused := issuesCard(others, nil, true, pick, "")
+		focused.title = "focused"
+		rows = append(rows, []card{focused})
 		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
-		_, _, places := layoutCards(rows, w, h, "")
+		lines, _, places := layoutCards(rows, w, h, "")
 		total := 0
 		for _, r := range rows {
 			total += len(r)
@@ -1899,6 +1907,12 @@ func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 		}
 		if len(places) < total && h-used >= minCard {
 			t.Fatalf("%d of %d cards shown at %dx%d with %d lines free", len(places), total, w, h, h-used)
+		}
+		if len(places) == total && w >= 20 {
+			p := places[len(places)-1]
+			if !strings.Contains(ansi.Strip(strings.Join(lines[p.r.y:p.r.y+p.r.h], "\n")), "▸ ") {
+				t.Fatalf("the issues card at %+v hides its cursor:\n%s", p.r, ansi.Strip(strings.Join(lines, "\n")))
+			}
 		}
 	})
 }

@@ -36,27 +36,103 @@ type card struct {
 	title, right string
 	body         func(w int) []string
 	id           panelID
-	// at is the line of the body at width w that a shortened card keeps
-	// in view, such as the issues card's cursor; nil keeps the top.
-	at func(w int) int
+	// rows is the body at width w as a shortened card cuts it, with the
+	// row it keeps in view, such as the issues card's cursor, and what
+	// its rows count. nil cuts the body's lines from the top.
+	rows func(w int) (rs []cardRow, at int, unit string)
+}
+
+// cardRow is a line of a card's body as a shortened card sees it: how
+// many things it stands for, and, for a row of a group whose heading is
+// on its first row, the group and the row drawn with that heading, which
+// it takes when it is the first of its group left in view.
+type cardRow struct {
+	line, labelled string
+	weight         int
+	group          int // -1 for none
+	first          bool
 }
 
 // minCard is the fewest lines a card is shown in: its rule, a line of its
 // body and a line that says how much more it has.
 const minCard = 3
 
-// shorten cuts body to k lines when it has more, keeping line at in view
-// and saying in the last line how many it leaves out.
-func shorten(body []string, at, k int) []string {
-	if len(body) <= k || k < 1 {
-		return body
+// lineRows are a body's lines as rows that count themselves.
+func lineRows(body []string) []cardRow {
+	out := make([]cardRow, len(body))
+	for i, l := range body {
+		out[i] = cardRow{line: l, weight: 1, group: -1}
 	}
-	if k == 1 {
-		return []string{dim.Render(fmt.Sprintf("… %d more", len(body)))}
+	return out
+}
+
+// shorten cuts rows to k lines when there are more, keeping row at in
+// view, and says how many of unit it leaves out above, in a first line,
+// and below, in a last one; with room for only one row besides, one line
+// says both. The first row in view of a group whose first row is cut
+// takes the group's heading.
+func shorten(rows []cardRow, at, k int, unit string) []string {
+	if len(rows) <= k || k < 1 {
+		out := make([]string, len(rows))
+		for i, r := range rows {
+			out[i] = r.line
+		}
+		return out
 	}
-	start := window(0, at, at+1, len(body), k-1)
-	out := slices.Clone(body[start : start+k-1])
-	return append(out, dim.Render(fmt.Sprintf("… %d more", len(body)-(k-1))))
+	at = max(0, min(at, len(rows)-1))
+	start, end := 0, 0
+	for s := k - 1; s >= 1; s-- {
+		start = window(0, at, at+1, len(rows), s)
+		end = start + s
+		marks := 0
+		if start > 0 {
+			marks++
+		}
+		if end < len(rows) {
+			marks++
+		}
+		if s+marks <= k {
+			break
+		}
+	}
+	hidden := func(rs []cardRow) int {
+		n := 0
+		for _, r := range rs {
+			n += r.weight
+		}
+		return n
+	}
+	more := func(arrow string, n int) string {
+		u := unit
+		if n != 1 {
+			u += "s"
+		}
+		return fmt.Sprintf("%s %d more %s", arrow, n, u)
+	}
+	shown := make([]string, 0, k)
+	seen := map[int]bool{}
+	for i := start; i < end; i++ {
+		r := rows[i]
+		l := r.line
+		if r.group >= 0 && !seen[r.group] && !r.first && r.labelled != "" {
+			l = r.labelled
+		}
+		if r.group >= 0 {
+			seen[r.group] = true
+		}
+		shown = append(shown, l)
+	}
+	above, below := hidden(rows[:start]), hidden(rows[end:])
+	if start > 0 && end < len(rows) && len(shown)+2 > k {
+		return append(shown, dim.Render(more("↑", above)+" · "+more("↓", below)))
+	}
+	if start > 0 {
+		shown = append([]string{dim.Render(more("↑", above))}, shown...)
+	}
+	if end < len(rows) {
+		shown = append(shown, dim.Render(more("↓", below)))
+	}
+	return shown
 }
 
 // render draws c as h lines w wide, its rule lit when it is selected, and
@@ -137,11 +213,11 @@ func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []
 			}
 			tall = left
 			for i, c := range r {
-				at := 0
-				if c.at != nil {
-					at = c.at(cardInner(widths[i]))
+				rs, at, unit := lineRows(bodies[i]), 0, "line"
+				if c.rows != nil {
+					rs, at, unit = c.rows(cardInner(widths[i]))
 				}
-				bodies[i] = shorten(bodies[i], at, tall-1)
+				bodies[i] = shorten(rs, at, tall-1, unit)
 			}
 		}
 		lit := func(c card) bool { return c.id != "" && c.id == sel }
@@ -578,22 +654,21 @@ func pickable(others []issues.Issue) []issues.Issue {
 // "" when it worked, and the card then lists what the last good read
 // found.
 func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, failed string) card {
-	lines := func(w int) (out []string, at int) {
+	rows := func(w int) (out []cardRow, at int, unit string) {
 		if failed != "" {
-			out = wrap(fg(pal.Asking).Render("issues failed: "+failed), w)
+			for _, l := range wrap(fg(pal.Asking).Render("issues failed: "+failed), w) {
+				out = append(out, cardRow{line: l, group: -1})
+			}
 		}
 		groups, inbox := issueGroups(others)
 		if len(pickable(others)) == 0 && inbox == 0 {
-			return append(out, dim.Render("no other open issues")), 0
+			return append(out, cardRow{line: dim.Render("no other open issues"), group: -1}), 0, "issue"
 		}
 		const label = 13
 		n := 0
-		for _, g := range groups {
+		for gi, g := range groups {
+			head := fg(g.colour).Render(fmt.Sprintf("%-*s", label, g.name))
 			for j, i := range g.shown {
-				head := strings.Repeat(" ", label)
-				if j == 0 {
-					head = fg(g.colour).Render(fmt.Sprintf("%-*s", label, g.name))
-				}
 				mark := "  "
 				if focused && n == pick {
 					mark, at = heading.Render("▸ "), len(out)
@@ -606,21 +681,31 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 					}
 					text += dim.Render(fmt.Sprintf(" · %d session%s", k, s))
 				}
-				out = append(out, mark+head+text)
+				r := cardRow{line: mark + strings.Repeat(" ", label) + text, labelled: mark + head + text, weight: 1, group: gi, first: j == 0}
+				if r.first {
+					r.line = r.labelled
+				}
+				out = append(out, r)
 				n++
 			}
 			if g.more > 0 {
-				out = append(out, "  "+strings.Repeat(" ", label)+dim.Render(fmt.Sprintf("… %d more", g.more)))
+				out = append(out, cardRow{line: "  " + strings.Repeat(" ", label) + dim.Render(fmt.Sprintf("… %d more", g.more)), weight: g.more, group: gi})
 			}
 		}
 		if inbox > 0 {
-			out = append(out, "  "+dim.Render(fmt.Sprintf("inbox %d", inbox)))
+			out = append(out, cardRow{line: "  " + dim.Render(fmt.Sprintf("inbox %d", inbox)), weight: inbox, group: -1})
 		}
-		return out, at
+		return out, at, "issue"
 	}
-	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel,
-		body: func(w int) []string { out, _ := lines(w); return out },
-		at:   func(w int) int { _, at := lines(w); return at }}
+	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel, rows: rows,
+		body: func(w int) []string {
+			rs, _, _ := rows(w)
+			out := make([]string, len(rs))
+			for i, r := range rs {
+				out[i] = r.line
+			}
+			return out
+		}}
 }
 
 // tasksCard takes the issues card's place in a project that does not

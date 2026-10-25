@@ -257,9 +257,13 @@ func TestAShortenedCardKeepsItsCursor(t *testing.T) {
 	}
 	others = append(others, issues.Issue{ID: 9, Title: "the last", Status: issues.InProgress})
 	lines, _, places := layoutCards([][]card{{issuesCard(others, nil, true, 3, "")}}, 60, 4, issuesPanel)
-	text := ansi.Strip(strings.Join(lines, "\n"))
-	if len(places) != 1 || !strings.Contains(text, "▸ ") || !strings.Contains(text, "more") {
-		t.Fatalf("the shortened issues card:\n%s", text)
+	var got []string
+	for _, l := range lines {
+		got = append(got, strings.TrimSpace(ansi.Strip(l)))
+	}
+	want := []string{"── Issues ──────────────────────────────────────── 7 open ──", "↑ 3 more issues", "▸ up next      #3 issue 3", "↓ 3 more issues"}
+	if len(places) != 1 || !slices.Equal(got, want) {
+		t.Fatalf("the shortened issues card:\n%s", strings.Join(got, "\n"))
 	}
 }
 
