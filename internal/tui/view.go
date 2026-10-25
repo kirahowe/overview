@@ -1688,15 +1688,22 @@ func wrapMarkdown(md string, w int, style func(string) string) []string {
 			mk = listMarker(t)
 		}
 		hang := len(indent) + ansi.StringWidth(mk)
-		if mk == "" || hang > w/2 || fenced || strings.HasPrefix(t, "```") {
-			st := style(l)
-			if fenced || strings.HasPrefix(t, "```") {
-				st = codeFg.Render(l)
-				if strings.HasPrefix(t, "```") {
-					st = dim.Render(l)
-				}
+		switch {
+		case strings.HasPrefix(t, "```"):
+			out = append(out, wrap(dim.Render(l), w)...)
+			continue
+		case fenced:
+			out = append(out, wrap(codeFg.Render(l), w)...)
+			continue
+		case mk == "" && len(indent) > 0 && len(indent) <= w/2:
+			// An indented line, such as an item's second line, keeps
+			// its indent on every line it wraps to.
+			for _, b := range wrap(style(t), w-len(indent)) {
+				out = append(out, indent+b)
 			}
-			out = append(out, wrap(st, w)...)
+			continue
+		case mk == "" || hang > w/2:
+			out = append(out, wrap(style(l), w)...)
 			continue
 		}
 		mark := fg(pal.Text).Render(mk)

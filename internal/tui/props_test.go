@@ -1922,7 +1922,8 @@ func TestPropMarkdownHangsListItems(t *testing.T) {
 		indent := strings.Repeat(" ", rapid.IntRange(0, 4).Draw(t, "indent"))
 		marker := rapid.SampledFrom([]string{"- ", "* ", "12. ", "- [ ] "}).Draw(t, "marker")
 		words := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,12}`), 1, 40).Draw(t, "words")
-		md := "intro\n" + indent + marker + strings.Join(words, " ")
+		more := strings.Repeat(" ", len(indent)+len(marker)) + strings.Join(words, " ")
+		md := "intro\n" + indent + marker + strings.Join(words, " ") + "\n" + more
 		lines := wrapMarkdown(md, w, styleDigest)
 		for i, l := range lines {
 			if ansi.StringWidth(l) > w {
@@ -1949,6 +1950,20 @@ func TestADigestBulletHangsItsContinuation(t *testing.T) {
 		got[i] = strings.TrimRight(ansi.Strip(l), " ")
 	}
 	want := []string{"Done", "• relay#54 landed the", "  parser fix and its", "  regression tests"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Lines that are not list items keep their indent: an item's second line
+// and an indented block stay where they were written.
+func TestMarkdownKeepsIndents(t *testing.T) {
+	lines := wrapMarkdown("- item one\n  item continuation\n    indented code", 40, styleMarkdown)
+	var got []string
+	for _, l := range lines {
+		got = append(got, strings.TrimRight(ansi.Strip(l), " "))
+	}
+	want := []string{"• item one", "  item continuation", "    indented code"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
