@@ -60,6 +60,7 @@ const (
 	taskType    // add text to the task picker's query
 	taskBack    // backspace in the task picker
 	taskMove    // n issues down the task picker, negative for up
+	taskScroll  // n lines down the task picker's details, negative for up
 	taskEnter   // start or go to the selected issue
 	taskCancel  // close the task picker
 	taskClick   // a click on the nth issue at time at; a second one soon after acts on it
@@ -102,6 +103,10 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return doN(taskMove, -1)
 		case tea.KeyDown, tea.KeyCtrlN:
 			return doN(taskMove, 1)
+		case tea.KeyPgDown, tea.KeyCtrlD:
+			return doN(taskScroll, max(m.listHeight()/2, 1))
+		case tea.KeyPgUp, tea.KeyCtrlU:
+			return doN(taskScroll, -max(m.listHeight()/2, 1))
 		case tea.KeyBackspace:
 			return do(taskBack)
 		case tea.KeyRunes, tea.KeySpace:
@@ -334,13 +339,15 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 	}
 	if m.taskPick.open {
 		switch {
+		case step != 0 && msg.X >= m.taskListWidth():
+			return doN(taskScroll, step*wheelLines)
 		case step != 0:
 			return doN(taskMove, step)
 		case msg.Y >= m.listHeight():
 			return nil // the footer
 		}
-		_, owners := m.taskPickLines()
-		if line := msg.Y; line >= 0 && line < len(owners) && owners[line] >= 0 {
+		_, owners := m.taskPickBody()
+		if line := msg.Y; msg.X < m.taskListWidth() && line >= 0 && line < len(owners) && owners[line] >= 0 {
 			return []action{{do: taskClick, n: owners[line], at: at}}
 		}
 		return nil

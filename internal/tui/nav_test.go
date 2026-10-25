@@ -6,6 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
+	"overview/internal/fleet"
 )
 
 // A window as the panels sit in it: the projects over the agents on the
@@ -61,7 +64,7 @@ func TestSplitList(t *testing.T) {
 }
 
 // navModel is a staged model with two sessions, with the keys out on the
-// panels as the view starts.
+// panels as esc leaves them.
 func navModel(t *testing.T, f *fakeMux) model {
 	t.Helper()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
@@ -70,10 +73,18 @@ func navModel(t *testing.T, f *fakeMux) model {
 	return settle(t, m, cmd)
 }
 
+// The view starts with the keys in the list, where j moves the cursor.
+func TestTheKeysStartInTheList(t *testing.T) {
+	m := newModel(fleet.Home{}, "")
+	if m.navAt() != projectsPanel || !m.nav.inside {
+		t.Fatalf("at the start: nav %+v", m.nav)
+	}
+}
+
 // From the panels, l selects the session beside the list, and enter moves
-// the keyboard into it. Coming back selects it still, out on the panels,
-// and the keys move between panels again: into the list, its cursor, and
-// out with esc.
+// the keyboard into it. Coming back puts the keys in the list, where j
+// moves the cursor; esc goes out to the panels, and l returns to the
+// session the keys came back from.
 func TestTheKeysMoveBetweenPanelsAndIntoThem(t *testing.T) {
 	f := newFakeMux()
 	m := navModel(t, f)
@@ -100,23 +111,46 @@ func TestTheKeysMoveBetweenPanelsAndIntoThem(t *testing.T) {
 	f.focus = "%0"
 	m, cmd = step(m, tea.FocusMsg{})
 	m = settle(t, m, cmd)
-	if m.navAt() != stagePanel || m.nav.inside || f.selected[stage] != "1" {
+	if m.navAt() != projectsPanel || !m.nav.inside || f.selected["%0"] != "1" || f.selected[stage] != "" {
 		t.Fatalf("back from the session: nav %+v, lit %v", m.nav, f.selected)
-	}
-	m = pressSettled(t, m, "h", "enter")
-	if m.navAt() != projectsPanel || !m.nav.inside {
-		t.Fatalf("h enter: nav %+v", m.nav)
 	}
 	m = pressSettled(t, m, "j")
 	if m.sel == sel {
-		t.Fatal("j inside the list did not move the cursor")
+		t.Fatal("j back in the list did not move the cursor")
 	}
-	m = pressSettled(t, m, "esc", "j")
+	m = pressSettled(t, m, "k", "esc", "l")
+	if m.navAt() != stagePanel || m.nav.inside {
+		t.Fatalf("esc l: nav %+v", m.nav)
+	}
+	m = pressSettled(t, m, "h", "j")
 	if m.navAt() != agentsPanel || m.nav.inside {
-		t.Fatalf("esc j: nav %+v", m.nav)
+		t.Fatalf("h j: nav %+v", m.nav)
 	}
 	if !m.lit(agentsPanel) || m.lit(projectsPanel) {
 		t.Fatal("the agents panel is not the one lit")
+	}
+}
+
+// Out on the panels the footer says so, and the cursor's row loses its
+// background, so a lit row always means the keys move it.
+func TestThePanelsLookApartFromTheList(t *testing.T) {
+	f := newFakeMux()
+	m := navModel(t, f)
+	m.nav.inside = true
+	was := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(was) })
+	text := []seg{{"auth", lipgloss.NewStyle()}}
+	in, row := m.footer(), m.line(text, nil, false, true)
+	m.nav.inside = false
+	out := m.footer()
+	if strings.Contains(in, "panels") || !strings.Contains(out, "panels") {
+		t.Fatalf("footer in the list %q, on the panels %q", in, out)
+	}
+	bg := lipgloss.NewStyle().Background(pal.CursorDimBg).Render("x")
+	bgCode := bg[:strings.Index(bg, "x")]
+	if bare := m.line(text, nil, false, true); !strings.Contains(row, bgCode) || strings.Contains(bare, bgCode) {
+		t.Fatalf("the cursor's row in the list %q, on the panels %q", row, bare)
 	}
 }
 

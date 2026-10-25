@@ -8,13 +8,14 @@ import tea "github.com/charmbracelet/bubbletea"
 // its title in it, which the panel that is selected draws in the accent
 // colour.
 //
-// The keyboard starts on the panels: h, j, k and l move the selection to
-// the nearest panel that way, and enter goes into the selected one. In
-// the projects or the agents, the keys move the cursor and act on its
-// entry. In a tmux pane the keys go to what runs there. esc comes back
-// out to the panels, and ctrl+[ from a tmux pane, where esc belongs to
-// the program, or any other way back to the view's pane. The keys that
-// act on the cursor's entry, such as c or o, work from the panels too.
+// The keyboard starts in the list, where the keys move the cursor and act
+// on its entry, and comes back to it from a tmux pane however it comes
+// back: ctrl+[, where esc belongs to the program, a tmux key or a click.
+// esc goes out to the panels, where h, j, k and l move the selection to
+// the nearest panel that way, and enter goes into the selected one: the
+// projects or the agents, or a tmux pane, where the keys go to what runs
+// there. The keys that act on the cursor's entry, such as c or o, work
+// from the panels too.
 
 // panelID names a panel. A tmux pane other than the one that shows the
 // cursor's entry is named by its pane id, "%5".
@@ -273,10 +274,11 @@ func (m model) panels() []panel {
 	return out
 }
 
-// keepNav keeps the selection on a panel that is there. One that has gone
-// gives way to the stage, for a pane, or else to the projects, and the
-// keyboard comes out of it. Inside the list, the selection follows the
-// cursor from one of its panels to the other.
+// keepNav keeps the selection on a panel that is there. A pane that has
+// gone gives way to the stage, and the keyboard comes out of it; any
+// other panel to the projects, which the keys stay in if they were inside
+// it. Inside the list, the selection follows the cursor from one of its
+// panels to the other.
 func (m model) keepNav() model {
 	at := m.navAt()
 	if m.nav.inside && at.listPanel() && m.cursorPanel() != at {
@@ -288,10 +290,9 @@ func (m model) keepNav() model {
 	if m.hasPanel(at) {
 		return m
 	}
-	m.nav.inside = false
 	switch {
 	case (at.isPane() || at == stagePanel) && m.hasPanel(stagePanel):
-		m.nav.panel = stagePanel
+		m.nav.panel, m.nav.inside = stagePanel, false
 	default:
 		m.nav.panel = projectsPanel
 	}
@@ -348,9 +349,10 @@ func (m model) navEnter() (model, tea.Cmd) {
 }
 
 // backFrom is the model with the keyboard back in the view from the pane
-// it was in, as the latest listing has it: that pane is selected, and
-// the keys move between panels again. Focus that comes back from outside
-// tmux finds the view's own pane active, and changes nothing.
+// it was in, as the latest listing has it: the keys go into the list, on
+// the cursor, however they came back, and a move back the way they came
+// returns to that pane. Focus that comes back from outside tmux finds the
+// view's own pane active, and changes nothing.
 func (m model) backFrom() model {
 	if !m.blurred {
 		return m
@@ -358,7 +360,7 @@ func (m model) backFrom() model {
 	self, _ := m.pane(m.self)
 	for _, p := range m.panes {
 		if p.Active && p.ID != m.self && p.Window == self.Window && self.Window != "" {
-			m.nav = nav{panel: m.panelOfPane(p.ID), prev: m.navAt()}
+			m.nav = nav{panel: m.cursorPanel(), prev: m.panelOfPane(p.ID), inside: true}
 		}
 	}
 	return m

@@ -16,8 +16,8 @@ See README.md for behaviour and docs/ for design notes.
   second holding the terminals overview is launched in). It covers launch
   and the holder; the rule along each pane's top and its title; `c` and
   the list moving into a session's window; splits staying with their
-  window and the list keeping its dragged width; `h`, `enter` and `j`
-  going from a session's panel into the list; a
+  window and the list keeping its dragged width; `j` moving the
+  cursor with the keyboard back in the list; a
   relaunch restarting the view for new flags, a theme given as a relative
   path and a changed config file, and only attaching otherwise; `t`, a
   terminal's place in the list and the keyboard moving into it; a session
@@ -29,7 +29,8 @@ See README.md for behaviour and docs/ for design notes.
   session's prompt, the agent's reply and `x` resolving it; and a
   workstream, from a project's issue in progress through `c` starting a
   session with the prompt that names it and `t` listing a terminal under
-  it; and `o` zooming the list into the cockpit and `esc` putting it
+  it, and `s` zooming the list with an issue's details beside the
+  picker; and `o` zooming the list into the cockpit and `esc` putting it
   back. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.

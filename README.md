@@ -57,8 +57,8 @@ The window is made of panels, and each has a rule along its top with its
 title in it: the list, the agents, the session beside them and any split
 of its window, and the cockpit's cards. tmux draws the rules of its panes,
 and the view draws the same rule for the panels it draws itself. The
-panel that is selected, or that has the keyboard, has its rule in the
-accent colour.
+panel that is selected, or that has the keyboard, has its rule and the
+whole border beside it in the accent colour.
 
 The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list
@@ -124,10 +124,11 @@ filter on the list. So does going to another pane, since tmux ends
 the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
 fills it without a zoom. While the cockpit is open the list stays in its window,
-and the cards follow the cursor. `enter`, `c`, `s`, `t` and `v` close it
+and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
 first, then do what they always do. The exception is `enter` on a
 workstream that no session works on: the cockpit stays open and says
-how to start one.
+how to start one. `s` replaces it with the task picker, which keeps
+the zoom.
 
 A workstream's cockpit starts with a header: the issue's reference,
 title, status and priority, how long ago it was taken on, and
@@ -202,18 +203,20 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
-Keys. The keyboard starts out on the panels. `h`, `j`, `k` and `l`, or
-the arrows, select the nearest panel that way, and `enter` goes into the
-selected one: into the list or the agents, where the keys move the
+Keys. The keyboard starts out in the list, and comes back to it from a
+pane on the right however it comes back: by `ctrl+[`, by a tmux key that
+selects the list's pane, or by a click. In a pane `esc` belongs to the
+program, which is why `ctrl+[` is the way back. `esc` in the list goes
+out to the panels, once it has cleared any search
+filter, and the footer then says `panels`. There `h`, `j`, `k` and `l`,
+or the arrows, select the nearest panel that way, and `enter` goes into
+the selected one: into the list or the agents, where the keys move the
 cursor, or into a pane, where they go to what runs there. On the pane
 that shows the cursor's entry, `enter` does what it does on the entry
-in the list. `esc` comes back out to the panels, once it has cleared
-any search filter. In a pane on the right,
-where `esc` belongs to the program, `ctrl+[` does that instead, and
-however the keyboard comes back to the list, the pane it was in is the
-one selected. The keys that act on the cursor's entry, such as `c`, `t`,
-`v` or `o`, work out on the panels too, and `n` there also selects the
-pane of the entry it goes to, so `enter` goes straight into it.
+in the list. The cursor's row has a background only while the keys move
+it. The keys that act on the cursor's entry, such as `c`, `t`, `v` or
+`o`, work out on the panels too, and `n` there also selects the pane of
+the entry it goes to, so `enter` goes straight into it.
 
 In the list, `j`/`k` move, and walk on from the projects into the agents.
 `n` jumps to the next session that needs you or workstream in review,
@@ -265,7 +268,13 @@ the project. The pinned projects are kept in `<home>/overview/projects`.
 
 `s` starts work on one of a project's tasks. On any entry of a project
 that tracks its tasks, a picker takes the list's place and lists the
-project's open issues, and the footer names the project. Ready issues
+project's open issues, and the footer names the project. Like the
+cockpit, it zooms the list's pane to fill its window. The issues go down
+the left at the list's width, and the selected issue's details fill the
+rest, read with `issues show` as the cursor reaches each one and
+reflowed to fit. `pgdn` and `pgup`, `ctrl+d` and `ctrl+u`, or the wheel
+over the details scroll them when they run long. When the window is too
+narrow for both, only the issues show. Ready issues
 come first, then the inbox, then those in review, in progress and
 blocked, and by priority within each. Each issue shows its number and
 title, its status and priority, and how many sessions work on it, with a
@@ -278,8 +287,9 @@ moves the list's cursor to its workstream. On any other issue it starts
 a session at the project's root with the first prompt `Work on
 <project>#<n>: <title>`, as `c` does on a workstream, and shows it beside
 the list. A click selects an issue, a double click acts on it, and `esc`
-closes the picker. In a project without `.issues`, `s` says how to start
-tracking its tasks.
+closes the picker. Closing it ends the zoom, and so does going to
+another pane, which closes the picker too. In a project without
+`.issues`, `s` says how to start tracking its tasks.
 
 The mouse works too. A click selects a session and puts the keyboard in
 the list, a double click moves the keyboard into the session as `enter`

@@ -328,17 +328,29 @@ type Colours struct{ Accent, Border, Text string }
 // the one selected.
 const lit = "#{?#{" + SelectOption + "},1,#{?pane_active,#{?#{" + ListOption + "},0,1},0}}"
 
+// edge is a format that is true for a pane whose borders are drawn in the
+// accent colour. tmux styles a border between two panes from the active
+// one, so while the view has the keyboard and has selected the pane
+// beside it, the view's pane draws the border they share lit. That lights
+// the two cells of the view's own rule before its title too, which
+// FrameFormat cannot reach: tmux styles them from the same pane.
+const edge = "#{?" + lit + ",1,#{?pane_active,#{P:#{?#{" + SelectOption + "},1,}},}}"
+
 // FrameFormat and FrameStyle are what Frame sets pane-border-format and
 // both pane border styles to. The title is the pane's TitleOption, or
-// what runs in it while it has none.
+// what runs in it while it has none. The format draws the rest of the
+// rule itself, so a pane's rule follows lit while its borders follow edge.
 const (
 	FrameFormat = "#{?" + lit + ",#[fg=#{@overview-accent} bold],#[fg=#{@overview-text}]} " +
-		"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} "
-	FrameStyle = "#{?" + lit + ",fg=#{@overview-accent},fg=#{@overview-border}}"
+		"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} " +
+		"#[fg=#{?" + lit + ",#{@overview-accent},#{@overview-border}} nobold]#{R:─,#{pane_width}}"
+	FrameStyle = "#{?" + edge + ",fg=#{@overview-accent},fg=#{@overview-border}}"
 )
 
 // Frame gives every pane on the server a rule along its top, the pane's
-// title set into it, and single lines between panes. The colours are
+// title set into it, and single lines between panes, lit whole: tmux
+// would otherwise light only half the border of a window of two panes.
+// The colours are
 // session's, so views of two config directories on one server can each
 // draw in their own theme.
 func (s Server) Frame(session string, c Colours) error {
@@ -349,6 +361,7 @@ func (s Server) Frame(session string, c Colours) error {
 	for _, o := range [][2]string{
 		{"pane-border-status", "top"}, {"pane-border-lines", "single"}, {"pane-border-format", FrameFormat},
 		{"pane-border-style", FrameStyle}, {"pane-active-border-style", FrameStyle},
+		{"pane-border-indicators", "off"},
 	} {
 		args = append(args, "set-option", "-g", "-w", o[0], o[1], ";")
 	}

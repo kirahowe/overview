@@ -95,7 +95,7 @@ func (m model) sessionsView() []string {
 		return m.pickerView()
 	}
 	if m.taskPick.open {
-		lines, _ := m.taskPickLines()
+		lines, _ := m.taskPickBody()
 		return lines
 	}
 	secs := m.sections()
@@ -134,6 +134,80 @@ func (m model) pickerView() []string {
 		}
 	}
 	return lines
+}
+
+// taskPickBody is the task picker's lines above the footer, with the row
+// each shows, as taskPickLines has them. Where taskSplit finds room, the
+// rows go down the left at the list's width, under a rule as the cockpit
+// draws its list, and the selected issue's details fill the rest.
+func (m model) taskPickBody() (lines []string, owners []int) {
+	lw := m.taskSplit()
+	if lw == 0 {
+		return m.taskPickLines()
+	}
+	h := m.listHeight()
+	lm := m
+	lm.w, lm.h = lw, m.h-1
+	rows, rowOwners := lm.taskPickLines()
+	segs := append(m.listTitle(), titleSeg{"  · start a task", pal.Muted})
+	left := append([]string{panelRule(m.titleText(segs, !m.blurred), "", lw, !m.blurred)}, rows...)
+	owners = append([]int{-1}, rowOwners...)
+	right := m.taskDetail(m.w-lw-1, h)
+	for i := 0; i < h; i++ {
+		l, join := lm.plain(""), "│"
+		if i < len(left) {
+			l = left[i]
+		}
+		if i == 0 {
+			join = "┬"
+		}
+		lines = append(lines, l+fg(pal.Border).Render(join)+right[i])
+	}
+	return lines, owners[:min(len(owners), h)]
+}
+
+// taskDetailLines are the selected issue's details as the picker lays
+// them out w cells wide, with the issue they are of, false when none is
+// selected.
+func (m model) taskDetailLines(w int) (issues.Issue, []string, bool) {
+	l := m.taskList()
+	j := m.taskSel(l)
+	if j < 0 {
+		return issues.Issue{}, nil, false
+	}
+	i := l.rows[j].issue
+	r, ok := m.issueReads[taskKey(m.taskPick.root, i.ID)]
+	switch {
+	case !ok || r.info.loading:
+		return i, []string{dim.Render("reading…")}, true
+	case r.info.err != nil:
+		return i, wrap(dim.Render(oneLine(r.info.err.Error())), w), true
+	case strings.TrimSpace(r.info.details) == "":
+		return i, []string{dim.Render("no details")}, true
+	}
+	return i, detailLines(r.info.details, w), true
+}
+
+// taskDetailTop is the first line of n the details show in a body h
+// lines high, scrolled as far as taskPick.top asks and no further than
+// leaves the last line at the bottom.
+func taskDetailTop(top, n, h int) int { return max(min(top, n-h), 0) }
+
+// taskDetail is the details card beside the picker's rows, w wide and h
+// high: the issue's number, status and priority in its rule, which lines
+// show when they do not all fit, and the details under it.
+func (m model) taskDetail(w, h int) []string {
+	c := card{title: "details"}
+	i, body, ok := m.taskDetailLines(cardInner(w))
+	if ok {
+		c.title = "#" + strconv.Itoa(i.ID) + " · " + i.Status + " · " + i.Priority
+	}
+	room := max(h-1, 0)
+	top := taskDetailTop(m.taskPick.top, len(body), room)
+	if len(body) > room && room > 0 {
+		c.right = dim.Render(fmt.Sprintf("%d-%d of %d", top+1, min(top+room, len(body)), len(body)))
+	}
+	return c.render(body[top:], w, h, false)
 }
 
 // taskPickLines is the task picker in the list's place: the query, then
@@ -329,7 +403,11 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 	bg := func(st lipgloss.Style) lipgloss.Style { return st }
 	bar := " "
 	if selected {
-		bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
+		// Out on the panels the row loses its background, so a lit row
+		// always means the keys move it.
+		if m.blurred || m.listHasKeys() {
+			bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
+		}
 		edge := pal.CursorBg
 		if !m.listHasKeys() {
 			edge = pal.Border
@@ -982,7 +1060,11 @@ func (m model) footer() string {
 		if l := m.taskList(); m.taskSel(l) >= 0 && taskGoes(l.rows[m.taskSel(l)]) {
 			enter.label = "go to"
 		}
-		hints = []hint{enter, {"↑↓", "move"}, {"esc", "cancel"}}
+		hints = []hint{enter, {"↑↓", "move"}}
+		if m.taskSplit() > 0 {
+			hints = append(hints, hint{"pgup/pgdn", "details"})
+		}
+		hints = append(hints, hint{"esc", "cancel"})
 	case m.filtering:
 		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		hints = []hint{{"enter", "open"}, {"↑↓", "move"}, {"esc", "clear"}}
@@ -998,6 +1080,9 @@ func (m model) footer() string {
 	default:
 		if m.filter != "" {
 			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
+		}
+		if !m.nav.inside && !m.blurred {
+			lead = append(lead, heading.Render("panels"))
 		}
 		hints = m.panelHints()
 	}
@@ -1019,7 +1104,7 @@ func (m model) helpBox() []string {
 		entry{"h j k l", "move between panels"},
 		entry{"enter", "go into the panel"},
 		entry{"esc", "back out to the panels"},
-		entry{"ctrl+[", "back from a session"},
+		entry{"ctrl+[", "back to the list"},
 	), section("in the list",
 		entry{"j k", "move"},
 		entry{"n N", "next / previous waiting"},

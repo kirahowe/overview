@@ -195,13 +195,13 @@ func (m model) reframe() (model, tea.Cmd) {
 		}
 	}
 	self, ok := m.pane(m.self)
-	frame := ok && !m.zooming && self.Framed == m.cockpit.open
+	frame := ok && !m.zooming && self.Framed == m.zoomWant()
 	if len(sets) == 0 && !frame {
 		m.framed = next
 		return m, nil
 	}
 	m.framed, m.framing = next, true
-	mux, on := m.mux, !m.cockpit.open
+	mux, on := m.mux, !m.zoomWant()
 	return m, func() tea.Msg {
 		err := mux.SetPaneOptions(sets)
 		if !frame || err != nil {

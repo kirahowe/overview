@@ -305,10 +305,8 @@ func TestOverviewInTmux(t *testing.T) {
 		return ""
 	}
 	window := inWindow(first.id)
-	// Back from the session the keys are out on the panels, with the
-	// session selected: h selects the list, enter goes into it, and j
-	// moves its cursor.
-	ov.must("send-keys", "-t", list.id, "h", "Enter", "j")
+	// The keys are in the list, so j moves its cursor.
+	ov.must("send-keys", "-t", list.id, "j")
 	waitFor(t, "the list beside the second session, as wide", func() (bool, string) {
 		return beside(ov.panes(), second.id, 57)
 	})
@@ -703,7 +701,8 @@ func TestWorkstreams(t *testing.T) {
 		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "in-progress", "title": "keep width", "priority": "p1"}]}`
 		blist := `{"issues": [{"id": 3, "ref": "zbacklog#3", "status": "ready", "title": "add threads", "priority": "p2"},` +
 			`{"id": 4, "ref": "zbacklog#4", "status": "inbox", "title": "fix scroll", "priority": "p1"}]}`
-		script := fmt.Sprintf("#!/bin/sh\nif [ \"$2\" = %q ]; then echo '%s'; else echo '%s'; fi\n", backlog, blist, list)
+		show := `{"id": 3, "details-text": "# Add threads\n\nReplies nest under the\nmessage they answer.\n"}`
+		script := fmt.Sprintf("#!/bin/sh\nif [ \"$3\" = show ]; then printf '%%s\\n' '%s'\nelif [ \"$2\" = %q ]; then echo '%s'; else echo '%s'; fi\n", show, backlog, blist, list)
 		if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -797,10 +796,16 @@ func TestWorkstreams(t *testing.T) {
 		s := r.screen()
 		return strings.Contains(s, "▌+ s task · c claude · t terminal"), s
 	})
+	// The picker zooms the list's pane and shows the selected issue's
+	// details beside its rows.
+	zoomed := func() string {
+		return r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag}")
+	}
 	r.press("s")
-	waitFor(t, "the task picker", func() (bool, string) {
+	waitFor(t, "the task picker, zoomed, with the details", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(s, "start a task in") && strings.Contains(s, "#3 add threads") && strings.Contains(s, "#4 fix scroll"), s
+		return zoomed() == "1" && strings.Contains(s, "start a task in") && strings.Contains(s, "#3 add threads") &&
+			strings.Contains(s, "#4 fix scroll") && strings.Contains(s, "Replies nest under the message they answer."), zoomed() + "\n" + s
 	})
 	r.ov.must("send-keys", "-t", r.list.id, "-l", "thr")
 	waitFor(t, "the picker narrowed", func() (bool, string) {
@@ -816,6 +821,10 @@ func TestWorkstreams(t *testing.T) {
 	if got := r.ov.must("display-message", "-p", "-t", picked.id, "#{pane_current_path}"); got != backlog {
 		t.Fatalf("the picked session started in %q, want %q", got, backlog)
 	}
+	waitFor(t, "the zoom ended beside the picked session", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), picked.id, 0)
+		return ok && zoomed() == "0", zoomed() + " " + say
+	})
 }
 
 // hook runs overview hook on a payload, as Claude Code would.
@@ -833,8 +842,9 @@ func (r *rig) hook(t *testing.T, payload map[string]any) {
 }
 
 // The cockpit, end to end: o zooms the list's pane to fill its window and
-// draws the cards beside the list, and esc ends the zoom, leaving the list
-// beside the session as it was.
+// draws the cards beside the list, and esc, once it has taken the keys out
+// of the list to the panels, ends the zoom, leaving the list beside the
+// session as it was.
 func TestCockpit(t *testing.T) {
 	r := launch(t, "o")
 	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
@@ -862,7 +872,7 @@ func TestCockpit(t *testing.T) {
 		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
 	}
 
-	r.press("Escape")
+	r.press("Escape", "Escape")
 	waitFor(t, "the list beside the session again", func() (bool, string) {
 		ok, say := beside(r.ov.panes(), session.id, width)
 		f := strings.Fields(zoomed())

@@ -176,12 +176,15 @@ type model struct {
 	taskPick taskPick
 
 	// cockpit is the cockpit, as cockpit.go describes. zooming is set while
-	// a Cmd that zooms the list or puts it back is out, and rezoom when the
-	// cockpit's wish changed meanwhile, to be sent when it lands.
-	// cockpitSoon is an o that came while the list was moving, and opens
-	// the cockpit once the move lands.
+	// a Cmd that zooms the list or puts it back is out, and rezoom when
+	// zoomWant changed meanwhile, to be sent when it lands. zoomPanes is
+	// how many panes the list's window had when a listing last showed the
+	// zoom as it should be, so zoomLost can tell the user leaving from a
+	// pane going away. cockpitSoon is an o that came while the list was
+	// moving, and opens the cockpit once the move lands.
 	cockpit         cockpit
 	zooming, rezoom bool
+	zoomPanes       int
 	cockpitSoon     bool
 	// issueReads and changeReads are the cockpit's reads, by cockpitKey.
 	issueReads  map[string]issueRead
@@ -266,7 +269,7 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps()}
+	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps(), nav: nav{inside: true}}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -788,8 +791,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, turns := m.askTurns()
 	m = m.keepNav().keepCockpit()
 	m, reads := m.cockpitReads()
+	m, taskRead := m.taskReads()
 	m, frame := m.reframe()
-	return m, tea.Batch(cmd, stage, turns, reads, frame)
+	return m, tea.Batch(cmd, stage, turns, reads, taskRead, frame)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1137,7 +1141,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case pickCancel:
 		m.pick = picker{}
 	case startTask:
-		return m.openTasks(m.rootOf(e, ok)), nil
+		return m.openTasks(m.rootOf(e, ok))
 	case taskType, taskBack:
 		q := m.taskPick.query
 		if a.do == taskType {
@@ -1145,19 +1149,26 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		} else if r := []rune(q); len(r) > 0 {
 			q = string(r[:len(r)-1])
 		}
-		m.taskPick.query, m.taskPick.sel = q, 0
+		m.taskPick.query, m.taskPick.sel, m.taskPick.top = q, 0, 0
 	case taskMove:
 		n := len(m.taskList().rows)
-		m.taskPick.sel = max(0, min(m.taskPick.sel+a.n, n-1))
+		m.taskPick.sel, m.taskPick.top = max(0, min(m.taskPick.sel+a.n, n-1)), 0
+	case taskScroll:
+		_, body, _ := m.taskDetailLines(cardInner(m.w - m.taskSplit() - 1))
+		room := m.listHeight() - 1
+		m.taskPick.top = taskDetailTop(taskDetailTop(m.taskPick.top, len(body), room)+a.n, len(body), room)
 	case taskEnter:
 		return m.taskEnter()
 	case taskCancel:
 		m.taskPick = taskPick{}
+		return m.syncZoom()
 	case taskClick:
 		id := "taskpick:" + strconv.Itoa(a.n)
 		double := id == m.clickID && a.at.Sub(m.clickAt) < doubleClick
 		m.clickID, m.clickAt = id, a.at
-		m.taskPick.sel = a.n
+		if m.taskPick.sel != a.n {
+			m.taskPick.sel, m.taskPick.top = a.n, 0
+		}
 		if double {
 			m.clickID = ""
 			return m.taskEnter()

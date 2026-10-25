@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
@@ -16,14 +17,18 @@ import (
 // start work on. Its rows are a pure function of the project's tracker,
 // the sessions linked to its workstreams and the query, and enter acts
 // on the selected one through taskGoes. Starting a session is startOn's
-// Cmd, as for c on a workstream.
+// Cmd, as for c on a workstream. Like the cockpit it zooms the list's
+// pane, and where the window has room the selected issue's details show
+// beside the rows, read with issues show as the cursor reaches it.
 
 // taskPick is the task picker's state. The zero value is a closed picker.
+// top is the first line of the details shown.
 type taskPick struct {
 	open  bool
 	root  string // the project's root
 	query string
 	sel   int
+	top   int
 }
 
 // taskRow is one issue the picker offers, and how many sessions are
@@ -181,13 +186,158 @@ func (m model) taskSel(l taskList) int {
 
 // openTasks opens the task picker on the project at root, or says why
 // not.
-func (m model) openTasks(root string) model {
+func (m model) openTasks(root string) (model, tea.Cmd) {
 	_, tracked := m.trackers[root]
 	open, note := taskOpens(m.name(root), tracked, m.reading[root], m.issues != nil)
 	if !open {
-		return m.say(note)
+		return m.say(note), nil
 	}
-	m.taskPick = taskPick{open: true, root: root}
+	// From the cockpit the zoom it holds stays for the picker.
+	m.cockpit, m.cockpitSoon = cockpit{}, false
+	m.taskPick, m.zoomPanes = taskPick{open: true, root: root}, m.inStage()
+	if m.staging {
+		return m, nil // the zoom waits for the move to land
+	}
+	return m.syncZoom()
+}
+
+// taskReads asks for the selected issue's details while the picker shows
+// them.
+func (m model) taskReads() (model, tea.Cmd) {
+	if m.taskSplit() == 0 {
+		return m, nil
+	}
+	l := m.taskList()
+	j := m.taskSel(l)
+	if j < 0 {
+		return m, nil
+	}
+	return m.readIssue(m.taskPick.root, l.rows[j].issue.ID)
+}
+
+// taskSplit is the width of the picker's rows when the details show
+// beside them, 0 when the pane has room only for the rows.
+func (m model) taskSplit() int {
+	if !m.taskPick.open {
+		return 0
+	}
+	return cockpitListWidth(m.width.want, m.w)
+}
+
+// taskListWidth is the width of the picker's rows.
+func (m model) taskListWidth() int {
+	if lw := m.taskSplit(); lw > 0 {
+		return lw
+	}
+	return m.w
+}
+
+// detailLines lays out an issue's Markdown details w cells wide. Its
+// paragraphs and list items are hard-wrapped in the file, so their lines
+// are joined and wrapped again at w, a list item hanging under its
+// marker. Headings lose their hashes and stand out, a fenced block keeps
+// its lines, broken where they are too long, and runs of blank lines
+// become one.
+func detailLines(details string, w int) []string {
+	if w <= 0 {
+		return nil
+	}
+	var out []string
+	blank := func() {
+		if len(out) > 0 && out[len(out)-1] != "" {
+			out = append(out, "")
+		}
+	}
+	// para is the paragraph or list item being gathered: its marker, as
+	// wide as the hang under it, and its words.
+	var marker string
+	var words []string
+	flush := func() {
+		if len(words) == 0 {
+			return
+		}
+		// A marker too wide to hang under leads the words instead.
+		hang, text := ansi.StringWidth(marker), strings.Join(words, " ")
+		if hang > w/2 {
+			hang, text = 0, marker+text
+		}
+		for i, l := range reflow(text, max(w-hang, 1)) {
+			lead := strings.Repeat(" ", hang)
+			if i == 0 && hang > 0 {
+				lead = marker
+			}
+			out = append(out, fg(pal.Text).Render(lead+l))
+		}
+		marker, words = "", nil
+	}
+	fence := false
+	for _, line := range strings.Split(details, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "```"):
+			flush()
+			fence = !fence
+		case fence:
+			for _, l := range strings.Split(ansi.Hardwrap(strings.TrimRight(line, " "), w, true), "\n") {
+				out = append(out, dim.Render(l))
+			}
+		case t == "":
+			flush()
+			blank()
+		case strings.HasPrefix(t, "#"):
+			flush()
+			blank()
+			h := strings.TrimSpace(strings.TrimLeft(t, "#"))
+			for _, l := range reflow(h, w) {
+				out = append(out, heading.Render(l))
+			}
+		case listMarker(t) != "":
+			flush()
+			indent := len(line) - len(strings.TrimLeft(line, " "))
+			m := listMarker(t)
+			marker = strings.Repeat(" ", min(indent, w/4)) + m
+			words = strings.Fields(strings.TrimPrefix(t, strings.TrimRight(m, " ")))
+		default:
+			words = append(words, strings.Fields(t)...)
+		}
+	}
+	flush()
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// reflow wraps text at w cells, at spaces where it can. ansi.Wrap can
+// leave a line a cell too wide, keeping a hyphen with the letter before
+// it, so its lines are broken again at w.
+func reflow(text string, w int) []string {
+	return strings.Split(ansi.Hardwrap(ansi.Wrap(text, w, ""), w, true), "\n")
+}
+
+// listMarker is the marker t starts with as a list item, with a space
+// after it, such as "- ", "- [ ] " or "2. ", and "" when t is no item.
+func listMarker(t string) string {
+	var m string
+	switch {
+	case strings.HasPrefix(t, "- "), strings.HasPrefix(t, "* "), strings.HasPrefix(t, "+ "):
+		m = t[:2]
+	default:
+		d := 0
+		for d < len(t) && t[d] >= '0' && t[d] <= '9' {
+			d++
+		}
+		if d == 0 || d > 3 || !strings.HasPrefix(t[d:], ". ") {
+			return ""
+		}
+		m = t[:d+2]
+	}
+	rest := t[len(m):]
+	for _, box := range []string{"[ ] ", "[x] ", "[X] "} {
+		if strings.HasPrefix(rest, box) {
+			return m + box
+		}
+	}
 	return m
 }
 
@@ -202,6 +352,14 @@ func (m model) taskEnter() (model, tea.Cmd) {
 	}
 	r, root := l.rows[j], m.taskPick.root
 	m.taskPick = taskPick{}
+	m, zoom := m.syncZoom()
+	m, cmd := m.taskAct(root, r)
+	return m, tea.Batch(zoom, cmd)
+}
+
+// taskAct goes to r's workstream or starts a session on it, for
+// taskEnter.
+func (m model) taskAct(root string, r taskRow) (model, tea.Cmd) {
 	if taskGoes(r) {
 		key := taskKey(root, r.issue.ID)
 		es := m.ordered()
