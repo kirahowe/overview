@@ -309,7 +309,9 @@ directly. There `[` and `]`, or `h` and `l`, step through older ones,
 `j`, `k`, `g` and `G` scroll, `esc` goes back, and `D` writes a new one.
 `r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, as described
 above. `q` detaches, leaving the view and its
-sessions running, and `Q` quits the view. `ctrl+c` is `q` in the list. In the search, the
+sessions running. No key quits the view, since it is the point of the
+app; running `overview` again restarts it in place when it needs to.
+`ctrl+c` is `q` in the list. In the search, the
 project picker and the task picker it cancels that input as `esc` does,
 and never quits. `?` lists every key. In a pane too narrow for a key and
 its description on one line, the description wraps under the key, so no

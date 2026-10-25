@@ -1508,7 +1508,6 @@ func helpSections() (left, right []helpSection) {
 			e("r", "refresh"),
 			e("?", "this help"),
 			e("q ctrl+c", "detach"),
-			e("Q", "quit the view"),
 		}},
 	}
 	return left, right

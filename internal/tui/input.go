@@ -24,8 +24,7 @@ const (
 	keysLeft                // the keyboard has gone to another pane
 	pointerHere             // the mouse is over the view, wherever the keyboard is
 	heard                   // a key or click that means something: the note it follows has been read
-	quit
-	detach // leave the view running in tmux and close this terminal's view of it
+	detach                  // leave the view running in tmux and close this terminal's view of it
 	openHelp
 	scrollHelp   // n lines down the help, negative for up
 	scrollHelpTo // line n of the help, clamped
@@ -190,8 +189,6 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 	switch k {
 	case "q", "ctrl+c":
 		return do(detach)
-	case "Q":
-		return do(quit)
 	case "?":
 		return do(openHelp)
 	case "d":

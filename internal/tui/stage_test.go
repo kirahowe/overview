@@ -887,17 +887,21 @@ func TestAHolderThatClosedIsStartedAgain(t *testing.T) {
 	}
 }
 
-func TestQDetachesAndShiftQQuits(t *testing.T) {
+// q detaches and leaves the view running. No key quits the view, which is
+// the point of the app: Q, typed by mistake for q, does nothing.
+func TestQDetachesAndNothingQuits(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	pressSettled(t, m, "q")
 	if f.detach != 1 {
 		t.Fatalf("detached %d times", f.detach)
 	}
-	if _, cmd := step(m, keyMsg("Q")); cmd == nil {
-		t.Fatal("Q did nothing")
-	} else if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatal("Q did not quit")
+	if _, cmd := step(m, keyMsg("Q")); cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				t.Fatal("Q quit the view")
+			}
+		}
 	}
 }
 

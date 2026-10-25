@@ -1066,8 +1066,6 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.blurred = true
 	case pointerHere:
 		return m.unblur(), nil
-	case quit:
-		return m, tea.Quit
 	case detach:
 		if m.mux == nil {
 			return m, tea.Quit

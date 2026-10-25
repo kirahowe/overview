@@ -26,17 +26,12 @@ func TestCtrlCCancelsEachInput(t *testing.T) {
 		if len(want) == 0 || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ctrl+c gives %v, esc gives %v", name, got, want)
 		}
-		for _, a := range got {
-			if a.do == quit {
-				t.Errorf("%s: ctrl+c quits", name)
-			}
-		}
 	}
 	if as := base.keyActions(keyMsg("ctrl+c")); len(as) != 1 || as[0].do != detach {
 		t.Errorf("ctrl+c in the list: %v, want detach", as)
 	}
-	if as := base.keyActions(keyMsg("Q")); len(as) != 1 || as[0].do != quit {
-		t.Errorf("Q in the list: %v, want quit", as)
+	if as := base.keyActions(keyMsg("Q")); len(as) != 0 {
+		t.Errorf("Q in the list: %v, want nothing", as)
 	}
 	m, _ := press(base, "/", "ctrl+c")
 	if m.filtering {
@@ -159,12 +154,12 @@ func TestHelpScrollsOnAShortPane(t *testing.T) {
 	if !strings.Contains(view, "↓ more") || strings.Contains(view, "↑ more") {
 		t.Fatalf("at the top, want only a down marker:\n%s", view)
 	}
-	if strings.Contains(view, "Q ") {
+	if strings.Contains(view, "detach") {
 		t.Fatal("the last section is visible before scrolling")
 	}
 	m, _ = press(m, "G")
 	view = ansi.Strip(m.View())
-	if !strings.Contains(view, "↑ more") || strings.Contains(view, "↓ more") || !strings.Contains(view, "quit the view") {
+	if !strings.Contains(view, "↑ more") || strings.Contains(view, "↓ more") || !strings.Contains(view, "detach") {
 		t.Fatalf("at the bottom, want only an up marker and the last section:\n%s", view)
 	}
 	m, _ = press(m, "g")
