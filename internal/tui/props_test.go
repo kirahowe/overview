@@ -2046,3 +2046,46 @@ func TestPropANotesPathGivesWayFirst(t *testing.T) {
 		}
 	})
 }
+
+// In a row of the list or the agents, the name keeps its first nameMin
+// cells, less the ellipsis, whatever the right side holds, and the right
+// side gives way in its order: a session's age shows only with its state
+// word, and a project's path shows by its end.
+func TestPropRowsKeepTheirNamesReadable(t *testing.T) {
+	m := newTestModel(t)
+	m.now = time.Unix(1_700_000_000, 0)
+	rapid.Check(t, func(t *rapid.T) {
+		m.w = rapid.IntRange(24, 90).Draw(t, "w")
+		name := rapid.StringMatching(`[a-z][a-z-]{0,29}`).Draw(t, "name")
+		r := row("s", name, "", 1)
+		r.State = rapid.SampledFrom([]fleet.State{fleet.Idle, fleet.Working, fleet.Blocked}).Draw(t, "state")
+		r.Since = m.now.Add(-time.Duration(rapid.IntRange(0, 5000).Draw(t, "min")) * time.Minute)
+		proj := "/" + strings.Join(rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,9}`), 1, 6).Draw(t, "dirs"), "/")
+		s := &world.Session{Row: r, Project: &world.Project{Name: proj},
+			Review: review.Summary{Open: rapid.IntRange(0, 3).Draw(t, "open"), Waiting: rapid.IntRange(0, 1).Draw(t, "waiting")}}
+		alias := rapid.SampledFrom([]string{"", agentsPrefix}).Draw(t, "alias")
+		e := entry{kind: sessionEntry, sess: s, alias: alias}
+		line := ansi.Strip(m.entryLine(e, false))
+		if ansi.StringWidth(line) > m.w {
+			t.Fatalf("%q is wider than %d", line, m.w)
+		}
+		fields := strings.Fields(line)
+		keep := name
+		if len(name) > nameMin {
+			keep = name[:nameMin-1]
+		}
+		if len(fields) < 2 || !strings.HasPrefix(fields[1], keep) {
+			t.Fatalf("at %d the name %q lost its first %d cells: %q", m.w, name, nameMin, line)
+		}
+		rest := strings.Join(fields[2:], " ")
+		if alias == agentsPrefix {
+			if rest != "" && !strings.HasSuffix(proj, strings.TrimPrefix(rest, "…")) {
+				t.Fatalf("the project shows as %q, not the end of %q", rest, proj)
+			}
+			return
+		}
+		if _, _, word, age, _ := m.stateMark(r); age != "" && strings.HasSuffix(rest, " "+age) && !strings.HasSuffix(rest, word+" "+age) {
+			t.Fatalf("the age shows without the state word: %q", rest)
+		}
+	})
+}

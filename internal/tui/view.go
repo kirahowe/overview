@@ -751,9 +751,14 @@ func (m model) entryLine(e entry, selected bool) string {
 		default:
 			right = append(right, seg{i.Status + " ", dim})
 		}
-		right = append(right, seg{i.Priority, dim})
 		left := []seg{{"#" + strconv.Itoa(i.ID) + " ", dim}, {i.Title, text.Bold(true)}}
-		return m.line(left, right, false, selected)
+		// The priority goes before the status, and both before the title
+		// is cut below nameMin.
+		full := append(slices.Clip(right), seg{i.Priority, dim})
+		if len(right) > 0 {
+			right[len(right)-1].text = strings.TrimSuffix(right[len(right)-1].text, " ")
+		}
+		return m.line(left, m.fitRight(left, full, right, nil), false, selected)
 	case terminalEntry:
 		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
 		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
@@ -778,20 +783,75 @@ func (m model) entryLine(e entry, selected bool) string {
 	var right []seg
 	switch {
 	case e.alias == agentsPrefix:
-		right = []seg{{m.agentsNote(e, app, away, segsWidth(left)), dim}}
+		note := m.agentsNote(e, app, away, segsWidth(left))
+		// A project's path keeps its end, as its heading does, beside the
+		// whole name when a few cells of it fit there, else beside the
+		// name cut to nameMin, rather than leaving the row.
+		choices := [][]seg{{{note, dim}}}
+		if e.sess.Primary() == nil && !away {
+			for _, room := range []int{m.contentWidth() - 1 - segsWidth(left), m.contentWidth() - 1 - nameRoom(left)} {
+				if room >= 6 {
+					choices = append(choices, []seg{{keepEnd(note, room), dim}})
+				}
+			}
+		}
+		right = m.fitRight(left, append(choices, nil)...)
 	case away:
-		right = []seg{{app, dim}}
+		right = m.fitRight(left, []seg{{app, dim}})
 	default:
+		var badge, mark []seg
 		if b := reviewBadge(r.Review); b != "" {
-			right = append(right, seg{b + " ", fg(pal.Accent)})
+			badge = []seg{{b + " ", fg(pal.Accent)}}
+			n, _, _ := strings.Cut(b, " ")
+			mark = []seg{{n + " ", fg(pal.Accent)}}
 		}
 		state := word
 		if age != "" {
 			state += " " + age
 		}
-		right = append(right, seg{state, wordStyle})
+		right = m.fitRight(left,
+			append(slices.Clip(badge), seg{state, wordStyle}),
+			append(slices.Clip(badge), seg{word, wordStyle}),
+			append(slices.Clip(mark), seg{word, wordStyle}),
+			[]seg{{word, wordStyle}},
+			nil)
 	}
 	return m.line(left, right, false, selected)
+}
+
+// nameMin is the fewest cells of a row's name, or a workstream's title,
+// that the list keeps before it cuts the name further for what goes on
+// the right. Below it a name stops being readable.
+const nameMin = 10
+
+// nameRoom is how much of a row whose left is left must stay: its marks
+// and indent, and its last segment, the name, up to nameMin cells.
+func nameRoom(left []seg) int {
+	if len(left) == 0 {
+		return 0
+	}
+	last := left[len(left)-1]
+	return segsWidth(left[:len(left)-1]) + min(ansi.StringWidth(last.text), nameMin)
+}
+
+// fitRight picks a row's right side: the first of choices, fullest first,
+// that fits beside the row's name kept to nameMin cells, else the last.
+// So the right side gives way in the order the choices list, and the
+// name is cut below nameMin only once the last choice is reached. A
+// session drops its age, then its review badge's words ("✎2 reply"
+// becomes "✎2"), then the badge, then its state word, which its mark
+// still shows; a workstream drops its priority, then its status.
+func (m model) fitRight(left []seg, choices ...[]seg) []seg {
+	keep := nameRoom(left)
+	for _, c := range choices {
+		if w := segsWidth(c); w == 0 || w+1+keep <= m.contentWidth() {
+			return c
+		}
+	}
+	if len(choices) == 0 {
+		return nil
+	}
+	return choices[len(choices)-1]
 }
 
 // agentsNote is what the agents list says of a session: the workstream it

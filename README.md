@@ -107,7 +107,11 @@ The agents are a panel of their own, under the projects. They hold every
 session in the list once more, in order of priority: those that need you
 first, longest wait first, then the working ones, then the idle ones. A
 session there acts exactly as it does in its project, and its row names
-its project, or the task it works on as `#6`. When both fit, the agents
+its project, or the task it works on as `#6`. A long project path keeps
+its end. In a narrow pane a row keeps ten cells of its name: a session
+drops its age, then its review badge's words, then the badge, then its
+state word before its name is cut further, and a task drops its priority
+and then its status. When both fit, the agents
 sit at the bottom of the list's pane. Otherwise they take up to two
 fifths of it, and the projects and the agents each scroll on their own.
 The footer shows the keys for where the keyboard is, or a note when

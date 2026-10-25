@@ -13,6 +13,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/review"
 	"overview/internal/tmux"
 	"overview/internal/world"
 )
@@ -504,5 +505,30 @@ func TestTagTitleKeepsTheTag(t *testing.T) {
 	}
 	if len(segs) != 3 || segs[0].text != "◆ overview" {
 		t.Fatalf("tagTitle changed its argument: %v", segs)
+	}
+}
+
+// In the 24-column list a row keeps ten cells of its name: a session
+// drops its review badge's words before the name is cut further, a
+// workstream its priority, and the agents show a long project by its end
+// rather than not at all.
+func TestNarrowRowsKeepTheirNames(t *testing.T) {
+	m := newTestModel(t)
+	m.w = 24
+	r := row("s", "fix-parser-overflow", "", 1)
+	r.LastReply = "ok?"
+	s := &world.Session{Row: r, Project: &world.Project{Name: "/private/tmp/qa2/work/alpha"}, Review: review.Summary{Open: 1, Waiting: 1}}
+	st := &world.Stream{Key: world.Key{Root: "/a", ID: 7}, Issue: issues.Issue{ID: 7, Title: "Digest scheduling", Status: issues.Review, Priority: "p0"}}
+	for _, c := range []struct {
+		e    entry
+		want string
+	}{
+		{entry{kind: sessionEntry, sess: s}, "? fix-parse… ✎1 asking"},
+		{entry{kind: sessionEntry, sess: s, alias: agentsPrefix}, "? fix-parse… …rk/alpha"},
+		{entry{kind: workstreamEntry, stream: st}, "#7 Digest sche… review"},
+	} {
+		if got := strings.TrimSpace(ansi.Strip(m.entryLine(c.e, false))); got != c.want {
+			t.Errorf("%q, want %q", got, c.want)
+		}
 	}
 }
