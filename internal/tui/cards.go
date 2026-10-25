@@ -34,8 +34,11 @@ const (
 // id names the card as a panel when it can be selected, "" when not.
 type card struct {
 	title, right string
-	body         func(w int) []string
-	id           panelID
+	// path says the title is a directory, cut from its left as a
+	// project's heading is, so its last directories tell it apart.
+	path bool
+	body func(w int) []string
+	id   panelID
 	// rows is the body at width w as a shortened card cuts it, with the
 	// row it keeps in view, such as the issues card's cursor, and what
 	// its rows count. nil cuts the body's lines from the top.
@@ -146,7 +149,17 @@ func (c card) render(body []string, w, h int, lit bool, cuts ...int) []string {
 	if lit {
 		name = heading
 	}
-	out := []string{panelRule(name.Render(c.title), c.right, w, lit, cuts...)}
+	title := c.title
+	if c.path {
+		// Room beside the note when that leaves a few cells, else the
+		// whole rule, as panelRule drops the note.
+		room := w - ansi.StringWidth(c.right) - 9
+		if c.right == "" || room < 8 {
+			room = w - 5
+		}
+		title = keepEnd(title, room)
+	}
+	out := []string{panelRule(name.Render(title), c.right, w, lit, cuts...)}
 	for i := 0; i < h-1; i++ {
 		l := ""
 		if i < len(body) {
@@ -355,9 +368,15 @@ func projectHeader(name, root, kind string, open int, ms []member) card {
 	if open >= 0 {
 		right = strconv.Itoa(open) + " open"
 	}
-	return card{title: name, right: dim.Render(right), body: func(w int) []string {
+	return card{title: name, path: true, right: dim.Render(right), body: func(w int) []string {
+		// The root keeps its end, beside the kind when a few cells of it
+		// fit there.
+		room := w
+		if kw := ansi.StringWidth(kind); kind != "" && kw+7 <= w {
+			room = w - kw - 1
+		}
 		return []string{
-			spread(fg(pal.Text).Render(root), dim.Render(kind), w),
+			spread(fg(pal.Text).Render(keepEnd(root, room)), dim.Render(kind), w),
 			membersLine(ms),
 			chips(hint{"c", "claude"}, hint{"t", "term"}),
 		}

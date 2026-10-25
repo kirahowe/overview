@@ -156,7 +156,9 @@ func (m model) taskPickBody() (lines []string, owners []int) {
 	lm := m
 	lm.w, lm.h = lw, m.h-1
 	rows, rowOwners := lm.taskPickLines()
-	segs := append(m.listTitle(), titleSeg{"  · start a task", pal.Muted})
+	// The rule's title has w-5 cells: "── ", a space and a dash. The
+	// counts give way to the picker's name before anything is cut.
+	segs := tagTitle(m.listTitle(), titleSeg{"  · start a task", pal.Muted}, lw-5)
 	left := append([]string{panelRule(m.titleText(segs, !m.blurred), "", lw, !m.blurred)}, rows...)
 	owners = append([]int{-1}, rowOwners...)
 	right := m.taskDetail(m.w-lw-1, h)
@@ -994,6 +996,28 @@ func (m model) listTitle() []titleSeg {
 	return segs
 }
 
+// tagTitle is the list's title with tag, which says what the list shows,
+// after it, in w cells: the counts after the home's name go, the last
+// first, and then the name is cut, until the tag fits.
+func tagTitle(segs []titleSeg, tag titleSeg, w int) []titleSeg {
+	width := func(ss []titleSeg) (n int) {
+		for _, s := range ss {
+			n += ansi.StringWidth(s.text)
+		}
+		return n
+	}
+	tw := ansi.StringWidth(tag.text)
+	for len(segs) > 1 && width(segs)+tw > w {
+		segs = segs[:len(segs)-1]
+	}
+	segs = slices.Clone(segs)
+	if len(segs) > 0 && width(segs)+tw > w {
+		// Then the name is cut, down to its mark and an ellipsis.
+		segs[0].text = ansi.Truncate(segs[0].text, max(w-tw, 3), "…")
+	}
+	return append(segs, tag)
+}
+
 // noHook is the list's warning when interactive sessions are listed and
 // none reports through the hook, so none of them can show as blocked.
 const noHook = "hook not installed"
@@ -1627,7 +1651,8 @@ func (m model) confirmBox() []string {
 			return box("close terminal", "", body, w, len(body)+2, true)
 		}
 		if e.kind == projectEntry && e.key() == m.confirm {
-			body := []string{bold.Foreground(pal.Text).Render("Unpin " + e.proj.Name + "?")}
+			// The name keeps its end, which tells one project from another.
+			body := []string{bold.Foreground(pal.Text).Render("Unpin " + keepEnd(e.proj.Name, w-4-len("Unpin ?")) + "?")}
 			body = append(body, wrap(dim.Render("Nothing runs in it, so it leaves the list. a pins it again."), w-4)...)
 			body = append(body, "", red.Render("y")+dim.Render(" unpin   ")+dim.Render("any other key cancels"))
 			return box("unpin project", "", body, w, len(body)+2, true)

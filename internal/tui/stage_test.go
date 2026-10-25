@@ -1794,3 +1794,22 @@ func TestAPanesRuleNamesTheWorldsSession(t *testing.T) {
 		t.Fatal("the orchestrator is in the World")
 	}
 }
+
+// The unpin box names a long project by the end of its path, which tells
+// it from its neighbours.
+func TestTheUnpinBoxKeepsTheEndOfAPath(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	long := "/private/tmp/qa2/work/a-long-project-name"
+	if err := m.home.PinProject(long); err != nil {
+		t.Fatal(err)
+	}
+	m, cmd := step(m, rowsMsg{pinned: m.home.Projects()})
+	m = settle(t, m, cmd)
+	m = resized(t, m, 40, 20)
+	m = selectKey(t, m, "project:"+long)
+	m, _ = press(m, "x")
+	if box := ansi.Strip(strings.Join(m.confirmBox(), "\n")); !strings.Contains(box, "Unpin …work/a-long-project-name?") {
+		t.Fatalf("the unpin box:\n%s", box)
+	}
+}

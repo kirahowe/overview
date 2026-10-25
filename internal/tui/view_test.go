@@ -478,3 +478,31 @@ func TestTheDetailsCountTurnsInTheSingular(t *testing.T) {
 		}
 	}
 }
+
+// The task picker's rule keeps its name whole: the counts go first, then
+// the home's name is cut.
+func TestTagTitleKeepsTheTag(t *testing.T) {
+	segs := []titleSeg{{text: "◆ overview"}, {text: "  ! 1"}, {text: "  ○ 3"}}
+	tag := titleSeg{text: "  · start a task"}
+	text := func(ss []titleSeg) (s string) {
+		for _, x := range ss {
+			s += x.text
+		}
+		return s
+	}
+	for _, c := range []struct {
+		w    int
+		want string
+	}{
+		{60, "◆ overview  ! 1  ○ 3  · start a task"},
+		{31, "◆ overview  ! 1  · start a task"},
+		{19, "◆ …  · start a task"},
+	} {
+		if got := text(tagTitle(segs, tag, c.w)); got != c.want {
+			t.Errorf("at %d: %q, want %q", c.w, got, c.want)
+		}
+	}
+	if len(segs) != 3 || segs[0].text != "◆ overview" {
+		t.Fatalf("tagTitle changed its argument: %v", segs)
+	}
+}

@@ -65,7 +65,14 @@ func TestProjectHeaderCard(t *testing.T) {
 	})
 	if got := drawn(projectHeader("app", "/w/app", "git", 3, nil), 50); !strings.HasSuffix(got[0], " 3 open ──") {
 		t.Fatalf("tracked: %q", got[0])
-	}
+	} // A long path keeps its end in the title and on the line under it,
+	// so projects that share a parent still look apart.
+	long := "/private/tmp/qa2/work/alpha-project"
+	got = drawn(projectHeader(long, long, "git", -1, nil), 34)
+	wantLines(t, "long", got[:2], []string{
+		"── …k/alpha-project ─ no issues ──",
+		" …/tmp/qa2/work/alpha-project git",
+	})
 }
 
 func TestIssueSummary(t *testing.T) {
