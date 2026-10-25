@@ -180,9 +180,10 @@ For a workstream, in this order:
   waiting on you, and when notes were last sent.
 - The project's other issues: those in review, those in progress with
   their workstreams, the blocked ones, the next ready ones, and the
-  inbox count. `enter` on a ready one starts a workstream for it, and on one
-  that is a workstream already it moves the list's cursor there, with
-  the cockpit following, rather than starting a second session.
+  inbox count. `enter` on one that a session already works on moves the
+  list's cursor to its workstream, with the cockpit following, rather
+  than starting a second session. On any other issue, a paused one
+  included, it starts a session, as the task picker does.
 
 For a project, the issues card is the cockpit, with the project's
 uncommitted changes under it. A project without `.issues/` gets a card

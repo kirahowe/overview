@@ -622,13 +622,15 @@ func (m model) cockpitRows(t target) [][]card {
 // project's root with the opening prompt that names the issue, shown as
 // c shows a new session, once the cockpit has closed.
 func (m model) startPicked() (model, tea.Cmd) {
-	t := m.target()
-	others, _ := m.others(t)
-	ps := pickable(others)
-	if len(ps) == 0 {
+	t, i, ok := m.picked()
+	if !ok {
 		return m.say("no issue to start"), nil
 	}
-	i := ps[max(0, min(m.cockpit.pick, len(ps)-1))]
+	if m.pickStarts() {
+		m, out := m.closeCockpit()
+		m, cmd := m.startOn(t.root, i)
+		return m, tea.Batch(out, cmd)
+	}
 	es := m.ordered()
 	j := streamAt(es, taskKey(t.root, i.ID))
 	if j < 0 && m.filter != "" {
@@ -639,15 +641,9 @@ func (m model) startPicked() (model, tea.Cmd) {
 	}
 	if j >= 0 {
 		m = m.moveTo(es, j)
-		m.cockpit.issues, m.cockpit.pick = false, 0
-		return m, nil
 	}
-	if i.Status != issues.Ready && i.Status != issues.Inbox {
-		return m.say(issueRef(m.projectID(t.root), i) + " is " + i.Status + " with no workstream in the list"), nil
-	}
-	m, out := m.closeCockpit()
-	m, cmd := m.startOn(t.root, i)
-	return m, tea.Batch(out, cmd)
+	m.cockpit.issues, m.cockpit.pick = false, 0
+	return m, nil
 }
 
 // streamAt is where the workstream key is in es, -1 when it is not.
@@ -655,18 +651,25 @@ func streamAt(es []entry, key string) int {
 	return slices.IndexFunc(es, func(e entry) bool { return e.kind == workstreamEntry && e.task == key })
 }
 
-// pickStarts says whether enter in the issues card starts a session: the
-// issue under its cursor is ready or in the inbox, and no workstream yet.
+// pickStarts says whether enter in the issues card starts a session: no
+// session works on the issue under its cursor yet, whatever its status, so
+// a paused task is resumed. With one working, enter goes to it instead.
+// The task picker decides the same way, through taskGoes.
 func (m model) pickStarts() bool {
+	t, i, ok := m.picked()
+	return ok && !taskGoes(taskRow{sessions: streamSessions(m.rows, m.tasks().links, t.root)[i.ID]})
+}
+
+// picked is the issue under the issues card's cursor, and the cockpit's
+// target it belongs to.
+func (m model) picked() (target, issues.Issue, bool) {
 	t := m.target()
 	others, _ := m.others(t)
 	ps := pickable(others)
 	if len(ps) == 0 {
-		return false
+		return t, issues.Issue{}, false
 	}
-	i := ps[max(0, min(m.cockpit.pick, len(ps)-1))]
-	m.filter = ""
-	return (i.Status == issues.Ready || i.Status == issues.Inbox) && streamAt(m.ordered(), taskKey(t.root, i.ID)) < 0
+	return t, ps[max(0, min(m.cockpit.pick, len(ps)-1))], true
 }
 
 // keepCockpit gives the keyboard back to the list when the cursor has

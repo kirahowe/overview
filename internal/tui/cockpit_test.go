@@ -321,7 +321,9 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	m := selectKey(t, taskModel(t, f), "s2")
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab")
-	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter go to") {
+	// The first issue listed has no session working on it, so enter would
+	// start one.
+	if !m.cockpit.issues || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
 		t.Fatalf("after tab: issues %v, footer %q", m.cockpit.issues, ansi.Strip(m.footer()))
 	}
 	// j moves the card's cursor, not the list's, and stops at the end.
@@ -409,9 +411,9 @@ func TestTheProjectCockpitWithoutIssues(t *testing.T) {
 	}
 }
 
-// A blocked issue is listed after those in progress, and is a workstream
-// already, so enter goes to it rather than starting another session.
-func TestEnterOnABlockedIssueGoesToItsWorkstream(t *testing.T) {
+// A blocked issue is listed after those in progress. No session works on
+// it, so enter resumes it with a new one, as the task picker does.
+func TestEnterOnABlockedIssueWithNoSessionResumesIt(t *testing.T) {
 	f := newFakeMux()
 	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 8, Ref: "app#8", Title: "wait on tmux", Status: issues.Blocked, Priority: "p2"})
 	m = resized(t, m, 150, 40)
@@ -419,9 +421,12 @@ func TestEnterOnABlockedIssueGoesToItsWorkstream(t *testing.T) {
 	if text := ansi.Strip(m.View()); !strings.Contains(text, "▸ blocked      #8 wait on tmux") {
 		t.Fatalf("the cursor is not on #8:\n%s", text)
 	}
+	if !strings.Contains(ansi.Strip(m.footer()), "enter start") {
+		t.Fatalf("footer %q, want enter start", ansi.Strip(m.footer()))
+	}
 	m = pressSettled(t, m, "enter")
-	if len(f.spawned) != 0 || m.sel != "task:/code/app#8" || !m.cockpit.open {
-		t.Fatalf("spawned %+v, sel %s, open %v", f.spawned, m.sel, m.cockpit.open)
+	if len(f.spawned) != 1 || !slices.Contains(f.spawned[0].command, "Work on app#8: wait on tmux") || m.cockpit.open {
+		t.Fatalf("spawned %+v, open %v", f.spawned, m.cockpit.open)
 	}
 }
 
