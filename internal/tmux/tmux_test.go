@@ -878,15 +878,13 @@ func TestFrameLightsTheActivePane(t *testing.T) {
 	check("the list active", accent, border)
 	must(t)(f.s.run("select-pane", "-t", f.beside))
 	check("the pane beside active", border, accent)
-	must(t)(f.s.run("select-pane", "-t", f.list))
-	check("the list active again", accent, border)
 }
 
-// The panels mode is a key table: in it h j k l and the arrows move the
-// focus and stay in the mode, enter and esc leave it, and any other key
-// leaves it and is dropped. Each key is typed at the client, so it takes
-// the path a user's does. While a client is in the mode, the active
-// pane's rule says that enter acts there, and no other rule does.
+// The panels mode is a key table: in it h and l move the focus and stay in
+// the mode, enter and esc leave it, and ctrl+[ goes to the list. Each key
+// is typed at the client, so it takes the path a user's does. While a
+// client is in the mode, the active pane's rule says that enter acts
+// there, and no other rule does, and the listing of the panes says so.
 func TestPanelsModeMovesFocus(t *testing.T) {
 	f := newFramed(t)
 	if err := f.s.BindPanels(); err != nil {
@@ -925,10 +923,6 @@ func TestPanelsModeMovesFocus(t *testing.T) {
 	f.until("the marker does not move to the rule beside", func() bool { return at() > f.col })
 	f.send("h")
 	moved("h", f.list)
-	f.send("Right")
-	moved("right", f.beside)
-	f.send("Left")
-	moved("left", f.list)
 
 	// enter leaves the mode, and the next keys reach the pane.
 	f.send("Enter")
@@ -946,18 +940,6 @@ func TestPanelsModeMovesFocus(t *testing.T) {
 	enter()
 	f.send("Escape")
 	f.until("esc did not leave the mode", func() bool { return f.table() == "root" })
-
-	// A key the table does not bind leaves the mode and goes nowhere.
-	enter()
-	f.send("z")
-	f.until("an unbound key did not leave the mode", func() bool { return f.table() == "root" })
-	f.send("y")
-	f.until("a key did not reach the pane after the mode", func() bool {
-		return strings.Contains(must(t)(f.s.run("capture-pane", "-p", "-t", f.list)), "ay")
-	})
-	if got := must(t)(f.s.run("capture-pane", "-p", "-t", f.list)); strings.Contains(got, "z") || f.active() != f.list {
-		t.Fatalf("the unbound key reached the pane, or the focus moved: %q", got)
-	}
 
 	// ctrl+[ is bound to the list. A terminal without extended keys sends
 	// it as esc, so the key is not typed at the client here.

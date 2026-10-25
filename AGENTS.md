@@ -32,10 +32,10 @@ See README.md for behaviour and docs/ for design notes.
   it, and `s` zooming the list with an issue's details beside the
   picker; and `o` zooming the list into the cockpit and `esc` putting it
   back; and the panels mode, typed at the outer terminal: `esc` in the
-  list, its marker on the focused rule, `l` moving the focus to the
-  session, `enter` leaving the mode with the keys in the session, and
-  `ctrl+[`, a tmux prefix key and `enter` on the list each leaving `j` and
-  `k` moving the list's cursor. It builds only
+  list entering it with the footer saying so, `l` moving the focus to the
+  session, and `ctrl+[` from there and `enter` on the list each leaving
+  `j` and `k` moving the list's cursor. The key table itself is tested in
+  `internal/tmux`. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.
 - Never point a test or a trial run at the `overview` socket, not even to
