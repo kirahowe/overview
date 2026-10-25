@@ -1,15 +1,12 @@
 # Panels and the keys between them
 
 Written 2026-10-24. This is the design for drawing every part of the
-window the same way, as a panel, and for moving the keyboard between
-panels with h, j, k and l, as relay's chat client does. The look
-stands; focus-design.md replaced the way the keyboard moves, with
-tmux's active pane as the only focus and the panels as a mode.
+window the same way, as a panel. Where the keyboard is and how it moves
+between panels, including the panels mode, is in
+[focus-design.md](focus-design.md).
 
 ## One look
 
-Until now the cockpit drew its cards as closed boxes while the list used
-open section rules, and the session beside the list had no frame at all.
 A live session is a tmux pane, and the view cannot draw inside it, so
 whatever frames a session has to come from tmux. tmux can draw a rule
 along the top of every pane with a title set into it
@@ -54,47 +51,10 @@ panes themselves.
 
 ## Moving between panels
 
-Focus is tmux's active pane, and there is one. The keyboard starts out in
-the list, where `j` and `k` move the cursor, crossing from the projects
-into the agents, and `l`, `enter` and `tab` open the cursor's entry, which
-moves the keys into its pane. In a tmux pane `esc` belongs to the program,
-so `ctrl+[` comes back from there. However the keyboard comes back to the
-view's pane, by `ctrl+[`, a tmux key or a click, it lands in the list on
-the cursor, so `j` and `k` move it at once. Nothing is selected apart from
-focus, so this holds without any bookkeeping.
-
-To move between panes without typing into one, `esc` in the list puts the
-client in the panels mode. It is the tmux key table `overview-panels`,
-which `tmux.BindPanels` binds as the view starts: `h j k l` and the arrows
-run `select-pane` and re-enter the table (a key of a table other than the
-root drops back to it once it has run), `enter` and `esc` return to the
-root, and `ctrl+[` selects the list's pane and returns to the root. A key
-the table does not bind leaves the mode and tmux looks it up again in the
-root table, so the mouse and the prefix work as ever, and a key bound
-nowhere is dropped. A move off the window's edge wraps around, as
-`select-pane` does. In the mode the focused pane's rule gets a note after its title,
-`enter to act`, from `pane-border-format` reading `client_key_table`. The
-cursor's row has no background and the footer starts with `panels`, so a
-row with a background always means the keys move it.
-
-The view puts the client there with `switch-client -T overview-panels`
-through the mux seam (`EnterPanels`), and sets its `panels` flag at once.
-It learns the mode otherwise from `list-clients`, which `tmux.Panes` folds
-into the pane listing, and a key that reaches the view clears the flag,
-since the mode keeps every key for tmux. The Cmd bumps `spawns` like a
-spawn does, so a listing taken before the mode cannot undo it.
-
-The cockpit has no panels mode, since it zooms the list's pane and there is
-nothing to move to. `esc` there clears a filter, then closes the cockpit.
-`l` moves the keys from the list into the issues card, right of it, and `h`
-back, as they move between panes outside the cockpit. `tab` does either.
-Where the keys are is a plain flag, `cockpit.issues`. The rest of the cards only show.
-
-The earlier design kept a selected panel apart from the active pane, moved
-it with `h j k l` in the view and lit it through the pane option
-`@overview-select`. tmux styles a border cell from one pane, so the
-workarounds lit cells in the wrong places and could not light the agents.
-focus-design.md says why that went.
+Focus is tmux's active pane, and the panels mode moves it with h, j, k
+and l. Both are in focus-design.md. The look depends on them in one way:
+the rule of a pane in the panels mode carries the note `· enter to act`
+after its title, from `pane-border-format` reading `client_key_table`.
 
 ## One way in
 

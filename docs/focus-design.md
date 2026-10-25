@@ -1,19 +1,19 @@
 # Focus and the panels mode
 
-Written 2026-10-24. This revises how the keyboard moves between panels
-and how the window shows where it is. It replaces the selection that
-panels-design.md describes, and keeps the panels' look.
+Written 2026-10-24. This is the design for where the keyboard is, how it
+moves between panels, and how the window shows where it is. How the
+panels are drawn is in [panels-design.md](panels-design.md).
 
 ## Why
 
-The view kept a selected panel apart from tmux's active pane: on the
-panels, h, j, k and l moved a selection while the keys stayed in the
-view's pane. To light a pane that was selected but not active, the view
-set `@overview-select` and the border formats worked around how tmux
-styles borders. tmux styles each border cell from one pane, the active
-one when it touches it, in one colour for all that pane's cells. So the
-workarounds lit cells in the wrong places, and could not light the side
-of the agents, which are inside the view's pane. We were fighting tmux.
+An earlier version kept a selected panel apart from tmux's active pane:
+h, j, k and l moved a selection while the keys stayed in the view's pane,
+and the view lit the selected pane through a pane option and the border
+formats. tmux styles each border cell from one pane, the active one when
+it touches it, in one colour for all that pane's cells. The workarounds
+lit cells in the wrong places and could not light the side of the agents,
+which are inside the view's pane. Working against tmux's borders does not
+pay, so the design uses its active pane as the one focus.
 
 Other programs keep two things apart. Focus is which pane you are in,
 and there is one. Mode is whether your keys go to the program in that
@@ -43,9 +43,8 @@ has the keys, and in it the agents do.
 
 The panels mode is a mode on the focused pane. In it, keys move the
 focus and do not reach the program. It is tmux's key table
-`overview-panels`, bound when the view starts, beside `tmux.Frame`
-(not in the default tmux.conf, which is the user's after the first
-launch):
+`overview-panels`, which `tmux.BindPanels` binds as the view starts
+(the default tmux.conf does not hold it):
 
 - h, j, k, l and the arrows: `select-pane -L/-D/-U/-R`, then back into
   the table. The focus, and tmux's highlight, move at once.
@@ -60,13 +59,19 @@ launch):
   does: `h` in the list goes to the rightmost pane.
 
 While a client is in the mode, the focused pane's rule says so after its
-title (`pane-border-format` reads `client_key_table`), so the highlight
-reads "enter to act here".
+title (`pane-border-format` reads `client_key_table`) with the note
+`· enter to act`.
 
-esc in the list, with no filter to clear and nothing else open, puts the
-client in the mode. ctrl+[ in the list sends esc, so it does too. The
-cockpit has no panels mode: it zooms the list's pane, so there is nothing
-to move between. esc there clears a filter, then closes the cockpit.
+esc in the list, with no filter to clear, puts the client in the mode.
+ctrl+[ in the list sends esc, so it does too. `tmux.EnterPanels` does it
+with `switch-client -T overview-panels`.
+
+The cockpit has no panels mode: it zooms the list's pane, so there is no
+pane to move to. esc there clears a filter, then closes the cockpit. Its
+cards are drawn by the view, so the keys move between them without tmux:
+`l` or the right arrow moves them from the list into the issues card,
+`h` or the left arrow back, and tab does either. Where they are is a
+plain flag, `cockpit.issues`. The other cards only show.
 
 The view reads whether a client of its session is in the mode as it
 lists the panes, and right away when it puts one there. While the mode
@@ -74,26 +79,15 @@ is on and its pane is focused, the cursor's row has no background and
 the footer starts with "panels", so a row with a background still means
 j and k move it.
 
-## What stays
+## Where the keys land
 
-From the commit before this one: the keys start in the list; however
-they come back into the view's pane, by ctrl+[, by tmux's keys or by a
-click, they land in the list on the cursor; and a list panel that goes
-away leaves the keys in the projects. With no selection apart from
-focus, these hold by construction.
+The keys start in the list. However they come back into the view's pane,
+by ctrl+[, by tmux's keys or by a click, they land in the list on the
+cursor, so j and k move it at once. A list panel that goes away leaves
+the keys in the projects. With no selection apart from focus, these hold
+without any bookkeeping.
 
-## What goes
-
-- `nav`'s selection (`panel`, `prev`, `inside`), `navMove`, `navEnter`,
-  `navOut`, `navStep`, `beyond`, `panels()`, `stagePanel`, the panels'
-  h, j, k, l and enter in the view, and `n` selecting the stage there.
-- `@overview-select`, the `lit` and `edge` formats, and the rule fill
-  that `pane-border-format` drew. The format keeps the title, lit by
-  `pane_active`.
-- The selection in `frames()`. It keeps the titles.
-- The cockpit's first esc going out to the panels.
-
-## Notes from the build
+## Details that bite
 
 - tmux redraws the rules by itself when a key in a binding changes the
   key table or the active pane. It does not when `switch-client -T` comes
