@@ -183,7 +183,7 @@ func TestHelpScrollsOnAShortPane(t *testing.T) {
 	}
 	// Growing the pane clamps the scroll.
 	m, _ = press(m, "G")
-	m = update(m, tea.WindowSizeMsg{Width: 36, Height: 80})
+	m = update(m, tea.WindowSizeMsg{Width: 36, Height: 120})
 	if m.helpTop != 0 {
 		t.Fatalf("scroll %d on a pane the help fits", m.helpTop)
 	}

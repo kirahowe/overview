@@ -302,7 +302,9 @@ directly. There `[` and `]`, or `h` and `l`, step through older ones,
 above. `q` detaches, leaving the view and its
 sessions running, and `Q` quits the view. `ctrl+c` is `q` in the list. In the search, the
 project picker and the task picker it cancels that input as `esc` does,
-and never quits. `?` lists every key. When the list's pane is too short for
+and never quits. `?` lists every key. In a pane too narrow for a key and
+its description on one line, the description wraps under the key, so no
+word of it is cut. When the list's pane is too short for
 all of it, the help scrolls with `j` and `k` or the arrows, `ctrl+d` and
 `ctrl+u` or `pgdn` and `pgup`, `g` and `G`, or the wheel. A dim `↑ more` or
 `↓ more` on the box's edge says there is more that way. Any other key

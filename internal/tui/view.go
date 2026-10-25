@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -1414,42 +1415,106 @@ var helpCol = func() int {
 // helpWide says whether the help has two columns: the pane has room.
 func (m model) helpWide() bool { return m.w-4 >= 2*helpCol+6 }
 
-// helpLen is how many lines helpBody has, counted without drawing them.
+// helpKeyCol is where a help entry's description starts: two cells of
+// indent, the keys padded to nine, and a space.
+const helpKeyCol = 12
+
+// helpEntryLines are an entry as the help draws it in w cells: the keys
+// and the description on one line when it fits, else the description
+// wrapped under itself at helpKeyCol, or, when that leaves it too little
+// room, on lines of its own under the keys, indented four. No text is
+// cut. The lines are plain, and the first starts with the keys.
+func helpEntryLines(e helpEntry, w int) []string {
+	keys := fmt.Sprintf("  %-9s ", e.keys)
+	if ansi.StringWidth(keys+e.what) <= w {
+		return []string{keys + e.what}
+	}
+	if w-helpKeyCol >= 12 || ansi.StringWidth(keys+e.what) <= w {
+		lines := plainWrap(e.what, max(w-helpKeyCol, 1))
+		lines[0] = keys + lines[0]
+		for i := 1; i < len(lines); i++ {
+			lines[i] = strings.Repeat(" ", helpKeyCol) + lines[i]
+		}
+		return lines
+	}
+	lines := []string{"  " + e.keys}
+	for _, l := range plainWrap(e.what, max(w-4, 1)) {
+		lines = append(lines, "    "+l)
+	}
+	return lines
+}
+
+// helpRow is a plain line of the help: a section's title, or text whose
+// first keys cells, after the indent, are an entry's keys.
+type helpRow struct {
+	text string
+	head bool
+	keys int
+}
+
+// helpColumn is one column of the help in w cells, as helpBody styles it.
+func helpColumn(ss []helpSection, w int) []helpRow {
+	var out []helpRow
+	for _, s := range ss {
+		out = append(out, helpRow{text: s.title, head: true})
+		for _, e := range s.entries {
+			for i, l := range helpEntryLines(e, w) {
+				r := helpRow{text: l}
+				if i == 0 {
+					r.keys = len(e.keys)
+				}
+				out = append(out, r)
+			}
+		}
+		out = append(out, helpRow{})
+	}
+	return out
+}
+
+// helpLen is how many lines helpBody has, counted without styling them.
 func (m model) helpLen() int {
 	ls, rs := helpSections()
-	n := func(ss []helpSection) (c int) {
-		for _, s := range ss {
-			c += len(s.entries) + 2
-		}
-		return c
-	}
 	legend := len(m.helpLegend())
 	if m.helpWide() {
-		return max(n(ls), n(rs)) + legend
+		return max(len(helpColumn(ls, helpCol)), len(helpColumn(rs, helpCol))) + legend
 	}
-	return n(ls) + n(rs) + legend
+	_, w := m.helpWidth()
+	if n, ok := helpLens.Load(w); ok {
+		return n.(int) + legend
+	}
+	n := len(helpColumn(append(ls, rs...), w))
+	helpLens.Store(w, n)
+	return n + legend
 }
+
+// helpLens keeps the one-column help's length by width, which helpLen is
+// asked for on every key and every frame while the help is open.
+var helpLens sync.Map
 
 // helpBody is every line of the help, before it is cut to the pane.
 func (m model) helpBody() []string {
-	render := func(ss []helpSection) []string {
+	render := func(ss []helpSection, w int) []string {
 		var out []string
-		for _, s := range ss {
-			out = append(out, heading.Render(s.title))
-			for _, e := range s.entries {
-				out = append(out, "  "+fg(pal.Accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(pal.Text).Render(e.what))
+		for _, r := range helpColumn(ss, w) {
+			switch {
+			case r.head:
+				out = append(out, heading.Render(r.text))
+			case r.keys > 0:
+				k := 2 + r.keys
+				out = append(out, "  "+fg(pal.Accent).Render(r.text[2:k])+fg(pal.Text).Render(r.text[k:]))
+			default:
+				out = append(out, fg(pal.Text).Render(r.text))
 			}
-			out = append(out, "")
 		}
 		return out
 	}
 	ls, rs := helpSections()
-	left, right := render(ls), render(rs)
 
 	// Side by side when the pane is wide enough, one column under the other
 	// in the narrow list pane.
 	var body []string
 	if m.helpWide() {
+		left, right := render(ls, helpCol), render(rs, helpCol)
 		for i := 0; i < max(len(left), len(right)); i++ {
 			l, r := "", ""
 			if i < len(left) {
@@ -1461,7 +1526,8 @@ func (m model) helpBody() []string {
 			body = append(body, fit(l, helpCol)+r)
 		}
 	} else {
-		body = append(left, right...)
+		_, w := m.helpWidth()
+		body = render(append(ls, rs...), w)
 	}
 	return append(body, m.helpLegend()...)
 }
@@ -1642,6 +1708,16 @@ func wrap(s string, w int) []string {
 	return out
 }
 
+// isASCII says whether s is printable ASCII, a cell to a byte.
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // wrapRanges is where wrap cuts plain text: the cells [from, to) of each
 // line. A line keeps the spaces between its words and loses those it
 // breaks at. The first line keeps the text's indent when it fits.
@@ -1649,10 +1725,17 @@ func wrapRanges(text string, w int) [][2]int {
 	var gs []string
 	var at []int // the cell each grapheme starts at, and one past the end
 	cell := 0
-	g := uniseg.NewGraphemes(text)
-	for g.Next() {
-		gs, at = append(gs, g.Str()), append(at, cell)
-		cell += ansi.StringWidth(g.Str())
+	if isASCII(text) {
+		for i := range len(text) {
+			gs, at = append(gs, text[i:i+1]), append(at, i)
+		}
+		cell = len(text)
+	} else {
+		g := uniseg.NewGraphemes(text)
+		for g.Next() {
+			gs, at = append(gs, g.Str()), append(at, cell)
+			cell += ansi.StringWidth(g.Str())
+		}
 	}
 	at = append(at, cell)
 

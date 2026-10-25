@@ -442,3 +442,20 @@ func TestWrapKeepsWordsWholeAndBreaksPathsAtSlashes(t *testing.T) {
 		}
 	}
 }
+
+// In the 24-column list pane the help keeps every description: each
+// goes under its key, wrapped, rather than cut to three letters.
+func TestTheNarrowHelpWrapsDescriptionsUnderTheirKeys(t *testing.T) {
+	m := newTestModel(t)
+	m = update(m, tea.WindowSizeMsg{Width: 24, Height: 200})
+	m, _ = press(m, "?")
+	view := ansi.Strip(strings.Join(m.helpBox(), "\n"))
+	for _, want := range []string{"│   esc            │", "│     from the     │", "│     list, move   │", "│     focus        │", "│   j k       move │"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("no %q in\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "…") {
+		t.Errorf("the help is cut:\n%s", view)
+	}
+}

@@ -1648,6 +1648,7 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 			t.Fatalf("%dx%d: helpLen %d, body %d lines", w, h, m.helpLen(), len(body))
 		}
 		seen := map[int]bool{}
+		shown := map[int]string{}
 		check := func() {
 			box := m.helpBox()
 			if len(box) > m.listHeight() && len(box) > 3 {
@@ -1671,6 +1672,8 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 			}
 			for i := top; i < top+rows; i++ {
 				seen[i] = true
+				l := ansi.Strip(box[1+i-top])
+				shown[i] = strings.TrimSuffix(strings.TrimPrefix(l, "│ "), " │")
 			}
 		}
 		check()
@@ -1689,6 +1692,26 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 		for i := range body {
 			if !seen[i] {
 				t.Fatalf("%dx%d: help line %d never shown", w, h, i)
+			}
+		}
+		// Every description is shown whole: read down the left column,
+		// then the right, and find each one's words in order.
+		var left, right []string
+		for i := range body {
+			l := shown[i]
+			if m.helpWide() {
+				left, right = append(left, ansi.Cut(l, 0, helpCol)), append(right, ansi.Cut(l, helpCol, ansi.StringWidth(l)))
+			} else {
+				left = append(left, l)
+			}
+		}
+		text := " " + strings.Join(strings.Fields(strings.Join(append(left, right...), " ")), " ") + " "
+		ls, rs := helpSections()
+		for _, sec := range append(ls, rs...) {
+			for _, e := range sec.entries {
+				if !strings.Contains(text, " "+e.keys+" "+e.what+" ") {
+					t.Fatalf("%dx%d: %q %q is cut from the help:\n%s", w, h, e.keys, e.what, strings.Join(append(left, right...), "\n"))
+				}
 			}
 		}
 		// A resize keeps the scroll valid.
