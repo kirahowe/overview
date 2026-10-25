@@ -1478,6 +1478,22 @@ func (k enterKind) label() string {
 	return ""
 }
 
+// does is a sentence that says what enter does to what, as a note under
+// a heading puts it, "" when enter only says something.
+func (k enterKind) does(what string) string {
+	switch k {
+	case enterType:
+		return " enter types in " + what + "."
+	case enterAttach:
+		return " enter attaches to " + what + "."
+	case enterApp:
+		return " enter brings " + what + " forward in its app."
+	case enterCockpit:
+		return " enter opens the cockpit."
+	}
+	return ""
+}
+
 // enterOn is what enter does on an entry, and the entry it does it to.
 // On a workstream it acts on the workstream's lead, the entry the stage
 // shows beside it, and with nothing under it it opens the cockpit, or in

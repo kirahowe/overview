@@ -10,6 +10,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/world"
 )
 
 func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
@@ -501,5 +502,58 @@ func TestTheCockpitHeaderMarksStatesAsTheListDoes(t *testing.T) {
 	text := strings.Join(screenText(m), "\n")
 	if !strings.Contains(text, "? reply on view.go note asking") || strings.Contains(text, "● reply") {
 		t.Fatalf("the header of #5:\n%s", text)
+	}
+}
+
+// The cockpit's header offers enter exactly when the footer does, with
+// the same label, on every kind of entry: a session in a pane, one with
+// no pane, a background one, a workstream whose only session has no
+// pane, and a project.
+func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
+	s1, s3 := row("s1", "red", "", 11), row("s3", "green", "", 0)
+	s1.Cwd, s3.Cwd = "/code/app", "/code/app"
+	s1.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
+	s3.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 7}}
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background", Cwd: "/code/app"}, State: fleet.Idle}
+	m := stagedModel(t, newFakeMux(), s1, s3, bg)
+	m.trackers = trackers{"/code/app": tracked("app",
+		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
+		issues.Issue{ID: 7, Ref: "app#7", Title: "no pane", Status: issues.InProgress, Priority: "p1"},
+	)}
+	m = m.setInputs(func(in *world.Inputs) { in.Pinned = []string{"/code/empty"} })
+	m = resized(t, m, 120, 40)
+	kinds := map[entryKind]bool{}
+	says := false
+	for _, e := range m.ordered() {
+		m := selectKey(t, m, e.key())
+		m.cockpit.open = true
+		header := strings.Join(drawn(m.cockpitRows(m.target())[0][0], 100), "\n")
+		var foot []string
+		for _, h := range m.panelHints() {
+			if h.key == "enter" {
+				foot = append(foot, h.label)
+			}
+		}
+		var head []string
+		for _, label := range []string{"type", "attach", "open app", "cockpit", "start", "go to"} {
+			if strings.Contains(header, " enter  "+label) {
+				head = append(head, label)
+			}
+		}
+		if !slices.Equal(head, foot) {
+			t.Errorf("on %s the header offers enter %v and the footer %v:\n%s", e.key(), head, foot, header)
+		}
+		if e.kind == workstreamEntry {
+			// The holder's note under a workstream says the same.
+			lines := ansi.Strip(strings.Join(m.workstreamLines(e, 200), " "))
+			if strings.Contains(lines, "enter") != (len(foot) > 0) {
+				t.Errorf("on %s the holder says %q, the footer offers enter %v", e.key(), strings.TrimSpace(lines), foot)
+			}
+		}
+		kinds[e.kind] = true
+		says = says || (e.kind == workstreamEntry && len(foot) == 0)
+	}
+	if !kinds[sessionEntry] || !kinds[workstreamEntry] || !kinds[projectEntry] || !says {
+		t.Fatalf("the cases did not cover the kinds: %v, a workstream with a silent enter %v", kinds, says)
 	}
 }

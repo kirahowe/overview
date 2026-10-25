@@ -336,8 +336,10 @@ func membersLine(ms []member) string {
 	return strings.Join(parts, "   ")
 }
 
-// streamHeader is the first card of a workstream's cockpit.
-func streamHeader(ref, status, priority, title, started string, ms []member) card {
+// streamHeader is the first card of a workstream's cockpit. enter is
+// enter's chip as the footer has it, from enterOn, none when enter only
+// says something.
+func streamHeader(ref, status, priority, title, started string, ms []member, enter []hint) card {
 	right := []string{}
 	for _, s := range []string{status, priority} {
 		if s != "" {
@@ -349,10 +351,11 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 		if started != "" {
 			when = dim.Render("started " + agoPhrase(started))
 		}
-		keys := chips(hint{"c", "claude"}, hint{"t", "term"})
+		var review []hint
 		if slices.ContainsFunc(ms, func(mb member) bool { return !mb.term }) {
-			keys = chips(hint{"enter", "attach"}, hint{"v", "review"}, hint{"c", "claude"}, hint{"t", "term"})
+			review = []hint{{"v", "review"}}
 		}
+		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}})...)
 		return []string{
 			spread(bold.Foreground(pal.Text).Render(title), when, w),
 			membersLine(ms),
@@ -362,8 +365,9 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 }
 
 // projectHeader is the first card of a project's cockpit. open is how many
-// open issues it has, -1 when it does not track them.
-func projectHeader(name, root, kind string, open int, ms []member) card {
+// open issues it has, -1 when it does not track them, and enter is
+// enter's chip as for streamHeader.
+func projectHeader(name, root, kind string, open int, ms []member, enter []hint) card {
 	right := "no issues"
 	if open >= 0 {
 		right = strconv.Itoa(open) + " open"
@@ -378,7 +382,7 @@ func projectHeader(name, root, kind string, open int, ms []member) card {
 		return []string{
 			spread(fg(pal.Text).Render(keepEnd(root, room)), dim.Render(kind), w),
 			membersLine(ms),
-			chips(hint{"c", "claude"}, hint{"t", "term"}),
+			chips(slices.Concat(enter, []hint{{"c", "claude"}, {"t", "term"}})...),
 		}
 	}}
 }

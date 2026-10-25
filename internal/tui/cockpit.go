@@ -539,6 +539,12 @@ func (m model) changeStart(t target) int64 {
 func (m model) cockpitRows(t target) [][]card {
 	rows := t.sessions()
 	ms := m.members(rows, t.terminals())
+	// The header offers enter only as the footer does, from enterOn on
+	// the selected entry, which the target is of.
+	var enter []hint
+	if e, _, ok := m.selected(m.ordered()); ok {
+		enter = m.enterHint(e)
+	}
 	ch := m.changeReads[cockpitKey(t)]
 	info := ch.info
 	if _, ok := m.changeReads[cockpitKey(t)]; !ok {
@@ -561,7 +567,7 @@ func (m model) cockpitRows(t target) [][]card {
 			open = len(others)
 		}
 		return [][]card{
-			{projectHeader(m.name(t.root), m.short(t.root), kind, open, ms)},
+			{projectHeader(m.name(t.root), m.short(t.root), kind, open, ms, enter)},
 			issuesRow,
 			{changesCard("Uncommitted", "", info)},
 		}
@@ -581,7 +587,7 @@ func (m model) cockpitRows(t target) [][]card {
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{
-		{streamHeader(t.stream.Ref(), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms)},
+		{streamHeader(t.stream.Ref(), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms, enter)},
 		{issueCard(t.stream.ID, details)},
 		{changesCard("Changes", since, info), reviewCard(sum)},
 		issuesRow,

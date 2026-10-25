@@ -827,10 +827,12 @@ func (m model) workstreamLines(e entry, w int) []string {
 			n++
 		}
 	}
+	// What enter does is enterOn's, as the footer says it.
+	_, k := m.enterOn(e)
 	if n == 1 {
-		return append(out, wrap(dim.Render("One session works on this task, and it has no pane here. enter goes to it."), w)...)
+		return append(out, wrap(dim.Render("One session works on this task, and it has no pane here."+k.does("it")), w)...)
 	}
-	return append(out, wrap(dim.Render(fmt.Sprintf("%d sessions work on this task, and none has a pane here. enter goes to the first.", n)), w)...)
+	return append(out, wrap(dim.Render(fmt.Sprintf("%d sessions work on this task, and none has a pane here.", n)+k.does("the first")), w)...)
 }
 
 // stageHint says why the holder shows a session instead of its terminal.

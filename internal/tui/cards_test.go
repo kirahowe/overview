@@ -41,7 +41,7 @@ func wantLines(t *testing.T, what string, got, want []string) {
 
 func TestStreamHeaderCard(t *testing.T) {
 	ms := []member{{name: "list squeeze", word: "working", age: "3m", mark: "⠋", markStyle: green, style: green}, {name: "go", term: true}}
-	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms), 60)
+	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms, []hint{{"enter", "attach"}}), 60)
 	wantLines(t, "header", got, []string{
 		"── overview#6 ────────────────────────── in-progress · p1 ──",
 		" keep the list's width                       started 2h ago",
@@ -49,26 +49,26 @@ func TestStreamHeaderCard(t *testing.T) {
 		"  enter  attach   v  review   c  claude   t  term",
 	})
 	// No sessions yet, and no start.
-	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil), 40)
+	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil, nil), 40)
 	if strings.TrimSpace(got[1]) != "show cost" || !strings.Contains(got[2], "no sessions") {
 		t.Fatalf("empty header: %q", got)
 	}
 }
 
 func TestProjectHeaderCard(t *testing.T) {
-	got := drawn(projectHeader("website", "~/code/website", "jj", -1, nil), 50)
+	got := drawn(projectHeader("website", "~/code/website", "jj", -1, nil, nil), 50)
 	wantLines(t, "untracked", got, []string{
 		"── website ────────────────────────── no issues ──",
 		" ~/code/website                                jj",
 		" no sessions",
 		"  c  claude   t  term",
 	})
-	if got := drawn(projectHeader("app", "/w/app", "git", 3, nil), 50); !strings.HasSuffix(got[0], " 3 open ──") {
+	if got := drawn(projectHeader("app", "/w/app", "git", 3, nil, nil), 50); !strings.HasSuffix(got[0], " 3 open ──") {
 		t.Fatalf("tracked: %q", got[0])
 	} // A long path keeps its end in the title and on the line under it,
 	// so projects that share a parent still look apart.
 	long := "/private/tmp/qa2/work/alpha-project"
-	got = drawn(projectHeader(long, long, "git", -1, nil), 34)
+	got = drawn(projectHeader(long, long, "git", -1, nil, nil), 34)
 	wantLines(t, "long", got[:2], []string{
 		"── …k/alpha-project ─ no issues ──",
 		" …/tmp/qa2/work/alpha-project git",
