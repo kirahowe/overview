@@ -916,7 +916,11 @@ func (m model) detailLines(r *world.Session, w int) []string {
 		}
 		return out
 	}
-	out = append(out, "", rule(fmt.Sprintf("last %d turns", len(turns)), w))
+	label := "last turn"
+	if len(turns) > 1 {
+		label = fmt.Sprintf("last %d turns", len(turns))
+	}
+	out = append(out, "", rule(label, w))
 	for i, t := range turns {
 		out = append(out, "")
 		prompt := wrap(heading.Render("› ")+bold.Foreground(pal.Text).Render(oneLine(t.Prompt)), w)

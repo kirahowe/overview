@@ -459,3 +459,22 @@ func TestTheNarrowHelpWrapsDescriptionsUnderTheirKeys(t *testing.T) {
 		t.Errorf("the help is cut:\n%s", view)
 	}
 }
+
+// One turn is "last turn", not "last 1 turns".
+func TestTheDetailsCountTurnsInTheSingular(t *testing.T) {
+	m := newTestModel(t)
+	r := &world.Session{Row: fleet.Row{SessionID: "s1", Transcript: "/t.jsonl"}}
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{1, "── last turn ──"}, {2, "── last 2 turns ──"}} {
+		m.turns = recent{key: turnsKey{path: "/t.jsonl"}}
+		for i := 0; i < c.n; i++ {
+			m.turns.turns = append(m.turns.turns, fleet.Turn{Prompt: "go", Reply: "done"})
+		}
+		got := ansi.Strip(strings.Join(m.detailLines(r, 40), "\n"))
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%d turns: no %q in\n%s", c.n, c.want, got)
+		}
+	}
+}
