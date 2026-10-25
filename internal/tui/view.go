@@ -1189,6 +1189,8 @@ func (m model) footer() string {
 		}
 		f.mode = []part{{info, dim}}
 		f.hints = []hint{{"[ ]", "older/newer"}, {"D", "write"}, {"d", "sessions"}, {"?", "help"}}
+	case m.screen != sessionsScreen:
+		// A note on the digests: the list's search and panels are not here.
 	default:
 		if m.filter != "" {
 			f.mode, f.cut = []part{{"/", heading}, {m.filter, heading}, count()}, 1

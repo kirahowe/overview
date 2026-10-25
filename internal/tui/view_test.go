@@ -322,3 +322,20 @@ func TestTheTaskPickersFooterFitsANarrowPane(t *testing.T) {
 		}
 	}
 }
+
+// A note on the digests screen shows alone: the list's search and the
+// panels mode belong to the sessions screen.
+func TestADigestNoteLeavesTheListsSearchOut(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "red two", "auth", 12))
+	m.filter, m.panels = "red", true
+	m.screen = digestScreen
+	m = m.say("digest failed: boom")
+	foot := ansi.Strip(m.footer())
+	if !strings.Contains(foot, "digest failed: boom") || strings.Contains(foot, "/red") || strings.Contains(foot, "panels") {
+		t.Fatalf("footer %q", foot)
+	}
+	m.screen = sessionsScreen
+	if foot := ansi.Strip(m.footer()); !strings.Contains(foot, "/red") || !strings.Contains(foot, "panels") {
+		t.Fatalf("on the sessions screen: footer %q", foot)
+	}
+}
