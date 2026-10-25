@@ -263,8 +263,10 @@ the project. The pinned projects are kept in `<home>/overview/projects`.
 that tracks its tasks, a picker takes the list's place and lists the
 project's open issues, and the footer names the project. Ready issues
 come first, then the inbox, then those in review, in progress and
-blocked, and by priority within each. A line shows the issue's number
-and title, its status and priority, and how many sessions work on it.
+blocked, and by priority within each. Each issue shows its number and
+title, its status and priority, and how many sessions work on it, with a
+blank line between issues. A title too long for one line wraps under
+itself, so the whole of it shows.
 Typing words narrows the list as search does, on the issue's reference,
 such as `#6` or `overview#6`, and its title. `up` and `down`, or `ctrl+p`
 and `ctrl+n`, move. On an issue that sessions already work on, `enter`

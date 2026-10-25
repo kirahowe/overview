@@ -137,8 +137,9 @@ func (m model) pickerView() []string {
 }
 
 // taskPickLines is the task picker in the list's place: the query, then
-// its note and the issues, scrolled to keep the selected one shown, with
-// the row each line shows, -1 for none, for clicks.
+// its note and the issues, a blank line between them, scrolled to keep
+// the selected one shown, with the row each line shows, -1 for none, for
+// clicks.
 func (m model) taskPickLines() (lines []string, owners []int) {
 	w, h := m.contentWidth(), m.listHeight()
 	l := m.taskList()
@@ -151,22 +152,43 @@ func (m model) taskPickLines() (lines []string, owners []int) {
 		for _, s := range wrap(dim.Render(l.note), w) {
 			add(m.plain(s), -1)
 		}
+		add(m.plain(""), -1)
 	}
 	if len(l.rows) == 0 {
 		return lines, owners
 	}
+	// Every row, a blank line after each but the last, so the window
+	// can be found in lines.
 	sel := m.taskSel(l)
+	var body []string
+	var rows []int
+	selTop, selBottom := 0, 0
+	for i, r := range l.rows {
+		if i > 0 {
+			body, rows = append(body, m.plain("")), append(rows, -1)
+		}
+		if i == sel {
+			selTop = len(body)
+		}
+		for _, s := range m.taskLines(r, i == sel) {
+			body, rows = append(body, s), append(rows, i)
+		}
+		if i == sel {
+			selBottom = len(body)
+		}
+	}
 	room := max(h-len(lines), 1)
-	start := window(0, sel, sel+1, len(l.rows), room)
-	for i := start; i < min(start+room, len(l.rows)); i++ {
-		add(m.taskLine(l.rows[i], i == sel), i)
+	start := window(0, selTop, selBottom, len(body), room)
+	for j := start; j < min(start+room, len(body)); j++ {
+		add(body[j], rows[j])
 	}
 	return lines, owners
 }
 
-// taskLine is one issue in the task picker: its number and title, then
-// its status, the sessions on it and its priority.
-func (m model) taskLine(r taskRow, selected bool) string {
+// taskLines is one issue in the task picker: its number and its title,
+// wrapped to show all of it, with its status, the sessions on it and its
+// priority at the right of the first line.
+func (m model) taskLines(r taskRow, selected bool) []string {
 	i := r.issue
 	status := dim
 	switch i.Status {
@@ -183,8 +205,23 @@ func (m model) taskLine(r taskRow, selected bool) string {
 		right = append(right, seg{"· " + strconv.Itoa(r.sessions) + " sessions ", dim})
 	}
 	right = append(right, seg{i.Priority, dim})
-	left := []seg{{"  #" + strconv.Itoa(i.ID) + " ", dim}, {i.Title, fg(pal.Text)}}
-	return m.line(left, right, false, selected)
+	num := "  #" + strconv.Itoa(i.ID) + " "
+	nw := ansi.StringWidth(num)
+	// The title wraps in the column left of the right side, or under the
+	// whole line when that column is too narrow to read.
+	tw := m.contentWidth() - nw - segsWidth(right) - 1
+	if tw < 12 {
+		right, tw = nil, m.contentWidth()-nw
+	}
+	title := []string{i.Title}
+	if tw > 0 {
+		title = wrap(i.Title, tw)
+	}
+	out := []string{m.line([]seg{{num, dim}, {title[0], fg(pal.Text)}}, right, false, selected)}
+	for _, t := range title[1:] {
+		out = append(out, m.line([]seg{{strings.Repeat(" ", nw), dim}, {t, fg(pal.Text)}}, nil, false, selected))
+	}
+	return out
 }
 
 // box draws a bordered pane with the title set into its top edge and an

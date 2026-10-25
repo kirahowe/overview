@@ -191,8 +191,9 @@ func TestTaskPickerKeysAndMouse(t *testing.T) {
 	if m.taskPick.sel != 1 {
 		t.Fatalf("wheel: sel %d", m.taskPick.sel)
 	}
-	// Lines: query, blank, then #3, #8, #4, under the rule tmux draws.
-	y := 2 + 2
+	// Lines: query, blank, then #3, #8, #4 with a blank line between
+	// each, under the rule tmux draws.
+	y := 2 + 4
 	m, _ = step(m, tea.MouseMsg{X: 5, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.taskPick.sel != 2 || len(f.spawned) != 0 {
 		t.Fatalf("a click: sel %d, spawned %v", m.taskPick.sel, f.spawned)
@@ -276,5 +277,46 @@ func TestTheHolderOfAnIdleTrackedProjectOffersS(t *testing.T) {
 	m = selectKey(t, m, "project:/code/plain")
 	if got := ansi.Strip(m.holderText(80, 10)); strings.Contains(got, "s starts") || !strings.Contains(got, "c starts Claude here") {
 		t.Errorf("holder for an untracked project:\n%s", got)
+	}
+}
+
+// A title too long for its line wraps under itself rather than being
+// cut, and a click on any of its lines picks it.
+func TestTaskPickerWrapsLongTitles(t *testing.T) {
+	f := newFakeMux()
+	fi := newFakeIssues()
+	fi.project("/code/todo", "todo", "3 ready add threads", "19 inbox add test paths from a reloaded tests.edn file when the watcher restarts")
+	m := stagedModel(t, f)
+	d := fi.deps()
+	m.deps.exists, m.deps.glob, m.deps.modTime, m.deps.readFile = d.exists, d.glob, d.modTime, d.readFile
+	m.issues = fi.run
+	m, cmd := step(m, rowsMsg{pinned: []string{"/code/todo"}})
+	m = settle(t, m, cmd)
+	m = resized(t, m, 40, 30)
+	m = pressSettled(t, selectKey(t, m, "project:/code/todo"), "s")
+	lines, owners := m.taskPickLines()
+	var text []string
+	for _, l := range lines {
+		text = append(text, strings.TrimRight(ansi.Strip(l), " "))
+	}
+	joined := strings.Join(text, "\n")
+	if strings.Contains(joined, "…") {
+		t.Fatalf("a title is cut:\n%s", joined)
+	}
+	at := slices.IndexFunc(text, func(s string) bool { return strings.Contains(s, "#19") })
+	if at < 0 || !strings.HasSuffix(text[at], "inbox p2") || text[at-1] != "" {
+		t.Fatalf("#19 is not on its own line with its status after a blank one:\n%s", joined)
+	}
+	var title []string
+	for j := at; j < len(owners) && owners[j] == 1; j++ {
+		s := strings.TrimSuffix(strings.TrimPrefix(text[j], "   #19 "), "inbox p2")
+		title = append(title, strings.TrimSpace(s))
+	}
+	if len(title) < 2 || strings.Join(title, " ") != "add test paths from a reloaded tests.edn file when the watcher restarts" {
+		t.Fatalf("the title shows as %q:\n%s", title, joined)
+	}
+	m, _ = step(m, tea.MouseMsg{X: 5, Y: at + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if m.taskPick.sel != 1 {
+		t.Fatalf("a click on the title's second line: sel %d", m.taskPick.sel)
 	}
 }
