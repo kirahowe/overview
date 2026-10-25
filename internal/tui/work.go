@@ -85,26 +85,39 @@ type trackerMsg struct {
 	ok   bool
 }
 
-// readTrackers asks for the trackers the World needs, and drops those of
-// projects that have left it. A read is asked for a root
-// only when none is out for it, so however long the issues CLI takes,
-// at most one runs per project, and the rows refresh never waits on one.
-// Without a runner there is nothing to read.
-func (m model) readTrackers() (model, tea.Cmd) {
-	if m.issues == nil {
-		return m, nil
-	}
-	roots := m.world().Trackers
+// dropTrackers drops the trackers of projects that have left the World,
+// as a refresh lands. It changes the inputs, so it runs in the reduce
+// step, before the effects ask for the trackers the World still needs.
+func (m model) dropTrackers() model {
 	kept := trackers{}
-	for _, r := range roots {
+	for _, r := range m.world().Trackers {
 		if t, ok := m.trackers[r]; ok {
 			kept[r] = t
 		}
 	}
-	if len(kept) != len(m.trackers) {
-		m.trackers = kept
-		m = m.setInputs(nil)
+	if len(kept) == len(m.trackers) {
+		return m
 	}
+	m.trackers = kept
+	return m.setInputs(nil)
+}
+
+// readTrackers asks for the trackers the World needs, once per refresh
+// that lands: a read is due when refreshes has moved since the last ask.
+// A read is asked for a root only when none is out for it, so however
+// long the issues CLI takes, at most one runs per project, and the rows
+// refresh never waits on one. Without a runner there is nothing to read.
+// It is one of the effects, and changes only the bookkeeping of what is
+// in flight.
+func (m model) readTrackers() (model, tea.Cmd) {
+	if m.trackersAsked == m.refreshes {
+		return m, nil
+	}
+	m.trackersAsked = m.refreshes
+	if m.issues == nil {
+		return m, nil
+	}
+	roots := m.world().Trackers
 	var cmds []tea.Cmd
 	for _, root := range roots {
 		if root == "" || m.reading[root] {

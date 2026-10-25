@@ -82,9 +82,12 @@ type model struct {
 	// trackers holds what it said of each project, as the latest read of
 	// each found it, and goes into every read so an unchanged project is
 	// not read again. reading holds the roots whose read is out.
-	issues   issues.Runner
-	trackers trackers
-	reading  map[string]bool
+	// refreshes counts the refreshes that landed, and trackersAsked the
+	// one the trackers were last asked for after.
+	issues                   issues.Runner
+	trackers                 trackers
+	reading                  map[string]bool
+	refreshes, trackersAsked int
 
 	// in holds the sources' latest values, unjoined: the rows, ttys,
 	// hosts, panes, pins, roots and trackers. Only setInputs changes it,
@@ -794,14 +797,15 @@ func (m model) settle(before model) model {
 // effects compares what tmux and the reads should be with what is in
 // flight, and sends the differences as Cmds: the list's place and the
 // holder, the selected session's turns, the cockpit's and the task
-// picker's reads, and the panes' rules.
+// picker's reads, the trackers after a refresh, and the panes' rules.
 func (m model) effects() (model, tea.Cmd) {
 	m, stage := m.restage()
 	m, turns := m.askTurns()
 	m, reads := m.cockpitReads()
 	m, taskRead := m.taskReads()
+	m, trackers := m.readTrackers()
 	m, frame := m.reframe()
-	return m, tea.Batch(stage, turns, reads, taskRead, frame)
+	return m, tea.Batch(stage, turns, reads, taskRead, trackers, frame)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -873,9 +877,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				in.Pinned = msg.pinned
 			}
 		})
+		m.refreshes++
 		// Keep the cursor on a visible row after sessions come and go.
-		m = m.adopt()
-		return m.readTrackers()
+		return m.adopt().dropTrackers(), nil
 	case trackerMsg:
 		m = m.landTracker(msg)
 	case digestMsg:

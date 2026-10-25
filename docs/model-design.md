@@ -335,7 +335,12 @@ The model holds three kinds of state, and nothing else:
 3. `settle`: the cursor, the panels and the cockpit's pick are made
    valid for the new list.
 4. `effects`: the desired tmux layout, frames and reads are compared with
-   what is in flight, and the differences go out as Cmds.
+   what is in flight, and the differences go out as Cmds. Effects run
+   on every message, so each read has a condition that says it is due.
+   The trackers are due once per refresh that lands: the refresh bumps
+   a count in the reduce step, where it also drops the trackers of
+   projects that left the World, and `readTrackers` asks for the
+   World's `Trackers` when the count has moved since it last asked.
 
 Nothing in steps 2 to 4 changes inputs, so one message makes one World.
 
