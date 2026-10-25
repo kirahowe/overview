@@ -185,3 +185,34 @@ func TestAJoinerAcrossSegmentsIsMeasuredJoined(t *testing.T) {
 		t.Fatalf("rows %+v, want one row of 3 cells", rows)
 	}
 }
+
+const withNewFile = twoFiles + `diff --git a/NOTES.md b/NOTES.md
+new file mode 100644
+index 0000000..5555555
+--- /dev/null
++++ b/NOTES.md
+@@ -0,0 +1,1 @@
++the only line
+`
+
+// A note saved on the first line of a new file keeps the file's hunk
+// header on screen: the header at the top of the screen is found again
+// as itself after the notes change, not as the nearest line.
+func TestANoteKeepsTheHunkHeader(t *testing.T) {
+	for _, w := range []int{120, 160} {
+		f, cfg := newTest(t, withNewFile)
+		m := open(t, f, cfg, w, 30)
+		m = press(t, m, "]", "]")
+		if p := cursorSpot(m); p.path != "NOTES.md" || p.line != 1 {
+			t.Fatalf("cursor at %+v", p)
+		}
+		before := screen(m)
+		m = press(t, m, "c")
+		m = typeText(t, m, "a note")
+		m = press(t, m, "enter")
+		after := screen(m)
+		if !strings.Contains(before, "@@ -0,0 +1,1 @@") || !strings.Contains(after, "@@ -0,0 +1,1 @@") {
+			t.Fatalf("w %d: the hunk header went:\nbefore\n%s\nafter\n%s", w, before, after)
+		}
+	}
+}

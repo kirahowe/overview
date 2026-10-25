@@ -800,3 +800,53 @@ func TestCursorStaysOnItsSpotProperty(t *testing.T) {
 		}
 	})
 }
+
+// Whatever notes arrive, the hunk header over the cursor stays drawn when
+// a jump put it at the top of the screen: notes go under lines, and the
+// header the screen starts at is found again as itself.
+func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
+	base := t.TempDir()
+	theme := testTheme(t)
+	rapid.Check(t, func(t *rapid.T) {
+		dir, err := os.MkdirTemp(base, "case")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := genFiles(t)
+		f := newFixture(dir, "")
+		m := newModel(baseConfig(theme, f), f.deps())
+		m, cmd := step(m, tea.WindowSizeMsg{Width: rapid.IntRange(40, 200).Draw(t, "w"), Height: rapid.IntRange(14, 50).Draw(t, "h")})
+		m = drain(t, m, cmd)
+		m, cmd = step(m, loadedMsg{gen: m.gen, base: "b", files: files})
+		m = drain(t, m, cmd)
+		if rapid.Bool().Draw(t, "flip") {
+			m = press(t, m, "m")
+		}
+		for range rapid.IntRange(0, 6).Draw(t, "jumps") {
+			m = press(t, m, "}")
+		}
+		if m.top >= len(m.items) || m.items[m.top].kind != hunkItem {
+			t.Skip("no hunk at the top")
+		}
+		header := spotOf(m.laidOut, m.items[m.top])
+		drawn := func(m model) bool {
+			_, owners := m.frame()
+			for _, o := range owners {
+				if o >= 0 && m.items[o].kind == hunkItem && spotOf(m.laidOut, m.items[o]) == header {
+					return true
+				}
+			}
+			return false
+		}
+		if !drawn(m) {
+			t.Skip("the header does not fit")
+		}
+		for k := range rapid.IntRange(1, 3).Draw(t, "rounds") {
+			m, _ = step(m, storeMsg{events: genEvents(t, files)})
+			m.events = nil // each round is a log of its own
+			if !drawn(m) {
+				t.Fatalf("round %d: the hunk header %+v is gone:\n%s", k, header, screen(m))
+			}
+		}
+	})
+}

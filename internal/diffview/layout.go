@@ -164,6 +164,11 @@ type spot struct {
 	line int
 	text string // the line's text, so a line that moved is found again
 	note string
+	// head says the spot is a header, of the file or, when hunk is not
+	// -1, of its hunk-th hunk. A header has no line of its own, so it is
+	// found again as itself and never as the nearest line.
+	head bool
+	hunk int
 }
 
 // spotOf is the spot an item is at.
@@ -177,6 +182,7 @@ func spotOf(files []diff.File, it item) spot {
 	f := files[it.file]
 	s := spot{path: f.Path()}
 	if it.kind != rowItem {
+		s.head, s.hunk = true, it.hunk
 		return s
 	}
 	lines := f.Hunks[it.hunk].Lines
@@ -191,11 +197,24 @@ func spotOf(files []diff.File, it item) spot {
 // find is the index of the item best matching s: its note, else the row
 // of its file nearest its line number with the same text, as when lines
 // were added above it, else the row nearest the number, else the file's
-// header. ok is false when s's file is gone too.
+// header. A header is found as the same header, else its file's. ok is
+// false when s's file is gone too.
 func find(items []item, files []diff.File, s spot) (int, bool) {
 	const far = 1 << 30
 	best, bestDist := -1, far
 	for i, it := range items {
+		if s.head {
+			if it.file < 0 || files[it.file].Path() != s.path || it.kind == rowItem || it.kind == noteItem {
+				continue
+			}
+			if s.hunk >= 0 && it.kind == hunkItem && it.hunk == s.hunk {
+				return i, true
+			}
+			if best < 0 {
+				best = i
+			}
+			continue
+		}
 		if s.note != "" {
 			if it.kind == noteItem && it.note == s.note {
 				return i, true
