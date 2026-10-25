@@ -742,3 +742,20 @@ func TestTheNextKeyClearsANote(t *testing.T) {
 		t.Fatalf("note %q after a key bound to nothing", m.note)
 	}
 }
+
+// The wheel only looks, so it moves the cursor and leaves the note; a
+// click on a row clears it, as a key does.
+func TestTheWheelLeavesANote(t *testing.T) {
+	m := taskModel(t, newFakeMux()).say("kept")
+	sel := m.sel
+	m, cmd := step(m, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 2, Y: 2})
+	m = settle(t, m, cmd)
+	if m.note != "kept" || m.sel == sel {
+		t.Fatalf("after the wheel: note %q, sel %s (was %s)", m.note, m.sel, sel)
+	}
+	m, cmd = step(m, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 2})
+	m = settle(t, m, cmd)
+	if m.note != "" {
+		t.Fatalf("after a click: note %q", m.note)
+	}
+}

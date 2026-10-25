@@ -877,7 +877,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// proves the client is out of the panels mode, which keeps every
 		// key for itself.
 		m.panels = false
-		return m.input(keysBack, func(m model) []action { return m.keyActions(msg) })
+		return m.input(keysBack, true, func(m model) []action { return m.keyActions(msg) })
 	case tea.MouseMsg:
 		// tmux's panels mode does not bind the mouse, so a mouse event
 		// that reaches the view has taken the client out of it.
@@ -886,7 +886,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// leaves the keyboard where it was. A click is stamped with the
 		// time Update read at the door, so apply stays pure.
 		at := m.now
-		return m.input(pointerHere, func(m model) []action { return m.mouseActions(msg, at) })
+		wheel := msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
+		return m.input(pointerHere, !wheel, func(m model) []action { return m.mouseActions(msg, at) })
 	case noteMsg:
 		m = m.say(string(msg))
 	case frameMsg:
@@ -969,11 +970,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // input applies arrival, what an input says of where the user is, and
 // then the actions translate makes of the input for the model that
-// results, in order.
-func (m model) input(arrival verb, translate func(model) []action) (tea.Model, tea.Cmd) {
+// results, in order. A key or a click that means something has read the
+// note, so heard clears it first. The wheel only looks, so read is false
+// for it and the note stays.
+func (m model) input(arrival verb, read bool, translate func(model) []action) (tea.Model, tea.Cmd) {
 	m, first := m.apply(action{do: arrival})
 	as := translate(m)
-	if len(as) > 0 {
+	if read && len(as) > 0 {
 		as = append([]action{{do: heard}}, as...)
 	}
 	next, rest := m.handle(as)
