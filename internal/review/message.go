@@ -53,8 +53,11 @@ func oneLine(s string) string {
 }
 
 func indent(s, pad string) string {
-	// Keep leading indentation (a code snippet's first line); drop
-	// leading blank lines and trailing space.
+	// A carriage return pasted into a prompt acts as Enter or overwrites
+	// the line, so every line ending becomes a newline. Keep leading
+	// indentation (a code snippet's first line); drop leading blank
+	// lines and trailing space.
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
 	s = strings.TrimRightFunc(strings.TrimLeft(s, "\r\n"), unicode.IsSpace)
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
@@ -71,6 +74,8 @@ func codeBlock(a Anchor) string {
 	width := len(fmt.Sprint(a.Start + len(shown) - 1))
 	var b strings.Builder
 	for i, l := range shown {
+		// A CRLF file's lines end in a carriage return; see indent.
+		l = strings.ReplaceAll(l, "\r", "")
 		fmt.Fprintf(&b, "\n    %*d  %s", width, a.Start+i, l)
 	}
 	if len(a.Lines) > len(shown) {

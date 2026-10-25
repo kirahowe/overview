@@ -86,7 +86,9 @@ func genValidNote(t *rapid.T, id string) Event {
 	a := Anchor{Path: "a.go", Side: rapid.SampledFrom([]Side{New, Old}).Draw(t, "side"), Start: rapid.IntRange(1, 5).Draw(t, "s")}
 	a.End = a.Start + n - 1
 	for range n {
-		a.Lines = append(a.Lines, genText().Draw(t, "l"))
+		// A diff line never holds a line break of its own.
+		l := strings.NewReplacer("\n", " ").Replace(genText().Draw(t, "l"))
+		a.Lines = append(a.Lines, l)
 	}
 	return Event{Op: OpNote, ID: id, Author: rapid.SampledFrom([]Author{User, Agent}).Draw(t, "au"), Body: "x", Anchor: &a, At: t0}
 }
@@ -253,7 +255,9 @@ func TestPropMessage(t *testing.T) {
 				t.Fatalf("note %q missing from message", it.Note.ID)
 			}
 			for _, e := range it.Entries {
-				for _, line := range strings.Split(e.Body, "\n") {
+				// The builder turns every line ending, CR included, into \n.
+				body := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(e.Body)
+				for _, line := range strings.Split(body, "\n") {
 					if !strings.Contains(msg, strings.TrimRightFunc(line, unicode.IsSpace)) {
 						t.Fatalf("line %q of %s missing from message", line, e.ID)
 					}

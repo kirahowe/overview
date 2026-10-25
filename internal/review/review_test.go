@@ -365,6 +365,23 @@ Notes are never deleted, and only the user resolves them.
 	}
 }
 
+// A carriage return in a note would reach the agent's prompt as Enter.
+// The property once failed on the body "\rA".
+func TestMessageCarriageReturns(t *testing.T) {
+	for _, body := range []string{"\rA", "one\rtwo", "one\r\ntwo"} {
+		n := Fold([]Event{note("n", User, body, anchor("p", 1, "x"))}).Notes[0]
+		got := Message([]Item{{Note: n, Entries: n.Thread}}, "s", "e")
+		if strings.Contains(got, "\r") {
+			t.Errorf("%q: carriage return left in message:\n%q", body, got)
+		}
+	}
+	n := Fold([]Event{note("n", User, "one\rtwo", anchor("p", 1, "x\r"))}).Notes[0]
+	got := Message([]Item{{Note: n, Entries: n.Thread}}, "s", "e")
+	if strings.Contains(got, "\r") || !strings.Contains(got, "  one\n  two\n") {
+		t.Errorf("lines not split:\n%s", got)
+	}
+}
+
 func TestMessageTruncates(t *testing.T) {
 	lines := make([]string, 15)
 	for i := range lines {
