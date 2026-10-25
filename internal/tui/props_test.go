@@ -1422,6 +1422,29 @@ func TestPropTheCursorStaysInItsProject(t *testing.T) {
 	})
 }
 
+// A wide glyph that straddles the cut of a search is cut too, so the
+// line still fits and keeps its second hint, and a note with no room to
+// be read goes. These are cases the property found.
+func TestTheFooterCutsAWideGlyph(t *testing.T) {
+	hs := []hint{{"enter", "type"}, {"↑↓", "move"}}
+	for _, c := range []struct {
+		query, note string
+		w           int
+		want        string
+	}{
+		{" 日日", "", 26, "/…▏  enter type • ↑↓ move"},
+		{" 日日", "日", 26, "/…▏  enter type • ↑↓ move"},
+		{" 日日", "日", 32, "/…日▏  日  enter type • ↑↓ move"},
+		{"日日日日日日日日日日", "", 30, "/…日日▏  enter type • ↑↓ move"},
+	} {
+		f := footerSpec{mode: []part{{text: "/"}, {text: c.query}, {text: "▏"}}, cut: 1, note: c.note, hints: hs}
+		got := ansi.Strip(layFooter(f, c.w))
+		if ansi.StringWidth(got) > c.w || got != c.want {
+			t.Errorf("%q and %q in %d: %q, want %q", c.query, c.note, c.w, got, c.want)
+		}
+	}
+}
+
 // Every opening prompt overview writes for a project id without spaces or
 // a #, whatever the issue's title, is one the hook reads back as that
 // issue, so the session it starts links itself. An id with them is the
@@ -1651,7 +1674,7 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 // hints do. They always show, and a part cut from the left keeps its
 // end, so a search keeps its cursor and a path its last directory.
 func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
-	word := rapid.StringMatching(`([a-z/][a-z/ ]{0,38}[a-z/])?`)
+	word := rapid.StringMatching(`([a-z/日][a-z/ 日]{0,38}[a-z/日])?`)
 	rapid.Check(t, func(t *rapid.T) {
 		var f footerSpec
 		for _, s := range rapid.SliceOfN(word, 0, 3).Draw(t, "status") {
@@ -1675,9 +1698,9 @@ func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
 		}
 		w := rapid.IntRange(10, 160).Draw(t, "w")
 		keep := f.hints[:min(minHints, len(f.hints))]
-		need := fixed + 1 + 2
+		need := fixed + 2 + 2 // "…" and a wide glyph's spare cell
 		for _, h := range keep {
-			need += len(h.key) + 1 + len(h.label) + 3
+			need += ansi.StringWidth(h.key) + 1 + ansi.StringWidth(h.label) + 3
 		}
 		if need+2 > w {
 			return // too narrow for what must show
@@ -1695,7 +1718,7 @@ func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
 				t.Fatalf("%q lacks the mode's %q", out, p)
 			}
 		}
-		if n := len(cutText); n > 0 && !strings.Contains(out, cutText[n-1:]) {
+		if r := []rune(cutText); len(r) > 0 && !strings.Contains(out, string(r[len(r)-1])) {
 			t.Fatalf("%q lacks the end of %q", out, cutText)
 		}
 		for _, h := range keep {

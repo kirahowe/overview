@@ -1077,7 +1077,8 @@ const minHints = 2
 // the left of its cut part when it must be, so a search keeps its input
 // and a long path its last directories. The first minHints hints keep
 // their room. Status goes first when the line is short, the least
-// important first, and then the note is cut at its end.
+// important first, then the note is cut at its end, then the cut part
+// of the mode, and a note that still does not fit goes.
 func layFooter(f footerSpec, w int) string {
 	hintsW := func(hs []hint) int {
 		n := 0
@@ -1125,7 +1126,19 @@ func layFooter(f footerSpec, w int) string {
 	if over := width(plain(status, note)) - room; over > 0 && f.cut >= 0 && f.cut < len(f.mode) && f.mode[f.cut].text != "" {
 		c := f.mode[f.cut].text
 		keep := max(ansi.StringWidth(c)-over-1, 0)
-		f.mode[f.cut].text = "…" + ansi.TruncateLeft(c, ansi.StringWidth(c)-keep, "")
+		// A wide glyph that straddles the cut is kept whole, which can
+		// leave the line a cell too long, so cut again until it fits.
+		for {
+			rest := ansi.TruncateLeft(c, ansi.StringWidth(c)-keep, "")
+			f.mode[f.cut].text = "…" + rest
+			if keep == 0 || width(plain(status, note)) <= room {
+				break
+			}
+			keep--
+		}
+	}
+	if width(plain(status, note)) > room {
+		note = "" // too little of it would show to be read
 	}
 	var lead []string
 	for _, p := range status {
