@@ -1718,9 +1718,11 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 			}
 		}
 		check()
+		// One key per case: a line at a time or a page, so a case does
+		// not cost a step per line of a long help when it pages.
+		key := rapid.SampledFrom([]string{"j", "ctrl+d", "pgdown", "ctrl+d"}).Draw(t, "key")
 		for i := 0; i < len(body)+2 && m.helpMax() > 0 && m.helpTop < m.helpMax(); i++ {
 			before := m.helpTop
-			key := rapid.SampledFrom([]string{"j", "down", "ctrl+d", "pgdown"}).Draw(t, "key")
 			m, _ = press(m, key)
 			if !m.help || m.helpTop < before {
 				t.Fatalf("%dx%d: %s closed the help or went up", w, h, key)

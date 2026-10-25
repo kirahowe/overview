@@ -262,6 +262,15 @@ func detailLines(details string, w int) []string {
 // plainWrap is wrap for unstyled text, without the padding, so the
 // caller can style each line as it is.
 func plainWrap(text string, w int) []string {
+	if isASCII(text) && w > 0 {
+		// A cell to a byte, so the cuts are byte offsets: the help
+		// measures itself this way on every key.
+		var ls []string
+		for _, r := range wrapRanges(text, w) {
+			ls = append(ls, text[r[0]:r[1]])
+		}
+		return ls
+	}
 	ls := wrap(text, w)
 	for i, l := range ls {
 		ls[i] = strings.TrimRight(l, " ")

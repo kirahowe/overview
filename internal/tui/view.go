@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -1582,22 +1581,13 @@ func helpColumn(ss []helpSection, w int) []helpRow {
 // helpLen is how many lines helpBody has, counted without styling them.
 func (m model) helpLen() int {
 	ls, rs := helpSections()
-	legend := len(m.helpLegend())
+	legend := len(m.legendRows())
 	if m.helpWide() {
 		return max(len(helpColumn(ls, helpCol)), len(helpColumn(rs, helpCol))) + legend
 	}
 	_, w := m.helpWidth()
-	if n, ok := helpLens.Load(w); ok {
-		return n.(int) + legend
-	}
-	n := len(helpColumn(append(ls, rs...), w))
-	helpLens.Store(w, n)
-	return n + legend
+	return len(helpColumn(append(ls, rs...), w)) + legend
 }
-
-// helpLens keeps the one-column help's length by width, which helpLen is
-// asked for on every key and every frame while the help is open.
-var helpLens sync.Map
 
 // helpBody is every line of the help, before it is cut to the pane.
 func (m model) helpBody() []string {
@@ -1657,20 +1647,36 @@ func (m model) helpLegend() []string {
 		codeFg.Render("$") + dim.Render(" terminal"),
 		dim.Render("#6 task"),
 	}
-	_, w := m.helpWidth()
 	var out []string
-	line := ""
-	for _, it := range items {
+	for _, l := range m.legendRows() {
+		out = append(out, strings.Join(items[l[0]:l[1]], "  "))
+	}
+	return out
+}
+
+// legendItems are the legend's items as plain text, one cell each mark.
+var legendItems = []string{"! blocked", "? asking", "⠋ working", "○ idle", "$ terminal", "#6 task"}
+
+// legendRows packs the legend's items into lines of the help's width:
+// the items [from, to) of each, measured plain, so helpLen can count them
+// without styling any.
+func (m model) legendRows() [][2]int {
+	_, w := m.helpWidth()
+	var out [][2]int
+	from, used := 0, 0
+	for i, it := range legendItems {
+		iw := ansi.StringWidth(it)
 		switch {
-		case line == "":
-			line = it
-		case ansi.StringWidth(line)+2+ansi.StringWidth(it) <= w:
-			line += "  " + it
+		case i == from:
+			used = iw
+		case used+2+iw <= w:
+			used += 2 + iw
 		default:
-			out, line = append(out, line), it
+			out = append(out, [2]int{from, i})
+			from, used = i, iw
 		}
 	}
-	return append(out, line)
+	return append(out, [2]int{from, len(legendItems)})
 }
 
 // helpRows is how many lines of the help the box shows: all of them when
