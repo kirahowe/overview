@@ -276,12 +276,14 @@ func issueSummary(details string) string {
 // before it says how many more there are.
 const shownCriteria = 6
 
-// issueInfo is what the issue card shows, read with issues show.
+// issueInfo is what the issue card and the task picker's details show,
+// read with issues show.
 type issueInfo struct {
 	loading  bool
 	err      error
 	summary  string
 	criteria []issues.Criterion
+	details  string
 }
 
 // issueCard is the issue's details: its summary and its acceptance

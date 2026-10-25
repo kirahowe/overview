@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,11 +27,14 @@ type fakeIssues struct {
 	mtime map[string]time.Time
 	runs  map[string]int
 	fail  map[string]bool
+	// details is what issues show prints as an issue's details, by
+	// taskKey.
+	details map[string]string
 }
 
 func newFakeIssues() *fakeIssues {
 	return &fakeIssues{lists: map[string]string{}, edn: map[string]string{}, mtime: map[string]time.Time{},
-		runs: map[string]int{}, fail: map[string]bool{}}
+		runs: map[string]int{}, fail: map[string]bool{}, details: map[string]string{}}
 }
 
 // project adds a tracked project at root with id (no project.edn when id is
@@ -53,6 +58,11 @@ func (f *fakeIssues) run(args ...string) ([]byte, error) {
 	f.runs[root]++
 	if f.fail[root] {
 		return nil, errors.New("issues: boom")
+	}
+	if len(args) > 3 && args[2] == "show" {
+		id, _ := strconv.Atoi(args[3])
+		b, err := json.Marshal(map[string]any{"id": id, "details-text": f.details[taskKey(root, id)]})
+		return b, err
 	}
 	return []byte(f.lists[root]), nil
 }

@@ -265,7 +265,7 @@ func (m model) keepWidth() (model, tea.Cmd) {
 	list, ok := m.pane(m.self)
 	// A zoomed list is as wide as its window, which says nothing of the
 	// width it keeps, and tmux puts that back when the zoom ends.
-	if !ok || m.mux == nil || m.staging || m.zooming || m.cockpit.open || list.Zoomed {
+	if !ok || m.mux == nil || m.staging || m.zooming || m.zoomWant() || list.Zoomed {
 		return m, nil
 	}
 	n := 0
@@ -492,9 +492,9 @@ func (m model) setPanes(panes []tmux.Pane, rs roots) model {
 // text has changed.
 func (m model) restage() (model, tea.Cmd) {
 	want := m.want()
-	// The cockpit holds the list in its window, zoomed, until it closes and
-	// the zoom has gone.
-	if m.mux == nil || m.staging || m.zooming || m.cockpit.open || want == "" || want == m.failed {
+	// The cockpit and the task picker hold the list in its window, zoomed,
+	// until they close and the zoom has gone.
+	if m.mux == nil || m.staging || m.zooming || m.zoomWant() || want == "" || want == m.failed {
 		return m, nil
 	}
 	// With the keyboard outside the list, the list stays beside the pane
@@ -579,6 +579,13 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m, cmd := m.stageLanded(msg)
 			m, open := m.openCockpit()
 			return m, tea.Batch(cmd, open)
+		}
+		if m.taskPick.open {
+			// s came while the list was moving: its zoom waited for this.
+			m, cmd := m.stageLanded(msg)
+			m.zoomPanes = m.inStage()
+			m, zoom := m.syncZoom()
+			return m, tea.Batch(cmd, zoom)
 		}
 		return m.stageLanded(msg)
 

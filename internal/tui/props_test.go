@@ -1875,3 +1875,47 @@ func TestPropSplitListSharesTheHeight(t *testing.T) {
 		}
 	})
 }
+
+// detailLines keeps every character of the details but the hashes of a
+// heading outside a code block, the block's fences and the spaces, in
+// order, and no line it makes is wider than it was asked for.
+func TestDetailLinesProps(t *testing.T) {
+	pieces := []string{"word", "longerwordthanmost", "a", "#", "## Heading", "- ", "- [ ] ", "* ", "12. ", "```", "  ", "\n", "\n\n", "é", "x.y"}
+	rapid.Check(t, func(t *rapid.T) {
+		var b strings.Builder
+		for _, p := range rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 40).Draw(t, "pieces") {
+			b.WriteString(p)
+			if rapid.Bool().Draw(t, "space") {
+				b.WriteString(" ")
+			}
+		}
+		details := b.String()
+		w := rapid.IntRange(1, 60).Draw(t, "w")
+		got := detailLines(details, w)
+		var shown strings.Builder
+		for i, l := range got {
+			l = ansi.Strip(l)
+			if lw := ansi.StringWidth(l); lw > w {
+				t.Fatalf("line %d is %d wide, over %d: %q", i, lw, w, l)
+			}
+			shown.WriteString(l)
+		}
+		var want strings.Builder
+		fence := false
+		for _, line := range strings.Split(details, "\n") {
+			s := strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(s, "```"):
+				fence = !fence
+				continue
+			case !fence && strings.HasPrefix(s, "#"):
+				s = strings.TrimLeft(s, "#")
+			}
+			want.WriteString(s)
+		}
+		squash := func(s string) string { return strings.Join(strings.Fields(s), "") }
+		if squash(shown.String()) != squash(want.String()) {
+			t.Fatalf("details %q at %d show as\n%q", details, w, got)
+		}
+	})
+}

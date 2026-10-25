@@ -30,13 +30,10 @@ const (
 )
 
 // cockpit is the cockpit's state. pick is the issues card's cursor, which
-// moves while the card has the keyboard. panes is how many panes the
-// list's window had when a listing last showed the cockpit as it should
-// be, so zoomLost can tell the user leaving from a pane going away.
+// moves while the card has the keyboard.
 type cockpit struct {
-	open  bool
-	pick  int
-	panes int
+	open bool
+	pick int
 }
 
 // zoomedMsg answers zoomCmd.
@@ -48,8 +45,11 @@ func zoomCmd(mux multiplexer, self string, on bool) tea.Cmd {
 	return func() tea.Msg { return zoomedMsg{mux.SetZoom(self, on)} }
 }
 
-// syncZoom asks tmux for the zoom the cockpit wants: on while it is open.
-// One zoom is out at a time, so two never race in tmux. A wish made while
+// zoomWant says whether the list's pane should be zoomed: while the
+// cockpit or the task picker is open, as both want the whole window.
+func (m model) zoomWant() bool { return m.cockpit.open || m.taskPick.open }
+
+// syncZoom asks tmux for the zoom zoomWant says. One zoom is out at a time, so two never race in tmux. A wish made while
 // one is out waits for it to land, and then the latest wish goes. The
 // zoom counts as a spawn, so no listing from before it lands is taken to
 // say the zoom has gone.
@@ -63,7 +63,7 @@ func (m model) syncZoom() (model, tea.Cmd) {
 	}
 	m.spawns++
 	m.zooming, m.rezoom = true, false
-	return m, zoomCmd(m.mux, m.self, m.cockpit.open)
+	return m, zoomCmd(m.mux, m.self, m.zoomWant())
 }
 
 // openCockpit opens the cockpit, zooming the list inside tmux. While the
@@ -78,7 +78,7 @@ func (m model) openCockpit() (model, tea.Cmd) {
 		return m, nil
 	}
 	m.cockpitSoon = false
-	m.cockpit = cockpit{open: true, panes: m.inStage()}
+	m.cockpit, m.zoomPanes = cockpit{open: true}, m.inStage()
 	m.changeReads = stale(m.changeReads)
 	return m.syncZoom()
 }
@@ -105,15 +105,16 @@ func (m model) inStage() int {
 	return n
 }
 
-// zoomLost reads a current listing for what became of the cockpit's
-// zoom. tmux ends a zoom when the user goes to another pane of the
-// window, and also when a pane of it closes or opens. Only the first is
-// the user leaving the cockpit, and it closes, without touching tmux:
-// the list's window has the panes it had, unzoomed. When a pane has gone
-// the cockpit stays, zoomed again if the list has company. A list alone
-// in its window fills it unzoomed, as tmux cannot zoom it.
+// zoomLost reads a current listing for what became of the list's zoom,
+// for the cockpit or the task picker. tmux ends a zoom when the user goes
+// to another pane of the window, and also when a pane of it closes or
+// opens. Only the first is the user leaving, and what wanted the zoom
+// closes, without touching tmux: the list's window has the panes it had,
+// unzoomed. When a pane has gone the zoom is asked for again if the list
+// has company. A list alone in its window fills it unzoomed, as tmux
+// cannot zoom it.
 func (m model) zoomLost() (model, tea.Cmd) {
-	if !m.cockpit.open || m.zooming || m.mux == nil {
+	if !m.zoomWant() || m.zooming || m.mux == nil {
 		return m, nil
 	}
 	p, ok := m.pane(m.self)
@@ -123,12 +124,12 @@ func (m model) zoomLost() (model, tea.Cmd) {
 	n := m.inStage()
 	switch {
 	case p.Zoomed || n == 1:
-		m.cockpit.panes = n
-	case n < m.cockpit.panes:
-		m.cockpit.panes = n
+		m.zoomPanes = n
+	case n < m.zoomPanes:
+		m.zoomPanes = n
 		return m.syncZoom()
 	default:
-		m.cockpit = cockpit{}
+		m.cockpit, m.taskPick = cockpit{}, taskPick{}
 	}
 	return m, nil
 }
@@ -137,7 +138,7 @@ func (m model) zoomLost() (model, tea.Cmd) {
 // those that show another pane or take the list pane for something else.
 func closesCockpit(v verb) bool {
 	switch v {
-	case open, newSession, newTerminal, openReview, addProject, startTask, toggleScreen, showScreen:
+	case open, newSession, newTerminal, openReview, addProject, toggleScreen, showScreen:
 		return true
 	}
 	return false
@@ -390,20 +391,10 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 	}
 	t := m.target()
 	var cmds []tea.Cmd
-	if t.task != "" && m.issues != nil {
-		stamp := m.trackers[t.root].stamp
-		if r, ok := m.issueReads[t.task]; !ok || (r.stamp != stamp && !r.pending) {
-			r.stamp, r.pending, r.info.loading = stamp, true, !ok
-			m.issueReads = withRead(m.issueReads, t.task, r)
-			run, root, id, key := m.issues, t.root, t.issue.ID, t.task
-			cmds = append(cmds, func() tea.Msg {
-				i, err := issues.Show(run, root, id)
-				if err != nil {
-					return issueReadMsg{key, stamp, issueInfo{err: err}}
-				}
-				return issueReadMsg{key, stamp, issueInfo{summary: issueSummary(i.Details), criteria: issues.Criteria(i.Details)}}
-			})
-		}
+	if t.task != "" {
+		var read tea.Cmd
+		m, read = m.readIssue(t.root, t.issue.ID)
+		cmds = append(cmds, read)
 	}
 	key := cockpitKey(t)
 	rows := m.targetRows(t)
@@ -429,6 +420,30 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 	c.info.noStart = false
 	m.changeReads = withRead(m.changeReads, key, c)
 	return m, tea.Batch(append(cmds, changesCmd(key, sig, t.root, start, base, stream, m.deps))...)
+}
+
+// readIssue asks for the details of issue id of the project at root when
+// they are missing or older than its .issues, for the cockpit's issue
+// card and the task picker.
+func (m model) readIssue(root string, id int) (model, tea.Cmd) {
+	if m.issues == nil {
+		return m, nil
+	}
+	key, stamp := taskKey(root, id), m.trackers[root].stamp
+	r, ok := m.issueReads[key]
+	if ok && (r.stamp == stamp || r.pending) {
+		return m, nil
+	}
+	r.stamp, r.pending, r.info.loading = stamp, true, !ok
+	m.issueReads = withRead(m.issueReads, key, r)
+	run := m.issues
+	return m, func() tea.Msg {
+		i, err := issues.Show(run, root, id)
+		if err != nil {
+			return issueReadMsg{key, stamp, issueInfo{err: err}}
+		}
+		return issueReadMsg{key, stamp, issueInfo{summary: issueSummary(i.Details), criteria: issues.Criteria(i.Details), details: i.Details}}
+	}
 }
 
 // changesCmd reads what changed at root: since start, from base when it is

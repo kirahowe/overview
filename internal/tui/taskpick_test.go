@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -249,7 +250,8 @@ func TestTaskPickerGoesToALiveWorkstream(t *testing.T) {
 	}
 }
 
-// s in the cockpit closes it, then opens the picker in the list's place.
+// s in the cockpit closes it, then opens the picker in the list's place,
+// keeping the zoom.
 func TestSClosesTheCockpit(t *testing.T) {
 	f := newFakeMux()
 	m := selectKey(t, taskModel(t, f), "s2")
@@ -260,7 +262,7 @@ func TestSClosesTheCockpit(t *testing.T) {
 		t.Fatal("no cockpit")
 	}
 	m = pressSettled(t, m, "s")
-	if m.cockpit.open || f.zoomed("%0") || !m.taskPick.open {
+	if m.cockpit.open || !f.zoomed("%0") || !m.taskPick.open {
 		t.Fatalf("cockpit %v zoomed %v picker %v", m.cockpit.open, f.zoomed("%0"), m.taskPick.open)
 	}
 	if !strings.Contains(ansi.Strip(m.View()), "#4 show cost") {
@@ -318,5 +320,113 @@ func TestTaskPickerWrapsLongTitles(t *testing.T) {
 	m, _ = step(m, tea.MouseMsg{X: 5, Y: at + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.taskPick.sel != 1 {
 		t.Fatalf("a click on the title's second line: sel %d", m.taskPick.sel)
+	}
+}
+
+// The picker zooms the list and shows the selected issue's details beside
+// its rows, read as the cursor reaches each, and scrolled with pgdn when
+// they are long. esc puts the pane back.
+func TestTaskPickerShowsDetails(t *testing.T) {
+	f := newFakeMux()
+	fi := newFakeIssues()
+	fi.project("/code/todo", "todo", "3 ready add threads", "4 inbox fix scroll")
+	var long []string
+	for n := 1; n <= 60; n++ {
+		long = append(long, "- [ ] step "+strconv.Itoa(n))
+	}
+	fi.details["/code/todo#3"] = "# Add threads\n\nReplies nest under the\nmessage they answer.\n"
+	fi.details["/code/todo#4"] = "# Fix scroll\n\n## Acceptance criteria\n\n" + strings.Join(long, "\n") + "\n"
+	m := stagedModel(t, f)
+	d := fi.deps()
+	m.deps.exists, m.deps.glob, m.deps.modTime, m.deps.readFile = d.exists, d.glob, d.modTime, d.readFile
+	m.issues = fi.run
+	m, cmd := step(m, rowsMsg{pinned: []string{"/code/todo"}})
+	m = settle(t, m, cmd)
+	m = selectKey(t, m, "project:/code/todo")
+	m = pressSettled(t, m, "s")
+	if !m.taskPick.open || !f.zoomed(m.self) {
+		t.Fatalf("picker %v, zoomed %v", m.taskPick.open, f.zoomed(m.self))
+	}
+	m = resized(t, m, 150, 30)
+	m = settle(t, m, nil)
+	text := ansi.Strip(m.View())
+	for _, want := range []string{"#3 · ready · p2", "Replies nest under the message they answer.", "#3 add threads", "pgup/pgdn details"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("lacks %q:\n%s", want, text)
+		}
+	}
+	m = pressSettled(t, m, "down")
+	text = ansi.Strip(m.View())
+	if !strings.Contains(text, "#4 · inbox · p2") || !strings.Contains(text, "- [ ] step 1 ") || strings.Contains(text, "step 60") {
+		t.Fatalf("the long details:\n%s", text)
+	}
+	for range 10 {
+		m = pressSettled(t, m, "pgdown")
+	}
+	text = ansi.Strip(m.View())
+	if !strings.Contains(text, "step 60") || strings.Contains(text, "step 1 ") || !strings.Contains(text, "of 64") {
+		t.Fatalf("pgdn does not reach the end:\n%s", text)
+	}
+	m = pressSettled(t, m, "pgup")
+	if m.taskPick.top >= 64-28 {
+		t.Fatalf("pgup after the end: top %d", m.taskPick.top)
+	}
+	m = pressSettled(t, m, "esc")
+	if m.taskPick.open || f.zoomed(m.self) {
+		t.Fatalf("esc: picker %v, zoomed %v", m.taskPick.open, f.zoomed(m.self))
+	}
+}
+
+// enter ends the zoom before the session it starts is shown.
+func TestTaskPickerEnterEndsTheZoom(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, pinnedTasksModel(t, f), "project:/code/todo")
+	m = pressSettled(t, m, "s")
+	if !f.zoomed(m.self) {
+		t.Fatal("not zoomed")
+	}
+	m = pressSettled(t, m, "enter")
+	if len(f.spawned) != 1 || f.zoomed(m.self) || m.opened.ID == "" || !f.staged(m.opened.ID) {
+		t.Fatalf("spawned %d, zoomed %v, the session shown %v", len(f.spawned), f.zoomed(m.self), f.staged(m.opened.ID))
+	}
+}
+
+func TestDetailLines(t *testing.T) {
+	got := detailLines("# Title here\n\nA paragraph\nwrapped in the file.\n\n\n## Acceptance criteria\n\n- [ ] first item that\n      goes on\n2. second\n\n```\nlet x = 1\n```\n", 20)
+	var plain []string
+	for _, l := range got {
+		plain = append(plain, ansi.Strip(l))
+	}
+	want := []string{
+		"Title here",
+		"",
+		"A paragraph wrapped",
+		"in the file.",
+		"",
+		"Acceptance criteria",
+		"",
+		"- [ ] first item",
+		"      that goes on",
+		"2. second",
+		"",
+		"let x = 1",
+	}
+	if !slices.Equal(plain, want) {
+		t.Fatalf("got\n%q\nwant\n%q", plain, want)
+	}
+}
+
+// Going to the pane beside the list ends the zoom in tmux, and the picker
+// closes with it rather than zooming the list back over the user.
+func TestTaskPickerClosesWhenTmuxEndsTheZoom(t *testing.T) {
+	f := newFakeMux()
+	m := selectKey(t, pinnedTasksModel(t, f), "project:/code/todo")
+	m = pressSettled(t, m, "s")
+	zooms := len(f.zooms)
+	f.setZoom(f.stage(), false)
+	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
+	m = settle(t, m, cmd)
+	if m.taskPick.open || len(f.zooms) != zooms || f.zoomed(m.self) {
+		t.Fatalf("open %v zooms %v zoomed %v", m.taskPick.open, f.zooms, f.zoomed(m.self))
 	}
 }

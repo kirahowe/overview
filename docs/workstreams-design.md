@@ -130,7 +130,11 @@ work on moves the cursor to its workstream, and on any other issue
 starts claude on it with the opening prompt. This is how a pinned
 project with a backlog and nothing running gets its first workstream.
 The picker's rows and what `enter` does are pure functions of the
-tracker, the links and the query.
+tracker, the links and the query. While it is open, the picker zooms
+the list's pane as the cockpit does, and shows the selected issue's
+details beside the rows. They come from `issues show`, through the
+same cache as the cockpit's issue card, so you can read a task in full
+before starting it.
 
 The look changes along the way:
 
