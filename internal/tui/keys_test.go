@@ -12,7 +12,7 @@ import (
 )
 
 // ctrl+c in an input cancels that input as esc does. It never quits the
-// view: that is Q alone, and ctrl+c in the list detaches like q.
+// view, since no key does, and ctrl+c in the list detaches like q.
 func TestCtrlCCancelsEachInput(t *testing.T) {
 	base := newTestModel(t, row("s1", "red", "auth", 11))
 	surfaces := map[string]func(model) model{
