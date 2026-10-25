@@ -762,7 +762,8 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 func (m model) holderText(w, h int) string {
 	cw := max(w-2, 1)
 	var lines []string
-	e, _, ok := m.selected(m.ordered())
+	es := m.ordered()
+	e, _, ok := m.selected(es)
 	switch {
 	case !m.loaded && m.rowsErr != nil:
 		lines = wrap(red.Render(m.rowsErr.Error()), cw)
@@ -778,6 +779,10 @@ func (m model) holderText(w, h int) string {
 		lines = wrap(dim.Render("No sessions in "+m.name(e.project)+hint), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
+	case idleStream(es, e):
+		// No session to show: the cockpit's cards, where enter goes.
+		cards, _, _ := layoutCards(m.cockpitRows(m.target()), w, h, "")
+		return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(cards, "\r\n")
 	case e.kind == workstreamEntry:
 		lines = m.workstreamLines(e, cw)
 	default:
@@ -810,8 +815,8 @@ func (m model) holderText(w, h int) string {
 	return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(out, "\r\n")
 }
 
-// workstreamLines is what the holder shows for a workstream with no pane
-// to show: its issue, and what starts work on it.
+// workstreamLines is what the holder shows for a workstream whose
+// sessions have no pane to show: its issue, and where enter goes.
 func (m model) workstreamLines(e entry, w int) []string {
 	ref := issueRef(m.projectID(e.project), e.issue)
 	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(e.issue.Title), w)
@@ -823,10 +828,7 @@ func (m model) workstreamLines(e entry, w int) []string {
 			n++
 		}
 	}
-	switch n {
-	case 0:
-		return append(out, wrap(dim.Render("No session works on this task. c starts a session on this task, t a terminal for it."), w)...)
-	case 1:
+	if n == 1 {
 		return append(out, wrap(dim.Render("One session works on this task, and it has no pane here. enter goes to it."), w)...)
 	}
 	return append(out, wrap(dim.Render(fmt.Sprintf("%d sessions work on this task, and none has a pane here. enter goes to the first.", n)), w)...)

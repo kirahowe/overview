@@ -143,6 +143,19 @@ func closesCockpit(v verb) bool {
 	return false
 }
 
+// idleStream says whether e is a workstream that no session works on.
+// The holder shows its cockpit's cards, and enter opens the cockpit.
+func idleStream(es []entry, e entry) bool {
+	return e.kind == workstreamEntry && !slices.ContainsFunc(children(es, e.task), func(c entry) bool { return c.kind == sessionEntry })
+}
+
+// idleSelected says whether the cursor is on an idle workstream.
+func (m model) idleSelected() bool {
+	es := m.ordered()
+	e, _, ok := m.selected(es)
+	return ok && idleStream(es, e)
+}
+
 // target is what the cockpit shows: a workstream, when task is set, or
 // else the project at root.
 type target struct {
@@ -377,7 +390,8 @@ func withRead[V any](mp map[string]V, k string, v V) map[string]V {
 	return out
 }
 
-// cockpitReads asks for what the open cockpit's target lacks: its issue's
+// cockpitReads asks for what the cockpit's target lacks, while it is open
+// or the holder shows its cards: its issue's
 // details when they are missing or older than its .issues, and its
 // changes when they are missing, not yet read since the cockpit opened,
 // or from before its sessions last changed. A workstream's base is kept
@@ -385,7 +399,7 @@ func withRead[V any](mp map[string]V, k string, v V) map[string]V {
 // a session that took it on sooner is listed: a session ending must not
 // move it later.
 func (m model) cockpitReads() (model, tea.Cmd) {
-	if !m.cockpit.open {
+	if !m.cockpit.open && !m.idleSelected() {
 		return m, nil
 	}
 	t := m.target()

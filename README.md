@@ -125,7 +125,9 @@ the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
 fills it without a zoom. While the cockpit is open the list stays in its window,
 and the cards follow the cursor. `enter`, `c`, `s`, `t` and `v` close it
-first, then do what they always do.
+first, then do what they always do. The exception is `enter` on a
+workstream that no session works on: the cockpit stays open and says
+how to start one.
 
 A workstream's cockpit starts with a header: the issue's reference,
 title, status and priority, how long ago it was taken on, and
@@ -146,7 +148,7 @@ and the issue's card lists six of its criteria at most.
 
 The cockpit's header and its issues card are panels the keyboard can
 go to, and the other cards only show. `enter` on the header does what it
-does on the entry in the list. `enter` on the issues card, or `tab` from
+does on the entry in the list. The header offers `enter` and `v` only when the workstream has a session. `enter` on the issues card, or `tab` from
 anywhere in the cockpit, moves the keyboard into it while the window has
 room to show the card, and `tab` again moves it into the list. There,
 `j` and `k` move between the issues. On an issue that a session already
@@ -228,7 +230,9 @@ window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
 workstream, `enter` does what it does on the entry shown beside it: the
 first session or terminal under it with a pane, or else its first
-session.
+session. A workstream that no session works on, such as one in review
+whose sessions have ended, shows its cockpit's cards beside the list,
+and `enter` opens the cockpit with the keyboard on its header.
 While you are searching, `enter` acts on the selected match and clears the
 search. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a

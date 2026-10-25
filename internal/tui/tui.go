@@ -931,7 +931,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	if m.cockpit.open && closesCockpit(a.do) {
+	// enter on an idle workstream opens the cockpit, so it stays open.
+	if m.cockpit.open && closesCockpit(a.do) && (a.do != open || !m.idleSelected()) {
 		m, out := m.closeCockpit()
 		m, cmd := m.apply(a)
 		return m, tea.Batch(out, cmd)
@@ -1314,9 +1315,10 @@ func copied(text string, err error) tea.Msg {
 
 // act does what enter means for an entry: it moves the focus beside the
 // list. On a workstream it acts on the workstream's lead, the entry the
-// stage shows beside it. A background session gets an attach pane first. One that runs
-// inside another app brings that app forward, since that is where it is
-// used. A pinned project with nothing in it only says how to start one.
+// stage shows beside it, and with no session under it, it opens the
+// cockpit with the keyboard on its cards. A background session gets an
+// attach pane first. One that runs inside another app brings that app
+// forward, since that is where it is used. A pinned project with nothing in it only says how to start one.
 func (m model) act(e entry) (model, tea.Cmd) {
 	switch e.kind {
 	case workstreamEntry:
@@ -1324,7 +1326,12 @@ func (m model) act(e entry) (model, tea.Cmd) {
 		if c, ok := lead(children(es, e.task), func(c entry) bool { return m.entryPane(es, c) != "" }); ok {
 			return m.act(c)
 		}
-		return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one."), nil
+		if m.cockpit.open {
+			return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one, t a terminal."), nil
+		}
+		m, cmd := m.openCockpit()
+		m.nav = nav{panel: headerPanel, prev: m.navAt()}
+		return m, cmd
 	case projectEntry:
 		if _, tracked := m.trackers[e.project]; tracked {
 			return m.say("Nothing runs in " + m.name(e.project) + " yet. s starts a task, c Claude, t a terminal."), nil

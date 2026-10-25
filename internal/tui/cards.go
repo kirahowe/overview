@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -221,10 +222,14 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 		if started != "" {
 			when = dim.Render("started " + agoPhrase(started))
 		}
+		keys := chips(hint{"c", "claude"}, hint{"t", "term"})
+		if slices.ContainsFunc(ms, func(mb member) bool { return !mb.term }) {
+			keys = chips(hint{"enter", "attach"}, hint{"v", "review"}, hint{"c", "claude"}, hint{"t", "term"})
+		}
 		return []string{
 			spread(bold.Foreground(pal.Text).Render(title), when, w),
 			membersLine(ms),
-			chips(hint{"enter", "attach"}, hint{"v", "review"}, hint{"c", "claude"}, hint{"t", "term"}),
+			keys,
 		}
 	}}
 }
