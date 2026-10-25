@@ -292,7 +292,10 @@ from `Stream.Started`. Its issues card counts `len(Stream.Sessions)` for
 the other issues. The task picker reads the same `Stream` for the number
 of sessions on each issue, and `enter` goes to that workstream when it
 has any. The stage looks up `Session.Pane`, and the holder and the
-details read `Session.Host`, `TTY` and `Elsewhere`.
+details read `Session.Host`, `TTY` and `Elsewhere`. The rule along the top of
+each pane in the view's session names the session whose `Session.Pane`
+it is, and a review's pane the session its id names in
+`World.Sessions`, so the orchestrator's pane is titled like any shell.
 
 In the model, `setInputs` is the one place the inputs change. It takes
 the message's change, composes `Roots` from the refreshes' and the pane

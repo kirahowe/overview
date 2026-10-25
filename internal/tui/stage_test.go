@@ -1723,3 +1723,24 @@ func TestTurnsAreReadWhenTheTranscriptChanges(t *testing.T) {
 		t.Fatalf("a changed transcript was not read: %d reads", reads)
 	}
 }
+
+// A pane's rule names the session the World says it shows. The
+// orchestrator is not in the World, so its pane is titled as a shell.
+func TestAPanesRuleNamesTheWorldsSession(t *testing.T) {
+	f := newFakeMux()
+	orch := row("o", fleet.OrchestratorName, "", 13)
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), orch)
+	byTTY := map[string]string{}
+	for _, p := range f.panes {
+		byTTY[p.TTY] = p.ID
+	}
+	if got := f.titles[byTTY["ttys011"]]; !strings.HasPrefix(got, "red") {
+		t.Fatalf("red's pane is titled %q", got)
+	}
+	if got := f.titles[byTTY["ttys013"]]; strings.Contains(got, fleet.OrchestratorName) || !strings.HasPrefix(got, "$ ") {
+		t.Fatalf("the orchestrator's pane is titled %q", got)
+	}
+	if _, ok := m.world().Sessions["o"]; ok {
+		t.Fatal("the orchestrator is in the World")
+	}
+}

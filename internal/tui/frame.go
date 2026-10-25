@@ -9,6 +9,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 // tmux draws the rule along the top of each of its panes, as tmux.Frame
@@ -96,8 +97,9 @@ func (m model) entryTitle(e entry, ok bool) []titleSeg {
 	return m.stateTitle(e.sess.Row)
 }
 
-// paneTitle is the title of pane p of the view's session.
-func (m model) paneTitle(p tmux.Pane, byTTY map[string]fleet.Row, byID map[string]fleet.Row) []titleSeg {
+// paneTitle is the title of pane p of the view's session, in w, where
+// byPane has the session each pane shows, as Session.Pane has it.
+func (m model) paneTitle(p tmux.Pane, w *world.World, byPane map[string]*world.Session) []titleSeg {
 	switch {
 	case p.ID == m.self:
 		segs := m.listTitle()
@@ -115,21 +117,15 @@ func (m model) paneTitle(p tmux.Pane, byTTY map[string]fleet.Row, byID map[strin
 		return m.entryTitle(e, ok)
 	case p.Review != "":
 		name := "review"
-		if r, ok := byID[p.Review]; ok {
-			name += " · " + r.Name
+		if s := w.Sessions[p.Review]; s != nil {
+			name += " · " + s.Name
 		}
 		return []titleSeg{{text: name}}
-	case p.Attach != "":
-		for _, r := range byID {
-			if r.ID == p.Attach {
-				return m.stateTitle(r)
-			}
-		}
 	case p.ID == m.opened.ID:
 		return []titleSeg{{text: "claude"}, {"  starting", pal.Muted}}
 	}
-	if r, ok := byTTY[p.TTY]; ok && p.TTY != "" {
-		return m.stateTitle(r)
+	if s := byPane[p.ID]; s != nil {
+		return m.stateTitle(s.Row)
 	}
 	segs := []titleSeg{{text: "$ " + strings.TrimPrefix(p.Command, "-")}}
 	if p.Path != "" {
@@ -139,19 +135,19 @@ func (m model) paneTitle(p tmux.Pane, byTTY map[string]fleet.Row, byID map[strin
 }
 
 // frames is what the rule of every pane in the view's session should
-// show.
+// show. Which session a pane shows is the World's Session.Pane.
 func (m model) frames() map[string]paneFrame {
-	byTTY, byID := map[string]fleet.Row{}, map[string]fleet.Row{}
-	for _, r := range m.in.Rows {
-		if tty := m.in.TTYs[r.PID]; tty != "" && !r.Background() {
-			byTTY[tty] = r
+	w := m.world()
+	byPane := map[string]*world.Session{}
+	for _, s := range w.Sessions {
+		if s.Pane != "" {
+			byPane[s.Pane] = s
 		}
-		byID[r.SessionID] = r
 	}
 	out := map[string]paneFrame{}
 	for _, p := range m.in.Panes {
 		if p.Session == m.session && m.session != "" {
-			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, byTTY, byID))}
+			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, w, byPane))}
 		}
 	}
 	return out
