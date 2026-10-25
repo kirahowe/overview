@@ -619,6 +619,9 @@ func nearKey(old, now []entry, sel string) (string, bool) {
 	if key, ok := samePlace(old, now, sel); ok {
 		return key, true
 	}
+	if key, ok := placeholderFor(old, now, sel); ok {
+		return key, true
+	}
 	var keys []string
 	alias := map[string]bool{}
 	for _, e := range old {
@@ -630,6 +633,27 @@ func nearKey(old, now []entry, sel string) (string, bool) {
 		key, ok = nearest(keys, sel, func(k string) bool { return listed[k] })
 	}
 	return key, ok
+}
+
+// placeholderFor is the placeholder in now that took the place of sel,
+// an entry of old: when sel was the last entry of a pinned project, the
+// project's placeholder now stands where it stood, so the cursor stays
+// in that project. An agents alias has no project section to stay in.
+func placeholderFor(old, now []entry, sel string) (string, bool) {
+	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
+	if i < 0 || old[i].alias == agentsPrefix {
+		return "", false
+	}
+	name := old[i].projectName()
+	if name == "" {
+		return "", false
+	}
+	for _, e := range now {
+		if e.kind == projectEntry && e.proj.Name == name {
+			return e.key(), true
+		}
+	}
+	return "", false
 }
 
 // samePlace is the entry in now for the session the entry sel in old

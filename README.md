@@ -88,7 +88,9 @@ with nothing in it. A session that another app started, such as an editor
 plugin's chat panel, has no terminal. Unless it works on a task, it goes
 in a section of its own, "in other apps", dimmed and named after the app
 that runs it. When the entry under the cursor goes away, the cursor moves
-to the one after it, or to the one before it when it was last.
+to the one after it, or to the one before it when it was last. When it
+was the last entry of a pinned project, the cursor stays on the
+project's placeholder.
 
 The agents are a panel of their own, under the projects. They hold every
 session in the list once more, in order of priority: those that need you

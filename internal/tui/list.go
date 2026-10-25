@@ -95,6 +95,26 @@ func (e entry) pin() string {
 	return e.proj.Pins[0]
 }
 
+// projectName is the name of the project the entry is listed in, "" for
+// a session another app runs.
+func (e entry) projectName() string {
+	var p *world.Project
+	switch {
+	case e.kind == projectEntry:
+		p = e.proj
+	case e.kind == terminalEntry:
+		p = e.term.Project
+	case e.stream != nil:
+		p = e.stream.Project
+	case e.sess != nil && e.sess.Host == nil:
+		p = e.sess.Project
+	}
+	if p == nil {
+		return ""
+	}
+	return p.Name
+}
+
 // task is the key of the workstream the entry is or sits under, "" for
 // none.
 func (e entry) task() string {

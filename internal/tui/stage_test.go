@@ -1342,6 +1342,30 @@ func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
 	}
 }
 
+// Closing the only terminal of a pinned project leaves the cursor on the
+// placeholder that takes its place, not on another project's entry, so
+// a second x does not reach into that project.
+func TestClosingAPinnedProjectsLastTerminalKeepsTheCursorThere(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f)
+	m, cmd := step(m, rowsMsg{pinned: []string{"/code/beta", "/code/gamma"}})
+	m = settle(t, m, cmd)
+	m = pressSettled(t, selectKey(t, m, "project:/code/beta"), "t")
+	beta := m.sel
+	m = pressSettled(t, selectKey(t, m, "project:/code/gamma"), "t")
+	gamma := m.sel
+	if gamma == beta || m.shown("project:/code/gamma") {
+		t.Fatalf("sel %s, beta's terminal %s", gamma, beta)
+	}
+	m = pressSettled(t, m, "x", "y")
+	if m.sel != "project:/code/gamma" {
+		t.Fatalf("sel %s after closing %s, want gamma's placeholder", m.sel, gamma)
+	}
+	if m = pressSettled(t, m, "x"); m.confirm == beta {
+		t.Fatal("a second x asks to close beta's terminal")
+	}
+}
+
 // One failed refresh keeps what the last one found: the cursor stays and
 // the list does not move, then or when the next refresh brings it all back.
 func TestAFailedRefreshKeepsTheList(t *testing.T) {

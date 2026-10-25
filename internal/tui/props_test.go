@@ -1373,6 +1373,36 @@ func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 	})
 }
 
+// When the entry under the cursor goes and leaves its pinned project
+// empty, the cursor goes to the project's placeholder, which stands where
+// the entry stood, and never to another project's entry.
+func TestPropTheCursorStaysInAProjectThatEmpties(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
+		old := flatten(present(listWorld(rows, terms, pinned, nil), ""))
+		left := slices.DeleteFunc(slices.Clone(terms), func(tmux.Pane) bool { return rapid.Bool().Draw(t, "close") })
+		rows = slices.DeleteFunc(slices.Clone(rows), func(fleet.Row) bool { return rapid.Bool().Draw(t, "end") })
+		now := flatten(present(listWorld(rows, left, pinned, nil), ""))
+		listed := map[string]bool{}
+		for _, e := range now {
+			listed[e.key()] = true
+		}
+		for _, was := range old {
+			if listed[was.key()] || was.alias == agentsPrefix {
+				continue
+			}
+			name := was.projectName()
+			at := slices.IndexFunc(now, func(e entry) bool { return e.kind == projectEntry && e.proj.Name == name })
+			if name == "" || at < 0 {
+				continue
+			}
+			if got, ok := nearKey(old, now, was.key()); !ok || got != now[at].key() {
+				t.Fatalf("on %s in %s, moved to %s (%v), not its placeholder %s", was.key(), name, got, ok, now[at].key())
+			}
+		}
+	})
+}
+
 // Every opening prompt overview writes for a project id without spaces or
 // a #, whatever the issue's title, is one the hook reads back as that
 // issue, so the session it starts links itself. An id with them is the
