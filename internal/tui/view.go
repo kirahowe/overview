@@ -1068,7 +1068,9 @@ func (m model) listTitle() []titleSeg {
 
 // tagTitle is the list's title with tag, which says what the list shows,
 // after it, in w cells: the counts after the home's name go, the last
-// first, and then the name is cut, until the tag fits.
+// first, and then the name is cut, until the tag fits. When that would
+// leave the name under three cells, the tag goes instead. The result is
+// never wider than w, for w of one or more.
 func tagTitle(segs []titleSeg, tag titleSeg, w int) []titleSeg {
 	width := func(ss []titleSeg) (n int) {
 		for _, s := range ss {
@@ -1081,11 +1083,17 @@ func tagTitle(segs []titleSeg, tag titleSeg, w int) []titleSeg {
 		segs = segs[:len(segs)-1]
 	}
 	segs = slices.Clone(segs)
-	if len(segs) > 0 && width(segs)+tw > w {
-		// Then the name is cut, down to its mark and an ellipsis.
-		segs[0].text = ansi.Truncate(segs[0].text, max(w-tw, 3), "…")
+	if len(segs) == 0 || width(segs)+tw <= w {
+		return append(segs, tag)
 	}
-	return append(segs, tag)
+	if w-tw >= 3 {
+		// Then the name is cut, down to its mark and an ellipsis.
+		segs[0].text = ansi.Truncate(segs[0].text, w-tw, "…")
+		return append(segs, tag)
+	}
+	// With no room for both, the tag goes and the name has the room.
+	segs[0].text = ansi.Truncate(segs[0].text, max(w, 0), "…")
+	return segs
 }
 
 // noHook is the list's warning when interactive sessions are listed and
@@ -1254,8 +1262,9 @@ type footerSpec struct {
 	note   string // what the view has to say, in place of the hints
 	// notePath is a directory named in note, cut from its left before
 	// the note is cut at its end, so the message keeps its words.
-	notePath string
-	hints    []hint
+	notePath   string
+	notePathAt int // where notePath starts in note, in bytes
+	hints      []hint
 }
 
 // minHints is how many hints the footer keeps however long the rest is.
@@ -1308,7 +1317,7 @@ func layFooter(f footerSpec, w int) string {
 		status = status[:len(status)-1]
 	}
 	if over := width(plain(status, note)) - room; over > 0 && f.notePath != "" {
-		if i := strings.Index(note, f.notePath); i >= 0 {
+		if i := f.notePathAt; i >= 0 && strings.HasPrefix(note[min(i, len(note)):], f.notePath) {
 			pw := ansi.StringWidth(f.notePath)
 			note = note[:i] + keepEnd(f.notePath, max(pw-over, 2)) + note[i+len(f.notePath):]
 		}
@@ -1355,7 +1364,7 @@ func layFooter(f footerSpec, w int) string {
 // keyboard is, and then the note when there is one, and otherwise the
 // keys for what is selected.
 func (m model) footer() string {
-	f := footerSpec{cut: -1, note: m.note, notePath: m.notePath}
+	f := footerSpec{cut: -1, note: m.note, notePath: m.notePath, notePathAt: m.notePathAt}
 	if w := m.world(); w.Loaded && w.RefreshErr == nil {
 		switch h := m.world().Orchestrator; {
 		case !h.Running:
@@ -1536,7 +1545,7 @@ func helpEntryLines(e helpEntry, w int) []string {
 	if ansi.StringWidth(keys+e.what) <= w {
 		return []string{keys + e.what}
 	}
-	if w-helpKeyCol >= 12 || ansi.StringWidth(keys+e.what) <= w {
+	if w-helpKeyCol >= 12 {
 		lines := plainWrap(e.what, max(w-helpKeyCol, 1))
 		lines[0] = keys + lines[0]
 		for i := 1; i < len(lines); i++ {

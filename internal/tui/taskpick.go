@@ -141,7 +141,10 @@ func (m model) openTasks(root string) (model, tea.Cmd) {
 	_, tracked := m.world().Tracker(root)
 	open, note := taskOpens(m.name(root), tracked, m.trackerReading(root), m.issues != nil)
 	if !open {
-		return m.sayAbout(note, m.name(root)), nil
+		if name := m.name(root); strings.HasPrefix(note, name) {
+			return m.sayAbout("", name, note[len(name):]), nil
+		}
+		return m.say(note), nil
 	}
 	// From the cockpit the zoom it holds stays for the picker.
 	m.cockpit, m.cockpitSoon = cockpit{}, false

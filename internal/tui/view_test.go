@@ -509,6 +509,8 @@ func TestTagTitleKeepsTheTag(t *testing.T) {
 		{60, "◆ overview  ! 1  ○ 3  · start a task"},
 		{31, "◆ overview  ! 1  · start a task"},
 		{19, "◆ …  · start a task"},
+		{18, "◆ overview"},
+		{6, "◆ ove…"},
 	} {
 		if got := text(tagTitle(segs, tag, c.w)); got != c.want {
 			t.Errorf("at %d: %q, want %q", c.w, got, c.want)
@@ -516,6 +518,11 @@ func TestTagTitleKeepsTheTag(t *testing.T) {
 	}
 	if len(segs) != 3 || segs[0].text != "◆ overview" {
 		t.Fatalf("tagTitle changed its argument: %v", segs)
+	}
+	for w := 1; w <= 60; w++ {
+		if got := text(tagTitle(segs, tag, w)); ansi.StringWidth(got) > w {
+			t.Errorf("at %d: %q is wider", w, got)
+		}
 	}
 }
 

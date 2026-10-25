@@ -121,6 +121,8 @@ type model struct {
 	// first when the footer is short, cut from its left, so the message
 	// around it stays whole.
 	notePath string
+	// notePathAt is where notePath starts in note, in bytes.
+	notePathAt int
 	// adding is the add-project picker as it was when enter added from
 	// it, reopened when the add fails so what was typed is not lost.
 	adding picker
@@ -504,13 +506,11 @@ func (m model) say(note string) model {
 	return m
 }
 
-// sayAbout is say for a note that names the directory path, which gives
-// way before the rest of the note when the footer is short.
-func (m model) sayAbout(note, path string) model {
-	m = m.say(note)
-	if strings.Contains(note, path) {
-		m.notePath = path
-	}
+// sayAbout is say for the note before+path+after, which names the
+// directory path, the part that gives way first when the footer is short.
+func (m model) sayAbout(before, path, after string) model {
+	m = m.say(before + path + after)
+	m.notePath, m.notePathAt = path, len(before)
 	return m
 }
 
@@ -977,7 +977,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pinsLanded++
 		switch {
 		case msg.err != nil && msg.unpin:
-			return m.sayAbout("could not unpin "+m.name(msg.root)+": "+pathless(msg.err), m.name(msg.root)), nil
+			return m.sayAbout("could not unpin ", m.name(msg.root), ": "+pathless(msg.err)), nil
 		case msg.err != nil:
 			// The picker comes back as it was, so the path can be fixed.
 			if !m.pick.open && m.adding.open {
@@ -985,12 +985,12 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.adding = picker{}
 			where := m.short(msg.root)
-			return m.sayAbout("could not add "+where+": "+pathless(msg.err), where), nil
+			return m.sayAbout("could not add ", where, ": "+pathless(msg.err)), nil
 		case msg.unpin:
 			m = m.setInputs(func(in *world.Inputs) {
 				in.Pinned = slices.DeleteFunc(slices.Clone(in.Pinned), func(r string) bool { return r == msg.root })
 			})
-			return m.sayAbout("unpinned "+m.name(msg.root), m.name(msg.root)), nil
+			return m.sayAbout("unpinned ", m.name(msg.root), ""), nil
 		}
 		m.adding = picker{}
 		m = m.setInputs(func(in *world.Inputs) {
@@ -998,7 +998,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				in.Pinned = slices.Concat(in.Pinned, []string{msg.root})
 			}
 		})
-		return m.toProject(msg.root).sayAbout("pinned "+m.name(msg.root), m.name(msg.root)), nil
+		return m.toProject(msg.root).sayAbout("pinned ", m.name(msg.root), ""), nil
 	case doneMsg:
 		if msg.err != nil {
 			m = m.say(msg.err.Error())
@@ -1263,7 +1263,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m.say("nothing to add"), nil
 		}
 		m.pick, m.adding, m.pins = picker{}, m.pick, m.pins+1
-		return m.sayAbout("adding "+m.short(path)+"…", m.short(path)), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
+		return m.sayAbout("adding ", m.short(path), "…"), pinCmd(m.deps.readDirs, m.home.PinProject, path, typed, m.deps.resolve, m.deps.exists)
 	case pickCancel:
 		m.pick = picker{}
 	case startTask:
@@ -1599,7 +1599,7 @@ func (m model) start(dir string) (model, tea.Cmd) {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	where := m.name(dir)
-	return m.sayAbout("starting a session in "+where+"…", where).startPane(spawn{kind: spawnSession, name: "a session in " + where,
+	return m.sayAbout("starting a session in ", where, "…").startPane(spawn{kind: spawnSession, name: "a session in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewArgs()})
 }
 
@@ -1632,7 +1632,7 @@ func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
 		return m.say("terminals open only inside overview's tmux"), nil
 	}
 	where := m.name(dir)
-	return m.sayAbout("opening a terminal in "+where+"…", where).startPane(spawn{kind: spawnTerminal, name: "a terminal in " + where,
+	return m.sayAbout("opening a terminal in ", where, "…").startPane(spawn{kind: spawnTerminal, name: "a terminal in " + where,
 		session: m.session, dir: dir, env: m.claudeEnv(), task: task})
 }
 

@@ -2072,15 +2072,17 @@ func TestMarkdownKeepsIndents(t *testing.T) {
 	}
 }
 
-// A note that names a directory keeps its message: the directory is cut
-// from its left first, and the words around it stay whole while they and
-// two cells of the path fit.
+// A note that names a directory keeps its message: the directory, at its
+// own place in the note, is cut from its left first, and the words around
+// it stay whole while they and two cells of the path fit.
 func TestPropANotesPathGivesWayFirst(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		path := "/" + strings.Join(rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,10}`), 1, 6).Draw(t, "dirs"), "/")
-		before := rapid.SampledFrom([]string{"", "could not add ", "adding "}).Draw(t, "before")
-		after := rapid.SampledFrom([]string{"", ": no such file or directory", " doesn't track its tasks. issues init there starts it."}).Draw(t, "after")
-		f := footerSpec{cut: -1, note: before + path + after, notePath: path, hints: []hint{{"?", "help"}}}
+		// The words around the path may hold the same text: only the
+		// path's own place is cut.
+		before := rapid.SampledFrom([]string{"", "could not add ", "adding ", path + " moved, so "}).Draw(t, "before")
+		after := rapid.SampledFrom([]string{"", ": no such file or directory", " doesn't track its tasks. issues init there starts it.", " is " + path}).Draw(t, "after")
+		f := footerSpec{cut: -1, note: before + path + after, notePath: path, notePathAt: len(before), hints: []hint{{"?", "help"}}}
 		w := rapid.IntRange(10, 120).Draw(t, "w")
 		out := ansi.Strip(layFooter(f, w))
 		if ansi.StringWidth(out) > w {
