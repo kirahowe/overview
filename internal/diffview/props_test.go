@@ -3,6 +3,7 @@ package diffview
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -472,13 +473,17 @@ func TestWrapProperty(t *testing.T) {
 }
 
 // wrapWords breaks prose between words: it keeps every grapheme but the
-// spaces a break stands for, starts no row after the first with one, and
-// splits only a word wider than a row. A reversed space, the editor's
-// cursor, is never dropped.
+// spaces a break stands for, draws no blank row, indents the rows after
+// the first as the first is when there is room, and splits only a word
+// wider than the room after that indentation. A reversed space, the
+// editor's cursor, is never dropped.
 func TestWrapWordsProperty(t *testing.T) {
 	styles := append(append([]Style{}, segStyles...), Style{Fg: "4", Reverse: true})
 	rapid.Check(t, func(t *rapid.T) {
 		var segs []Seg
+		if indent := rapid.IntRange(0, 12).Draw(t, "indent"); indent > 0 {
+			segs = append(segs, Seg{strings.Repeat(" ", indent), rapid.SampledFrom(styles).Draw(t, "indentStyle")})
+		}
 		for range rapid.IntRange(0, 6).Draw(t, "segs") {
 			text, _ := clean(genPiecesText(t, "seg") + rapid.SampledFrom([]string{"", " ", "  ", " word "}).Draw(t, "space"))
 			segs = append(segs, Seg{text, rapid.SampledFrom(styles).Draw(t, "style")})
@@ -532,9 +537,6 @@ func TestWrapWordsProperty(t *testing.T) {
 			}
 			gs := graphemes(content)
 			drawn = append(drawn, gs)
-			if i > 0 && len(gs) > 0 && droppable(gs[0]) {
-				t.Fatalf("row %d starts with a space: %+v", i, rows)
-			}
 			for _, g := range gs {
 				if !droppable(g) {
 					got = append(got, g.text)
@@ -544,8 +546,45 @@ func TestWrapWordsProperty(t *testing.T) {
 		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 			t.Fatalf("the rows hold %q, want %q", got, want)
 		}
-		// A word no wider than a row is drawn on one row: match each
-		// input grapheme to where it is drawn, if it is.
+		// Every row holds something but spaces, unless the input does not.
+		blank := len(want) == 0
+		for i, gs := range drawn {
+			if !slices.ContainsFunc(gs, func(g gr) bool { return !droppable(g) }) && !blank {
+				t.Fatalf("row %d is blank: %+v", i, rows)
+			}
+		}
+		if blank && len(rows) != 1 {
+			t.Fatalf("blank input drawn on %d rows", len(rows))
+		}
+		// lead is how far the first row is indented. The rows after it
+		// start with that many spaces when that leaves minHang cells, and
+		// at once otherwise, then go straight on to something drawn.
+		lead := 0
+		for _, g := range drawn[0] {
+			if g.text != " " {
+				break
+			}
+			lead += g.wd
+		}
+		hang := 0
+		if w-lead >= minHang && slices.ContainsFunc(drawn[0], func(g gr) bool { return g.text != " " }) {
+			hang = lead
+		}
+		for i := 1; i < len(drawn); i++ {
+			k, n := 0, 0
+			for k < len(drawn[i]) && droppable(drawn[i][k]) {
+				n += drawn[i][k].wd
+				k++
+			}
+			// A grapheme of no width starts its row bare, so it does not
+			// fuse with the indent.
+			if n != hang && (n != 0 || k == len(drawn[i]) || drawn[i][k].wd != 0) {
+				t.Fatalf("row %d starts with %d spaces, want %d: %+v", i, n, hang, rows)
+			}
+		}
+		// A word that fits after the first row's indentation is drawn on
+		// one row: match each input grapheme to where it is drawn, if it
+		// is.
 		type at struct{ row, k int }
 		var flat []at
 		for r, gs := range drawn {
@@ -553,22 +592,26 @@ func TestWrapWordsProperty(t *testing.T) {
 				flat = append(flat, at{r, k})
 			}
 		}
+		get := func(a at) gr { return drawn[a.row][a.k] }
 		in := graphemes(segs)
 		rowOf := make([]int, len(in))
 		next := 0
 		for i, g := range in {
 			rowOf[i] = -1
-			if next < len(flat) {
-				d := drawn[flat[next].row][flat[next].k]
-				if d.text == g.text && d.rev == g.rev {
-					rowOf[i] = flat[next].row
+			if droppable(g) {
+				if next < len(flat) && droppable(get(flat[next])) {
 					next++
-					continue
 				}
+				continue
 			}
-			if !droppable(g) {
+			for next < len(flat) && droppable(get(flat[next])) {
+				next++
+			}
+			if next == len(flat) || get(flat[next]) != g {
 				t.Fatalf("grapheme %d %q is not drawn in order", i, g.text)
 			}
+			rowOf[i] = flat[next].row
+			next++
 		}
 		for i := 0; i < len(in); {
 			if in[i].text == " " {
@@ -580,7 +623,7 @@ func TestWrapWordsProperty(t *testing.T) {
 				wd += in[j].wd
 				j++
 			}
-			if wd <= w && rowOf[i] != rowOf[j-1] {
+			if wd <= w-lead && rowOf[i] != rowOf[j-1] {
 				t.Fatalf("a word of %d cells is split at w %d: %+v", wd, w, rows)
 			}
 			i = j

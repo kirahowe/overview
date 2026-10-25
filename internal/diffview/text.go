@@ -133,11 +133,14 @@ func wrap(segs []Seg, w int, fill Style) [][]Seg {
 }
 
 // wrapWords breaks segs into rows at most w cells wide as prose is
-// broken: between words, with a word wider than w broken as wrap breaks
-// it. The spaces where a row breaks are dropped, so no row but the first
-// starts with one, except a reversed space, which is the editor's cursor
-// and must stay drawn. Every row but the last is filled to w with spaces
-// in fill. Empty input gives one empty row.
+// broken: between words, with a word wider than a row broken as wrap
+// breaks it. The spaces where a row breaks are dropped, so no row is
+// blank unless the input is and none but the first starts with a space,
+// except a reversed space, which is the editor's cursor and is always
+// drawn. Rows after the first keep the first's indentation, so a snippet
+// of code stays aligned, unless that leaves fewer than minHang cells.
+// Every row but the last is filled to w with spaces in fill. Empty input
+// gives one empty row.
 func wrapWords(segs []Seg, w int, fill Style) [][]Seg {
 	type gr struct {
 		text  string
@@ -158,7 +161,10 @@ func wrapWords(segs []Seg, w int, fill Style) [][]Seg {
 	}
 	rows := [][]Seg{nil}
 	col := 0
-	broke := false // the row was started by a break, so spaces at its start go
+	content := false // the row has something besides spaces to drop
+	owed := false    // a space did not fit, so the next content starts a row
+	indent := -1     // the hanging indent, -1 until the first word
+	var indentSt Style
 	add := func(g gr) {
 		r := &rows[len(rows)-1]
 		if n := len(*r); n > 0 && (*r)[n-1].St == g.st {
@@ -167,49 +173,77 @@ func wrapWords(segs []Seg, w int, fill Style) [][]Seg {
 			*r = append(*r, Seg{g.text, g.st})
 		}
 		col += g.width
+		content = content || !g.space || g.st.Reverse
 	}
-	newRow := func() {
+	// newRow starts a row for g. A grapheme of no width, such as a lone
+	// combining mark, has nothing to align and would fuse with the
+	// indent's last space, so it starts the row bare.
+	newRow := func(g gr) {
 		if col < w {
 			rows[len(rows)-1] = append(rows[len(rows)-1], Seg{strings.Repeat(" ", w-col), fill})
 		}
 		rows = append(rows, nil)
-		col, broke = 0, true
+		col, content, owed = 0, false, false
+		if indent > 0 && g.width > 0 {
+			rows[len(rows)-1] = []Seg{{strings.Repeat(" ", indent), indentSt}}
+			col = indent
+		}
 	}
 	for i := 0; i < len(gs); {
 		g := gs[i]
 		if g.space {
 			switch {
-			case col == 0 && broke && !g.st.Reverse:
-				// A space the break already stands for.
+			case g.st.Reverse:
+				if owed || col+g.width > w {
+					newRow(g)
+				}
+				add(g)
+			case owed || (len(rows) > 1 && !content):
+				// A space the break stands for.
+			case len(rows) == 1 && !content:
+				// Indentation, kept while it leaves room for a wide
+				// grapheme after it.
+				if col+g.width+2 <= w {
+					add(g)
+				}
 			case col+g.width <= w:
 				add(g)
-			case g.st.Reverse:
-				newRow()
-				add(g)
 			default:
-				newRow()
+				owed = true
 			}
 			i++
 			continue
+		}
+		if indent < 0 {
+			indent = 0
+			if len(rows) == 1 && w-col >= minHang {
+				indent = col
+				if len(gs) > 0 {
+					indentSt = gs[0].st
+					indentSt.Reverse = false
+				}
+			}
 		}
 		j, ww := i, 0
 		for j < len(gs) && !gs[j].space {
 			ww += gs[j].width
 			j++
 		}
-		if col+ww > w && ww <= w && col > 0 {
-			newRow()
+		if owed || (col+ww > w && ww <= w-indent && content) {
+			newRow(g)
 		}
 		for ; i < j; i++ {
 			if col+gs[i].width > w {
-				newRow()
+				newRow(gs[i])
 			}
 			add(gs[i])
-			broke = false
 		}
 	}
 	return rows
 }
+
+// minHang is the least room a hanging indent leaves for the text.
+const minHang = 8
 
 // join merges neighbours in one style, as a row draws them, so they are
 // measured joined: a zero-width joiner or combining mark at the start of

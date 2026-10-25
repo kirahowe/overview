@@ -311,3 +311,75 @@ func TestASavedNoteWrapsAtWords(t *testing.T) {
 		}
 	}
 }
+
+// Spaces that run past the end of a row draw nothing: no blank row
+// follows a line with trailing spaces, in the editor or a saved note.
+func TestTrailingSpacesDrawNoRow(t *testing.T) {
+	if rows := wrapWords([]Seg{{"word        ", Style{}}}, 4, Style{}); len(rows) != 1 {
+		t.Fatalf("%d rows: %+v", len(rows), rows)
+	}
+	e := editor{}.insert("first line" + strings.Repeat(" ", 30) + "\nsecond")
+	if rows, cur := e.rows(20, Style{}); len(rows) != 2 || cur != 1 {
+		t.Fatalf("editor: cursor on %d of %+v", cur, rows)
+	}
+	f, cfg := newTest(t, twoFiles)
+	m := open(t, f, cfg, 40, 30)
+	m = press(t, m, "c")
+	m = typeText(t, m, "first line"+strings.Repeat(" ", 40))
+	m = press(t, m, "ctrl+j")
+	m = typeText(t, m, "second")
+	m = press(t, m, "enter")
+	for _, line := range strings.Split(screen(m), "\n") {
+		if i := strings.Index(line, "│ "); i >= 0 && strings.TrimSpace(line[i+len("│ "):]) == "" {
+			t.Fatalf("a blank row in the note:\n%s", screen(m))
+		}
+	}
+}
+
+// The rows a long indented line wraps onto keep its indentation, so code
+// in a note stays aligned, and the cursor is drawn on its own grapheme
+// there. With too little room left, they start at the edge.
+func TestWrappedLinesKeepTheirIndent(t *testing.T) {
+	const code = "if x {\n    return one two three four\n}"
+	e := editor{}.insert(code)
+	e.pos = strings.Index(e.text, "four")
+	rows, cur := e.rows(20, Style{})
+	var got []string
+	for _, r := range rows {
+		got = append(got, strings.TrimRight(rowText(r), " "))
+	}
+	if strings.Join(got, "|") != "if x {|    return one two|    three four|}" || cur != 2 {
+		t.Fatalf("rows %q, cursor on %d", got, cur)
+	}
+	for _, s := range rows[2] {
+		if s.St.Reverse && s.Text != "f" {
+			t.Fatalf("cursor drawn on %q", s.Text)
+		}
+	}
+	// At 11 cells the indent would leave 7, so the next row starts at
+	// the edge.
+	rows, _ = editor{}.insert("    return one two").rows(11, Style{})
+	if got := strings.TrimRight(rowText(rows[1]), " "); got != "one two" {
+		t.Fatalf("narrow: second row %q", got)
+	}
+
+	f, cfg := newTest(t, twoFiles)
+	m := open(t, f, cfg, 24, 30) // the note's text gets 20 cells
+	m = press(t, m, "c")
+	for i, line := range strings.Split(code, "\n") {
+		if i > 0 {
+			m = press(t, m, "ctrl+j")
+		}
+		m = typeText(t, m, line)
+	}
+	m = press(t, m, "enter")
+	var body []string
+	for _, line := range strings.Split(screen(m), "\n") {
+		if i := strings.Index(line, "│ "); i >= 0 && !strings.Contains(line, "╭") {
+			body = append(body, strings.TrimRight(line[i+len("│ "):], " "))
+		}
+	}
+	if strings.Join(body, "|") != "if x {|    return one two|    three four|}" {
+		t.Fatalf("note body %q", body)
+	}
+}
