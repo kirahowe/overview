@@ -33,11 +33,54 @@ type Facts struct {
 type Transcripts struct {
 	mu       sync.Mutex
 	sessions map[string]*session // by the session transcript's path
+	found    map[string]string   // transcript paths located by session id
 }
 
 // NewTranscripts returns an empty index.
 func NewTranscripts() *Transcripts {
-	return &Transcripts{sessions: map[string]*session{}}
+	return &Transcripts{sessions: map[string]*session{}, found: map[string]string{}}
+}
+
+// Retain forgets every session whose transcript is not in paths, and the
+// transcript locations remembered for them.
+func (t *Transcripts) Retain(paths []string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for p := range t.sessions {
+		if !slices.Contains(paths, p) {
+			delete(t.sessions, p)
+		}
+	}
+	for id, p := range t.found {
+		if !slices.Contains(paths, p) {
+			delete(t.found, id)
+		}
+	}
+}
+
+// Find locates a session's transcript under h, searching the disk once and
+// again only when the path found no longer exists. It returns "" when there
+// is none.
+func (t *Transcripts) Find(h Home, id string) string {
+	if t == nil {
+		return h.FindTranscript(id)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if p, ok := t.found[id]; ok {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		delete(t.found, id)
+	}
+	p := h.FindTranscript(id)
+	if p != "" {
+		t.found[id] = p
+	}
+	return p
 }
 
 // session is one transcript and its subagents'.

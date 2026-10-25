@@ -292,3 +292,38 @@ func BenchmarkAppendRead(b *testing.B) {
 		idx.Facts(path)
 	}
 }
+
+func TestRowsForgetSessionsThatAreGone(t *testing.T) {
+	home := Home{Dir: t.TempDir()}
+	a := filepath.Join(home.Dir, "projects", "-w", "s-1.jsonl")
+	b := filepath.Join(home.Dir, "projects", "-w", "s-2.jsonl")
+	writeLines(t, a, userPrompt("2026-10-23T10:00:00Z", "/w", "Work on p#1"))
+	writeLines(t, b, userPrompt("2026-10-23T10:00:00Z", "/w", "Work on p#2"))
+	idx := NewTranscripts()
+	if idx.Find(home, "s-1") != a || idx.Find(home, "s-2") != b {
+		t.Fatal("transcripts not found")
+	}
+	idx.Facts(a)
+	idx.Facts(b)
+	// The path is remembered: it is returned without a search.
+	moved := filepath.Join(home.Dir, "projects", "-v", "s-1.jsonl")
+	writeLines(t, moved, "{}")
+	if idx.Find(home, "s-1") != a {
+		t.Fatal("searched again for a path that still exists")
+	}
+	os.Remove(a)
+	if idx.Find(home, "s-1") != moved {
+		t.Fatal("did not search again after the file went")
+	}
+	idx.Retain([]string{b})
+	if _, ok := idx.sessions[b]; !ok || len(idx.sessions) != 1 {
+		t.Fatalf("sessions kept: %v", idx.sessions)
+	}
+	if len(idx.found) != 1 || idx.found["s-2"] != b {
+		t.Fatalf("locations kept: %v", idx.found)
+	}
+	idx.Retain(nil)
+	if len(idx.sessions) != 0 || len(idx.found) != 0 {
+		t.Fatal("not emptied")
+	}
+}

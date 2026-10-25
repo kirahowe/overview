@@ -89,6 +89,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 	}
 	recorded := h.Sessions()
 	rows := make([]Row, 0, len(live))
+	var paths []string
 	for _, l := range live {
 		r := Row{Live: l}
 		rec, ok := recorded[l.SessionID]
@@ -96,7 +97,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 		r.State, r.Since, r.Reason = liveState(l, rec)
 		path := rec.Transcript
 		if path == "" {
-			path = h.FindTranscript(l.SessionID)
+			path = t.Find(h, l.SessionID)
 		}
 		r.Transcript = path
 		if f, ok := t.Facts(path); ok {
@@ -110,7 +111,11 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 			r.Since = time.UnixMilli(l.StartedAt)
 		}
 		rows = append(rows, r)
+		if r.Transcript != "" {
+			paths = append(paths, r.Transcript)
+		}
 	}
+	t.Retain(paths)
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].Cwd != rows[j].Cwd {
 			return rows[i].Cwd < rows[j].Cwd
