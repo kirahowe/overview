@@ -566,7 +566,7 @@ func (m model) cockpitRows(t target) [][]card {
 	}
 	since := ""
 	if s := m.changeStart(t); s > 0 {
-		since = Ago(time.UnixMilli(s))
+		since = m.ago(time.UnixMilli(s))
 	}
 	ir, ok := m.issueReads[t.stream.Key.String()]
 	details := ir.info

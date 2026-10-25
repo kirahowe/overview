@@ -763,9 +763,9 @@ func (m model) holderText(w, h int) string {
 	es := m.ordered()
 	e, _, ok := m.selected(es)
 	switch {
-	case !m.loaded && m.rowsErr != nil:
-		lines = wrap(red.Render(m.rowsErr.Error()), cw)
-	case !m.loaded:
+	case !m.world().Loaded && m.world().RefreshErr != nil:
+		lines = wrap(red.Render(m.world().RefreshErr.Error()), cw)
+	case !m.world().Loaded:
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)

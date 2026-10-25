@@ -130,6 +130,9 @@ type Inputs struct {
 	Trackers map[string]Tracker // by root
 	Reviews  map[string]review.Summary // by session id
 	Orchestrator fleet.Health   // as the refresh found it
+	Written  map[string]time.Time // transcript path → when last written
+	Loaded   bool               // a refresh has landed
+	RefreshErr error            // why the latest refresh failed, nil once one works
 	User     string             // the user's home, for names
 }
 
@@ -150,6 +153,8 @@ type World struct {
 	NoHook    bool                // interactive sessions are listed and none reports through the hook
 	Trackers  []string            // the roots whose trackers Derive needs, sorted
 	Orchestrator fleet.Health     // Inputs.Orchestrator, for the footer
+	Loaded       bool             // and Inputs.Loaded and RefreshErr, for the list
+	RefreshErr   error
 }
 
 type Project struct {
@@ -190,6 +195,7 @@ type Session struct {
 	TTY       string    // the terminal an interactive session runs in, "" for none
 	Elsewhere bool      // it runs in a pane of another tmux session on the server
 	Review    review.Summary // its review's notes, zero for none
+	Written   time.Time      // when its transcript was last written
 }
 
 type Terminal struct {
@@ -278,6 +284,12 @@ The rules that used to be spread across the view now live in `Derive`.
   a source that the refresh reads, not a fact `Derive` could work out
   from the rows, and the footer reads it from the World like everything
   else.
+- A session's `Written` is its transcript's entry in `Inputs.Written`,
+  which keys the details and says when its last turns are due again.
+  `Loaded` and `RefreshErr` pass through, so the list and the holder say
+  "reading sessions…" or why the refresh failed from the World. A
+  failed refresh changes only `RefreshErr`, so the World keeps what the
+  last good one found.
 
 `Derive` treats its inputs as sets wherever their order means nothing:
 shuffling the rows, the pins or a tracker's issues gives the same

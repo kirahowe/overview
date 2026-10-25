@@ -143,6 +143,8 @@ func Derive(in Inputs) World {
 		Sessions:     map[string]*Session{},
 		Streams:      streams,
 		Orchestrator: in.Orchestrator,
+		Loaded:       in.Loaded,
+		RefreshErr:   in.RefreshErr,
 		byName:       map[string]*Project{},
 		tracked:      tracked,
 		roots:        maps.Clone(in.Roots),
@@ -186,6 +188,9 @@ func Derive(in Inputs) World {
 	// The sessions, in the places they sit.
 	for _, r := range rows {
 		s := &Session{Row: r, Project: w.byName[name(r.Cwd)], Pane: paneOf(in, r), Elsewhere: elsewhere(in, r), Review: in.Reviews[r.SessionID]}
+		if r.Transcript != "" {
+			s.Written = in.Written[r.Transcript]
+		}
 		if !r.Background() {
 			s.TTY = in.TTYs[r.PID]
 		}

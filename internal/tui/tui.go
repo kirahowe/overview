@@ -93,11 +93,9 @@ type model struct {
 	// hosts, panes, pins, roots and trackers. Only setInputs changes it,
 	// and each change gets a new generation, gen, which the World and the
 	// list are memoized on. memo is shared by every copy of the model.
-	in      world.Inputs
-	gen     int
-	memo    *memo
-	rowsErr error
-	loaded  bool
+	in   world.Inputs
+	gen  int
+	memo *memo
 
 	screen    screen
 	sel       string // the key of the entry under the cursor, kept across refreshes
@@ -135,10 +133,8 @@ type model struct {
 	cwd string
 	// user is the user's home directory, symlinks resolved.
 	user string
-	// written is when each row's transcript was last written, as the
-	// latest refresh found it. turns holds the selected session's last
-	// turns, read in a Cmd, and turnsAsked the transcript last asked for.
-	written    map[string]time.Time
+	// turns holds the selected session's last turns, read in a Cmd, and
+	// turnsAsked the transcript last asked for.
 	turns      recent
 	turnsAsked turnsKey
 	// rowRoots holds the project roots of the latest refresh's
@@ -286,7 +282,8 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, memo: &memo{}, transcripts: fleet.NewTranscripts(), deps: systemDeps()}
+	d := systemDeps()
+	return model{home: home, llm: llm, cache: &detailCache{}, memo: &memo{}, transcripts: fleet.NewTranscripts(), deps: d, now: d.now()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -431,13 +428,14 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]worl
 // found. The pins it read are taken only when no write to them is out or
 // landed since it read them.
 func (m model) landRows(msg rowsMsg) model {
-	if m.rowsErr = msg.err; msg.err != nil {
-		return m
+	if msg.err != nil {
+		return m.setInputs(func(in *world.Inputs) { in.RefreshErr = msg.err })
 	}
-	m.rowRoots, m.written, m.loaded = msg.roots, msg.written, true
+	m.rowRoots = msg.roots
 	pins := m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded
 	m = m.setInputs(func(in *world.Inputs) {
 		in.Rows, in.TTYs, in.Hosts = msg.rows, msg.ttys, msg.hosts
+		in.Written, in.Loaded, in.RefreshErr = msg.written, true, nil
 		in.Reviews, in.Orchestrator = msg.reviews, msg.health
 		if pins {
 			in.Pinned = msg.pinned
@@ -472,7 +470,7 @@ func (m model) askTurns() (model, tea.Cmd) {
 	if !ok || e.kind != sessionEntry || e.sess.Transcript == "" {
 		return m, nil
 	}
-	k := turnsKey{e.sess.Transcript, m.written[e.sess.Transcript]}
+	k := turnsKey{e.sess.Transcript, e.sess.Written}
 	if k == m.turns.key || k == m.turnsAsked {
 		return m, nil
 	}

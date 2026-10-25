@@ -37,7 +37,15 @@ type Inputs struct {
 	// Orchestrator is how the orchestrator was doing when the rows were
 	// read: its health reads files and the clock, so the refresh reads it.
 	Orchestrator fleet.Health
-	User         string // the user's home, for names
+	// Written is when each transcript was last written, by path, as the
+	// refresh found it.
+	Written map[string]time.Time
+	// Loaded says a refresh has landed, and RefreshErr why the latest one
+	// failed, nil once one works. A failed refresh keeps what the last
+	// one found.
+	Loaded     bool
+	RefreshErr error
+	User       string // the user's home, for names
 }
 
 // Tracker is one project's issues as the last read of them found them.
@@ -75,8 +83,11 @@ type World struct {
 	// sessions report that through Claude Code and need no hook.
 	NoHook   bool
 	Trackers []string // the roots whose trackers Derive needs, sorted
-	// Orchestrator is Inputs.Orchestrator as it is, for the footer.
+	// Orchestrator is Inputs.Orchestrator as it is, for the footer, and
+	// Loaded and RefreshErr are the inputs' as they are, for the list.
 	Orchestrator fleet.Health
+	Loaded       bool
+	RefreshErr   error
 
 	byName  map[string]*Project // every project, listed or not
 	tracked map[string]Tracker  // the trackers in the world, by root
@@ -200,6 +211,7 @@ type Session struct {
 	// tmux session on the view's server, such as another home's view.
 	Elsewhere bool
 	Review    review.Summary // its review's notes, zero for none
+	Written   time.Time      // when its transcript was last written, zero if unknown
 }
 
 // Primary is the workstream the session was linked to last, nil when it

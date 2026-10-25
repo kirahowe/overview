@@ -1351,12 +1351,12 @@ func TestAFailedRefreshKeepsTheList(t *testing.T) {
 	sel, cur, rows, ttys := m.sel, f.stage(), m.in.Rows, m.in.TTYs
 	m, cmd := step(m, rowsMsg{err: errors.New("claude agents: timeout")})
 	m = settle(t, m, cmd)
-	if m.sel != sel || f.stage() != cur || len(m.in.Rows) != 2 || m.rowsErr == nil {
-		t.Fatalf("after a failed refresh: sel %s, list in %s, rows %d, err %v", m.sel, f.stage(), len(m.in.Rows), m.rowsErr)
+	if m.sel != sel || f.stage() != cur || len(m.in.Rows) != 2 || m.world().RefreshErr == nil {
+		t.Fatalf("after a failed refresh: sel %s, list in %s, rows %d, err %v", m.sel, f.stage(), len(m.in.Rows), m.world().RefreshErr)
 	}
 	m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
 	m = settle(t, m, cmd)
-	if m.sel != sel || f.stage() != cur || m.rowsErr != nil {
+	if m.sel != sel || f.stage() != cur || m.world().RefreshErr != nil {
 		t.Fatalf("after the next refresh: sel %s, list in %s", m.sel, f.stage())
 	}
 }

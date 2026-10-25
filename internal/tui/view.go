@@ -504,12 +504,13 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 			owners = append(owners, owner)
 		}
 	}
-	if !m.loaded && m.rowsErr == nil {
+	w := m.world()
+	if !w.Loaded && w.RefreshErr == nil {
 		add("", m.plain(dim.Render("reading sessions…")))
 		return lines, owners
 	}
-	if m.rowsErr != nil {
-		add("", m.plain(red.Render(m.rowsErr.Error())), m.plain(""))
+	if w.RefreshErr != nil {
+		add("", m.plain(red.Render(w.RefreshErr.Error())), m.plain(""))
 	}
 	if len(secs) == 0 {
 		msg := "no sessions running"
@@ -628,17 +629,17 @@ func (m model) listView(secs []section, sel string) column {
 func (m model) stateMark(r fleet.Row) (mark string, markStyle lipgloss.Style, word, age string, wordStyle lipgloss.Style) {
 	switch {
 	case r.State == fleet.Blocked:
-		return "!", red, "blocked", Ago(r.Since), red
+		return "!", red, "blocked", m.ago(r.Since), red
 	case r.Asking():
-		return "?", amber, "asking", Ago(r.LastReplyAt), amber
+		return "?", amber, "asking", m.ago(r.LastReplyAt), amber
 	case r.State == fleet.Working:
-		return spinner[m.frame%len(spinner)], green, "working", Ago(r.Since), dim
+		return spinner[m.frame%len(spinner)], green, "working", m.ago(r.Since), dim
 	}
 	word = string(r.State)
 	if word == "" || r.State == fleet.Idle {
 		word = "idle"
 	}
-	return "○", dim, word, Ago(r.Since), dim
+	return "○", dim, word, m.ago(r.Since), dim
 }
 
 // entryLine renders one entry as one line.
@@ -735,8 +736,8 @@ func (m model) detail(r *world.Session, w int) []string {
 	if r.Host != nil {
 		host = *r.Host
 	}
-	key := fmt.Sprint(r.SessionID, w, r.State, Ago(r.Since), Ago(r.LastReplyAt), r.Reason, r.Title, r.TTY, r.Host != nil, host,
-		m.written[r.Transcript], r.Transcript == m.turns.key.path, m.turns.key)
+	key := fmt.Sprint(r.SessionID, w, r.State, m.ago(r.Since), m.ago(r.LastReplyAt), r.Reason, r.Title, r.TTY, r.Host != nil, host,
+		r.Written, r.Transcript == m.turns.key.path, m.turns.key)
 	if m.cache != nil && m.cache.key == key {
 		return m.cache.lines
 	}
@@ -756,13 +757,13 @@ func (m model) detailLines(r *world.Session, w int) []string {
 	var state string
 	switch {
 	case r.State == fleet.Blocked:
-		state = pill("blocked "+Ago(r.Since), pal.Blocked)
+		state = pill("blocked "+m.ago(r.Since), pal.Blocked)
 	case r.Asking():
-		state = pill("asking "+Ago(r.LastReplyAt), pal.Asking)
+		state = pill("asking "+m.ago(r.LastReplyAt), pal.Asking)
 	case r.State == fleet.Working:
-		state = pill("working "+Ago(r.Since), pal.Working)
+		state = pill("working "+m.ago(r.Since), pal.Working)
 	default:
-		state = pill("idle "+Ago(r.Since), pal.Muted)
+		state = pill("idle "+m.ago(r.Since), pal.Muted)
 	}
 	kind := "interactive"
 	h, away := world.Host{}, r.Host != nil
@@ -783,7 +784,7 @@ func (m model) detailLines(r *world.Session, w int) []string {
 	out = append(out, "")
 
 	meta := []string{m.short(r.Cwd)}
-	meta = append(meta, "started "+Ago(time.UnixMilli(r.StartedAt))+" ago")
+	meta = append(meta, "started "+m.ago(time.UnixMilli(r.StartedAt))+" ago")
 	// Only an interactive session needs the hook to show as blocked.
 	if !r.Hooked && !r.Background() {
 		meta = append(meta, "no hook")
@@ -1054,12 +1055,12 @@ func hintLine(lead []string, hints []hint, w int) string {
 // keys for what is selected.
 func (m model) footer() string {
 	var lead []string
-	if m.loaded && m.rowsErr == nil {
+	if w := m.world(); w.Loaded && w.RefreshErr == nil {
 		switch h := m.world().Orchestrator; {
 		case !h.Running:
 			lead = append(lead, red.Render("orchestrator off"))
 		case h.Stale:
-			lead = append(lead, red.Render("orchestrator silent "+Ago(h.LastCheck)))
+			lead = append(lead, red.Render("orchestrator silent "+m.ago(h.LastCheck)))
 		}
 	}
 	if m.digesting && m.note != "writing a digest…" {
@@ -1387,12 +1388,19 @@ func Subject(r fleet.Row) string {
 	return s
 }
 
-// Ago renders how long ago t was, in one unit.
-func Ago(t time.Time) string {
+// Ago renders how long ago t was, in one unit, by the clock now.
+func Ago(t time.Time) string { return agoAt(time.Now(), t) }
+
+// ago is Ago for the view, measured from when Update read the clock, so
+// drawing the screen reads no clock of its own.
+func (m model) ago(t time.Time) string { return agoAt(m.now, t) }
+
+// agoAt renders how long before now t was, in one unit.
+func agoAt(now, t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	d := time.Since(t)
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return "now"
