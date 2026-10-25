@@ -1913,3 +1913,43 @@ func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 		}
 	})
 }
+
+// A wrapped list item hangs its later lines under its text, and no line
+// of wrapped Markdown is wider than asked.
+func TestPropMarkdownHangsListItems(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		w := rapid.IntRange(1, 120).Draw(t, "w")
+		indent := strings.Repeat(" ", rapid.IntRange(0, 4).Draw(t, "indent"))
+		marker := rapid.SampledFrom([]string{"- ", "* ", "12. ", "- [ ] "}).Draw(t, "marker")
+		words := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,12}`), 1, 40).Draw(t, "words")
+		md := "intro\n" + indent + marker + strings.Join(words, " ")
+		lines := wrapMarkdown(md, w, styleDigest)
+		for i, l := range lines {
+			if ansi.StringWidth(l) > w {
+				t.Fatalf("line %d is %d wide in %d: %q", i, ansi.StringWidth(l), w, ansi.Strip(l))
+			}
+		}
+		hang := len(indent) + len(marker)
+		if hang > w/2 {
+			return
+		}
+		item := len(wrapMarkdown("intro", w, styleDigest))
+		for _, l := range lines[item+1:] {
+			if s := ansi.Strip(l); strings.TrimSpace(s) != "" && !strings.HasPrefix(s, strings.Repeat(" ", hang)) {
+				t.Fatalf("a continuation %q does not hang %d under %q", s, hang, marker)
+			}
+		}
+	})
+}
+
+func TestADigestBulletHangsItsContinuation(t *testing.T) {
+	lines := wrapMarkdown("## Done\n- relay#54 landed the parser fix and its regression tests", 24, styleDigest)
+	got := make([]string, len(lines))
+	for i, l := range lines {
+		got[i] = strings.TrimRight(ansi.Strip(l), " ")
+	}
+	want := []string{"Done", "• relay#54 landed the", "  parser fix and its", "  regression tests"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

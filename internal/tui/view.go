@@ -882,7 +882,7 @@ func (m model) detailLines(r *world.Session, w int) []string {
 			out = append(out, dim.Render("  no reply yet"))
 			continue
 		}
-		lines := wrap(styleMarkdown(t.Reply), w)
+		lines := wrapMarkdown(t.Reply, w, styleMarkdown)
 		// Earlier turns are context. Only the last one is shown in full.
 		if i < len(turns)-1 && len(lines) > 8 {
 			lines = append(lines[:8], dim.Render(fmt.Sprintf("  … %d more lines", len(lines)-8)))
@@ -902,7 +902,7 @@ func (m model) digestLines() []string {
 	if m.digest == "" {
 		return wrap(dim.Render("No digest yet. Press D to write one, or start the orchestrator."), m.contentWidth())
 	}
-	return wrap(styleDigest(m.digest), min(m.contentWidth(), 100))
+	return wrapMarkdown(m.digest, min(m.contentWidth(), 100), styleDigest)
 }
 
 func (m model) digestView() []string {
@@ -1667,6 +1667,51 @@ func styleMarkdown(md string) string {
 		lines[i] = indent + text.Render(t)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapMarkdown wraps md to lines w wide, each line styled by style, with
+// the later lines of a list item hung under its text rather than at the
+// left edge. A marker too wide to hang under wraps as plain text does.
+func wrapMarkdown(md string, w int, style func(string) string) []string {
+	if w <= 0 {
+		return nil
+	}
+	var out []string
+	fenced := false
+	for _, l := range strings.Split(strings.TrimSpace(md), "\n") {
+		t := strings.TrimLeft(l, " ")
+		indent := l[:len(l)-len(t)]
+		mk := ""
+		if strings.HasPrefix(t, "```") {
+			fenced = !fenced
+		} else if !fenced {
+			mk = listMarker(t)
+		}
+		hang := len(indent) + ansi.StringWidth(mk)
+		if mk == "" || hang > w/2 || fenced || strings.HasPrefix(t, "```") {
+			st := style(l)
+			if fenced || strings.HasPrefix(t, "```") {
+				st = codeFg.Render(l)
+				if strings.HasPrefix(t, "```") {
+					st = dim.Render(l)
+				}
+			}
+			out = append(out, wrap(st, w)...)
+			continue
+		}
+		mark := fg(pal.Text).Render(mk)
+		if b := mk[:2]; b == "- " || b == "* " {
+			mark = fg(pal.Accent).Render("•") + " " + fg(pal.Text).Render(mk[2:])
+		}
+		for i, b := range wrap(style(t[len(mk):]), w-hang) {
+			lead := strings.Repeat(" ", hang)
+			if i == 0 {
+				lead = indent + mark
+			}
+			out = append(out, lead+b)
+		}
+	}
+	return out
 }
 
 // styleDigest renders a digest: the shared Markdown, with the section that
