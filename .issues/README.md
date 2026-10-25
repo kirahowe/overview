@@ -8,6 +8,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [1](1-resume-a-session-from-overview.md) | Resume a session from overview | feature | P2 |
+| [2](2-show-all-of-the-help-when-the-list-pane-is-short.md) | Show all of the help when the list pane is short | bug | P3 |
 
 ## Done
 

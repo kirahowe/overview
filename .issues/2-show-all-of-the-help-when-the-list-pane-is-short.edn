@@ -1,0 +1,11 @@
+{:id 2
+ :title "Show all of the help when the list pane is short"
+ :status :inbox
+ :type :bug
+ :priority :p3
+ :created "2026-10-24"
+ :updated "2026-10-24"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "2-show-all-of-the-help-when-the-list-pane-is-short.md"}
