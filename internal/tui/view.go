@@ -977,7 +977,7 @@ func (m model) panelHints() []hint {
 		return []hint{enter, {"j k", "move"}, {"h", "list"}, {"esc", "close"}, help}
 	}
 	if m.inPanels() {
-		return []hint{{"hjkl", "move"}, {"enter", "act here"}}
+		return []hint{{"hjkl", "move"}, {"enter", "act"}, {"ctrl+[", "list"}}
 	}
 	e, _, ok := m.selected(m.ordered())
 	hs := m.entryHints(e, ok)
@@ -1110,61 +1110,106 @@ func (m model) footer() string {
 
 // Overlays.
 
-func (m model) helpBox() []string {
-	type entry struct{ keys, what string }
-	section := func(title string, es ...entry) []string {
-		out := []string{heading.Render(title)}
-		for _, e := range es {
-			out = append(out, "  "+fg(pal.Accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(pal.Text).Render(e.what))
-		}
-		return append(out, "")
+// helpMode is where a help entry's keys are handled, which the test that
+// keeps the help and the key handler in step uses to try them there.
+type helpMode int
+
+const (
+	listMode    helpMode = iota // keyActions in the list
+	cockpitMode                 // keyActions with the cockpit open and the issues card lit
+	digestMode                  // keyActions on the digest screen
+	tmuxMode                    // tmux's panels key table, not the view
+	mouseMode                   // the mouse
+)
+
+type helpEntry struct {
+	keys, what string
+	mode       helpMode
+}
+
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
+// helpSections are the help's two columns. In the narrow list pane the
+// second goes under the first.
+func helpSections() (left, right []helpSection) {
+	e := func(keys, what string) helpEntry { return helpEntry{keys, what, listMode} }
+	in := func(mode helpMode, keys, what string) helpEntry { return helpEntry{keys, what, mode} }
+	left = []helpSection{
+		{"panels", []helpEntry{
+			e("esc", "from the list, move focus"),
+			in(tmuxMode, "h j k l", "focus the pane that way"),
+			in(tmuxMode, "enter", "act in the focused pane"),
+			in(tmuxMode, "ctrl+[", "back to the list"),
+		}},
+		{"in the list", []helpEntry{
+			e("j k", "move"),
+			e("n N", "next / previous waiting"),
+			e("g G", "first / last"),
+			e("/", "search, esc clears"),
+			e("1 2", "sessions / digests"),
+		}},
+		{"act", []helpEntry{
+			e("enter", "type into the session"),
+			e("l tab", "the same as enter"),
+			e("x", "stop, close or unpin"),
+			e("y", "copy attach command"),
+			e("c", "new session in project"),
+			e("t", "new terminal in project"),
+			e("v", "review its changes"),
+			e("s", "start a task in project"),
+			e("a", "add a project"),
+		}},
+		{"on a task", []helpEntry{
+			e("enter", "first session, else cockpit"),
+			e("c", "new session on the task"),
+			e("t", "new terminal for it"),
+		}},
+		{"cockpit", []helpEntry{
+			e("o", "open the cockpit"),
+			in(cockpitMode, "o esc", "close the cockpit"),
+			in(cockpitMode, "l h", "into / out of the issues"),
+			in(cockpitMode, "tab", "list or issues card"),
+			in(cockpitMode, "enter", "on an issue, start or go to it"),
+		}},
 	}
-	left := append(section("panels",
-		entry{"esc", "from the list, move focus"},
-		entry{"h j k l", "focus the pane that way"},
-		entry{"enter", "act in the focused pane"},
-		entry{"ctrl+[", "back to the list"},
-	), section("in the list",
-		entry{"j k", "move"},
-		entry{"n N", "next / previous waiting"},
-		entry{"g G", "first / last"},
-		entry{"/", "search, esc clears"},
-	)...)
-	left = append(left, section("act",
-		entry{"enter", "type into the session"},
-		entry{"x", "stop, close or unpin"},
-		entry{"y", "copy attach command"},
-		entry{"c", "new session in project"},
-		entry{"t", "new terminal in project"},
-		entry{"v", "review its changes"},
-		entry{"s", "start a task in project"},
-		entry{"a", "add a project"},
-	)...)
-	left = append(left, section("on a task",
-		entry{"enter", "its first session"},
-		entry{"c", "new session on the task"},
-		entry{"t", "new terminal for it"},
-	)...)
-	left = append(left, section("cockpit",
-		entry{"o", "open / close the cockpit"},
-		entry{"l h", "into / out of the issues"},
-		entry{"tab", "list or issues card"},
-		entry{"enter", "on an issue, start or go to it"},
-	)...)
-	right := section("digest",
-		entry{"d", "show / hide digests"},
-		entry{"[ ]", "older / newer"},
-		entry{"D", "write one now"},
-	)
-	right = append(right, section("mouse",
-		entry{"click", "select, twice to act"},
-		entry{"wheel", "move / scroll"},
-	)...)
-	right = append(right, section("general",
-		entry{"r", "refresh"},
-		entry{"?", "this help"},
-		entry{"q", "detach, Q quits"},
-	)...)
+	right = []helpSection{
+		{"digest", []helpEntry{
+			e("d", "show / hide digests"),
+			in(digestMode, "[ ]", "older / newer"),
+			e("D", "write one now"),
+		}},
+		{"mouse", []helpEntry{
+			in(mouseMode, "click", "select, twice to act"),
+			in(mouseMode, "wheel", "move / scroll"),
+		}},
+		{"general", []helpEntry{
+			e("r", "refresh"),
+			e("?", "this help"),
+			e("q ctrl+c", "detach"),
+			e("Q", "quit the view"),
+		}},
+	}
+	return left, right
+}
+
+// helpBody is every line of the help, before it is cut to the pane.
+func (m model) helpBody() []string {
+	render := func(ss []helpSection) []string {
+		var out []string
+		for _, s := range ss {
+			out = append(out, heading.Render(s.title))
+			for _, e := range s.entries {
+				out = append(out, "  "+fg(pal.Accent).Render(fmt.Sprintf("%-9s", e.keys))+" "+fg(pal.Text).Render(e.what))
+			}
+			out = append(out, "")
+		}
+		return out
+	}
+	ls, rs := helpSections()
+	left, right := render(ls), render(rs)
 	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
 		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle  ") + codeFg.Render("$") + dim.Render(" terminal  #6 task")
 
@@ -1186,9 +1231,39 @@ func (m model) helpBox() []string {
 	} else {
 		body = append(left, right...)
 	}
-	body = append(body, legend)
-	w := min(m.w-4, 2*col+6)
-	return box("keys", "esc closes", body, w, min(len(body)+2, m.listHeight()+1), true)
+	return append(body, legend)
+}
+
+// helpRows is how many lines of the help the box shows: all of them when
+// the pane has room, else what fits between the box's borders.
+func (m model) helpRows() int {
+	n := len(m.helpBody())
+	if n+2 <= m.listHeight() {
+		return n
+	}
+	return max(m.listHeight()-2, 1)
+}
+
+// helpMax is how far the help can scroll, 0 when it all fits.
+func (m model) helpMax() int { return max(len(m.helpBody())-m.helpRows(), 0) }
+
+func (m model) helpBox() []string {
+	body := m.helpBody()
+	rows := m.helpRows()
+	top := max(0, min(m.helpTop, len(body)-rows))
+	more := top+rows < len(body)
+	info := "esc closes"
+	if more {
+		info = "↓ more · esc closes"
+	}
+	w := min(m.w-4, 2*40+6)
+	out := box("keys", info, body[top:top+rows], w, rows+2, true)
+	if top > 0 && w >= 20 {
+		marker := " ↑ more "
+		edge := fg(pal.Accent)
+		out[0] = ansi.Truncate(out[0], w-ansi.StringWidth(marker)-2, "") + dim.Render(marker) + edge.Render("─┐")
+	}
+	return out
 }
 
 func (m model) confirmBox() []string {

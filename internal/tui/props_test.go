@@ -1529,3 +1529,62 @@ func TestWrapStaysWithinItsWidth(t *testing.T) {
 		}
 	})
 }
+
+// At any size the list works at, scrolling through the help shows every
+// one of its lines, and no line of the box is wider than the pane.
+func TestPropHelpScrollsToEveryLine(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		w := rapid.IntRange(20, 220).Draw(t, "w")
+		h := rapid.IntRange(4, 70).Draw(t, "h")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
+		m, _ = press(m, "?")
+		body := m.helpBody()
+		seen := map[int]bool{}
+		check := func() {
+			box := m.helpBox()
+			if len(box) > m.listHeight() && len(box) > 3 {
+				t.Fatalf("%dx%d: box of %d lines over a pane of %d", w, h, len(box), m.listHeight())
+			}
+			for _, l := range box {
+				if ansi.StringWidth(l) > m.w {
+					t.Fatalf("%dx%d: a box line is %d wide", w, h, ansi.StringWidth(l))
+				}
+			}
+			rows := m.helpRows()
+			top := m.helpTop
+			if top < 0 || top > m.helpMax() {
+				t.Fatalf("%dx%d: top %d outside 0..%d", w, h, top, m.helpMax())
+			}
+			for i := top; i < top+rows; i++ {
+				seen[i] = true
+			}
+		}
+		check()
+		for i := 0; i < len(body)+2 && m.helpMax() > 0 && m.helpTop < m.helpMax(); i++ {
+			before := m.helpTop
+			key := rapid.SampledFrom([]string{"j", "down", "ctrl+d", "pgdown"}).Draw(t, "key")
+			m, _ = press(m, key)
+			if !m.help || m.helpTop < before {
+				t.Fatalf("%dx%d: %s closed the help or went up", w, h, key)
+			}
+			check()
+		}
+		if m.helpMax() > 0 && m.helpTop != m.helpMax() {
+			t.Fatalf("%dx%d: scrolling stopped at %d of %d", w, h, m.helpTop, m.helpMax())
+		}
+		for i := range body {
+			if !seen[i] {
+				t.Fatalf("%dx%d: help line %d never shown", w, h, i)
+			}
+		}
+		// A resize keeps the scroll valid.
+		m, _ = press(m, "G")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: rapid.IntRange(4, 70).Draw(t, "h2")})
+		if m.helpTop < 0 || m.helpTop > m.helpMax() {
+			t.Fatalf("after resize top %d outside 0..%d", m.helpTop, m.helpMax())
+		}
+	})
+}

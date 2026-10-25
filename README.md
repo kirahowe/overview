@@ -217,13 +217,15 @@ program, which is why `ctrl+[` is the way back. The pane with the keyboard
 is tmux's active pane, and tmux lights its rule and border.
 
 `esc` in the list, once it has cleared any search filter, puts the client
-in the panels mode, which is a key table of tmux's own. The footer says
+in the panels mode. `ctrl+[` does the same there, since a terminal sends
+one byte for both, which is a key table of tmux's own. The footer says
 `panels`, the cursor's row loses its background, and the focused pane's
 rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
 `l`, or the arrows, move the focus to the pane that way, and the mode
 stays on. `enter` or `esc` leaves it, and the keys then go to what the
 focused pane runs: the list, where they move the cursor, or a session.
-`ctrl+[` goes to the list and leaves the mode. A move off the edge of the
+`ctrl+[` goes to the list and leaves the mode. The footer says
+`hjkl move`, `enter act` and `ctrl+[ list`. A move off the edge of the
 window wraps around to the other side. Any other key leaves the mode: a
 click or a tmux key does what it always does, and a letter is dropped, so
 nothing typed by mistake reaches a session. The
@@ -240,7 +242,9 @@ everything under it shows. Each space-separated word has to match one of
 those fields, and a word never matches across two of them. The cursor
 moves to the first match, `up` and `down` step through the matches, and
 `esc` clears the search. `enter` (or `tab`, `l` or the right arrow) moves the keyboard into the
-selected session. On a background session, `enter` first attaches to it in a
+selected session. In the list `l` and the right arrow open the entry; in
+the panels mode they move the focus right, and in the cockpit they go
+into the issues card. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
 workstream, `enter` does what it does on the entry shown beside it: the
@@ -265,7 +269,13 @@ directly. There `[` and `]`, or `h` and `l`, step through older ones,
 `j`, `k`, `g` and `G` scroll, `esc` goes back, and `D` writes a new one.
 `r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, as described
 above. `q` detaches, leaving the view and its
-sessions running, and `Q` quits the view. `?` lists every key.
+sessions running, and `Q` quits the view. `ctrl+c` is `q` in the list. In the search, the
+project picker and the task picker it cancels that input as `esc` does,
+and never quits. `?` lists every key. When the list's pane is too short for
+all of it, the help scrolls with `j` and `k` or the arrows, `ctrl+d` and
+`ctrl+u` or `pgdn` and `pgup`, `g` and `G`, or the wheel. A dim `↑ more` or
+`↓ more` on the box's edge says there is more that way. Any other key
+closes it.
 
 `a` adds a project to the list. A picker takes the list's place and offers
 the folders beside the projects already listed, and typing words narrows

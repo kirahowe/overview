@@ -26,9 +26,11 @@ const (
 	quit
 	detach // leave the view running in tmux and close this terminal's view of it
 	openHelp
-	dismiss     // close the overlay; a pending stop is cancelled
-	confirmStop // say yes to the pending stop
-	showScreen  // n is the screen
+	scrollHelp   // n lines down the help, negative for up
+	scrollHelpTo // line n of the help, clamped
+	dismiss      // close the overlay; a pending stop is cancelled
+	confirmStop  // say yes to the pending stop
+	showScreen   // n is the screen
 	toggleScreen
 	writeDigest
 	refresh
@@ -93,7 +95,7 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 	k := msg.String()
 	if m.taskPick.open {
 		switch msg.Type {
-		case tea.KeyEsc:
+		case tea.KeyEsc, tea.KeyCtrlC:
 			return do(taskCancel)
 		case tea.KeyEnter:
 			return do(taskEnter)
@@ -109,14 +111,12 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return do(taskBack)
 		case tea.KeyRunes, tea.KeySpace:
 			return []action{{do: taskType, text: printable(string(msg.Runes))}}
-		case tea.KeyCtrlC:
-			return do(quit)
 		}
 		return nil
 	}
 	if m.pick.open {
 		switch msg.Type {
-		case tea.KeyEsc:
+		case tea.KeyEsc, tea.KeyCtrlC:
 			return do(pickCancel)
 		case tea.KeyEnter:
 			return do(pickEnter)
@@ -130,14 +130,12 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return do(pickBack)
 		case tea.KeyRunes, tea.KeySpace:
 			return []action{{do: pickType, text: printable(string(msg.Runes))}}
-		case tea.KeyCtrlC:
-			return do(quit)
 		}
 		return nil
 	}
 	if m.filtering {
 		switch msg.Type {
-		case tea.KeyEsc:
+		case tea.KeyEsc, tea.KeyCtrlC:
 			return do(cancelSearch)
 		case tea.KeyEnter:
 			return do(open)
@@ -149,8 +147,6 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return do(backspace)
 		case tea.KeyRunes, tea.KeySpace:
 			return []action{{do: typeText, text: printable(string(msg.Runes))}}
-		case tea.KeyCtrlC:
-			return do(quit)
 		}
 		return nil
 	}
@@ -161,6 +157,24 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(dismiss)
 	}
 	if m.help {
+		// A help taller than its pane scrolls; any other key closes it.
+		if m.helpMax() > 0 {
+			page := max(m.helpRows()-1, 1)
+			switch k {
+			case "j", "down":
+				return doN(scrollHelp, 1)
+			case "k", "up":
+				return doN(scrollHelp, -1)
+			case "ctrl+d", "pgdown":
+				return doN(scrollHelp, page)
+			case "ctrl+u", "pgup":
+				return doN(scrollHelp, -page)
+			case "g", "home":
+				return doN(scrollHelpTo, 0)
+			case "G", "end":
+				return doN(scrollHelpTo, end)
+			}
+		}
 		return do(dismiss)
 	}
 	// Several runes in one message are a paste or a fast burst, not
@@ -317,6 +331,9 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		step = 1
 	case msg.Button != tea.MouseButtonLeft:
 		return nil
+	}
+	if m.help && step != 0 {
+		return doN(scrollHelp, step*wheelLines)
 	}
 	if m.confirm != "" || m.help {
 		if step != 0 {

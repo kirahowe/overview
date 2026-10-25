@@ -107,6 +107,7 @@ type model struct {
 	filtering bool
 	confirm   string // the key of a session to stop or a terminal to close, waiting on a yes
 	help      bool
+	helpTop   int // the first line of the help shown, when it is taller than its pane
 	frame     int
 
 	digests      []string
@@ -818,6 +819,7 @@ func (m model) settle(before model) model {
 		col := m.shownColumn()
 		m.listTop, m.agentsTop = col.projTop, col.agentsTop
 	}
+	m.helpTop = max(0, min(m.helpTop, m.helpMax()))
 	return m.keepCockpit()
 }
 
@@ -1003,7 +1005,12 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return nil
 		}
 	case openHelp:
-		m.help = true
+		m.help, m.helpTop = true, 0
+	case scrollHelp, scrollHelpTo:
+		if a.do == scrollHelp {
+			a.n += m.helpTop
+		}
+		m.helpTop = max(0, min(a.n, m.helpMax()))
 	case dismiss:
 		if m.confirm != "" {
 			m.confirm = ""

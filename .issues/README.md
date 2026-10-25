@@ -9,11 +9,12 @@
 | --- | --- | --- | --- |
 | [3](3-fix-flaky-real-tmux-tests-that-race-the-pane-command.md) | Fix flaky real-tmux tests that race the pane command | bug | P1 |
 | [1](1-resume-a-session-from-overview.md) | Resume a session from overview | feature | P2 |
-| [2](2-show-all-of-the-help-when-the-list-pane-is-short.md) | Show all of the help when the list pane is short | bug | P3 |
 
 ## Done
 
-_none_
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [2](2-show-all-of-the-help-when-the-list-pane-is-short.md) | Show all of the help when the list pane is short | bug | P3 |
 
 ## Dropped
 
