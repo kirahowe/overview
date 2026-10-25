@@ -133,6 +133,7 @@ func TestHelpMatchesTheKeyHandler(t *testing.T) {
 	}
 }
 
+// The way back goes second, so it keeps its room on a short line.
 func TestPanelsFooterNamesTheWayBack(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11))
 	m.panels = true
@@ -140,7 +141,7 @@ func TestPanelsFooterNamesTheWayBack(t *testing.T) {
 	for _, h := range m.panelHints() {
 		got = append(got, h.key+" "+h.label)
 	}
-	if want := []string{"hjkl move", "enter act", "ctrl+[ list"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"hjkl move", "ctrl+[ list", "enter act"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("panels hints %v, want %v", got, want)
 	}
 }

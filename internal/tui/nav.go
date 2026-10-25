@@ -44,10 +44,10 @@ func splitList(p, a, h int) (proj, agents int) {
 	return h - 1 - agents, agents
 }
 
-// inPanels says whether the client is in the panels mode with the keys
-// in the view's pane: the keys go to tmux and not to the list, so the
-// cursor's row loses its background and the footer says so.
-func (m model) inPanels() bool { return m.panels && !m.blurred }
+// inPanels says whether a client of the view's session is in the panels
+// mode, whichever pane has the focus: the keys go to tmux, so the footer
+// shows the mode's keys and not the list's.
+func (m model) inPanels() bool { return m.panels }
 
 // listHasKeys says whether the keys move the list's cursor: the keyboard
 // is in the view and not in the panels mode or the cockpit's issues card.

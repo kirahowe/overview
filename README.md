@@ -238,8 +238,9 @@ rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
 `l`, or the arrows, move the focus to the pane that way, and the mode
 stays on. `enter` or `esc` leaves it, and the keys then go to what the
 focused pane runs: the list, where they move the cursor, or a session.
-`ctrl+[` goes to the list and leaves the mode. The footer says
-`hjkl move`, `enter act` and `ctrl+[ list`. A move off the edge of the
+`ctrl+[` goes to the list and leaves the mode. While a client is in the
+mode, whichever pane has the focus, the footer says `panels`, `hjkl move`,
+`ctrl+[ list` and `enter act`. A move off the edge of the
 window wraps around to the other side. Any other key leaves the mode: a
 click or a tmux key does what it always does, and a letter is dropped, so
 nothing typed by mistake reaches a session. The

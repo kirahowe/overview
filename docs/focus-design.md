@@ -75,9 +75,11 @@ plain flag, `cockpit.issues`. The other cards only show.
 
 The view reads whether a client of its session is in the mode as it
 lists the panes, and right away when it puts one there. While the mode
-is on and its pane is focused, the cursor's row has no background and
-the footer starts with "panels", so a row with a background still means
-j and k move it.
+is on and its pane is focused, the cursor's row has no background, so a
+row with a background still means j and k move it. While the mode is
+on, whichever pane has the focus, the footer starts with "panels" and
+shows the mode's keys, `ctrl+[ list` among them, since the list's pane
+is where the user looks for the way back.
 
 ## Where the keys land
 

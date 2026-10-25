@@ -978,7 +978,7 @@ func (m model) panelHints() []hint {
 		return []hint{enter, {"j k", "move"}, {"h", "list"}, {"esc", "close"}, help}
 	}
 	if m.inPanels() {
-		return []hint{{"hjkl", "move"}, {"enter", "act"}, {"ctrl+[", "list"}}
+		return []hint{{"hjkl", "move"}, {"ctrl+[", "list"}, {"enter", "act"}}
 	}
 	e, _, ok := m.selected(m.ordered())
 	hs := m.entryHints(e, ok)

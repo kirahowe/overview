@@ -118,10 +118,11 @@ func TestTheViewReadsTheMode(t *testing.T) {
 	if !m.panels || !m.inPanels() {
 		t.Fatalf("the listing has a client in the mode, the view panels %v", m.panels)
 	}
-	// With the keys in another pane the view's own look is the blurred one.
+	// With the focus moved to another pane in the mode, as l does, the
+	// footer still shows the mode's keys, and the way back.
 	m, _ = step(m, tea.BlurMsg{})
-	if m.inPanels() {
-		t.Fatal("the panels look shows while the keys are in another pane")
+	if foot := ansi.Strip(m.footer()); !m.inPanels() || !strings.Contains(foot, "panels") || !strings.Contains(foot, "ctrl+[ list") {
+		t.Fatalf("in the mode with the focus on a session, the footer says %q", foot)
 	}
 	m, _ = step(m, tea.FocusMsg{})
 	if !m.panels {
