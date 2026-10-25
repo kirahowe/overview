@@ -160,10 +160,17 @@ func fallbackID(readFile func(string) ([]byte, error), root string) string {
 	return filepath.Base(root)
 }
 
-// projectID is the issues project id of the project at root.
+// trackerReading says whether a read of root's tracker is out, so the task
+// picker can say it is reading rather than that the project tracks
+// nothing. It is the one place outside the effects that looks at the
+// reads in flight.
+func (m model) trackerReading(root string) bool { return m.reading[root] }
+
+// projectID is the issues project id of the project at root, as the World
+// has it.
 func (m model) projectID(root string) string {
-	if t, ok := m.trackers[root]; ok && t.id != "" {
-		return t.id
+	if p := m.world().ProjectOf(root); p != nil {
+		return p.ID
 	}
 	return filepath.Base(root)
 }

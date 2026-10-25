@@ -52,13 +52,22 @@ func (m model) setOpened(p tmux.Pane) model {
 }
 
 // inputs is what the World is told of the trackers: each one read, with
-// its last good issues, and whether its last read failed.
+// its last good issues, and why its last read failed, if it did.
 func (ts trackers) inputs() map[string]world.Tracker {
 	out := make(map[string]world.Tracker, len(ts))
 	for r, t := range ts {
-		out[r] = world.Tracker{ID: t.id, Open: t.issues, Failed: t.err != nil}
+		out[r] = t.world()
 	}
 	return out
+}
+
+// world is the tracker as the World is told of it.
+func (t tracker) world() world.Tracker {
+	wt := world.Tracker{ID: t.id, Open: t.issues}
+	if t.err != nil {
+		wt.Err = issues.OneLine(t.err.Error())
+	}
+	return wt
 }
 
 // memo holds the Worlds and lists derived for the latest generations. It

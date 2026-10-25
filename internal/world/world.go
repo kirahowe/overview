@@ -37,10 +37,15 @@ type Inputs struct {
 
 // Tracker is one project's issues as the last read of them found them.
 type Tracker struct {
-	ID     string         // the issues project id
-	Open   []issues.Issue // the open issues, in the tool's order
-	Failed bool           // the last read failed; Open is the last that worked
+	ID   string         // the issues project id
+	Open []issues.Issue // the open issues, in the tool's order
+	// Err is why the last read failed, on one line, "" when it worked.
+	// After a failure Open is what the last read that worked found.
+	Err string
 }
+
+// Failed says whether the last read of the tracker failed.
+func (t Tracker) Failed() bool { return t.Err != "" }
 
 // World is the fleet as the view shows it. Nothing changes a World once
 // Derive has built it, and every pointer in it points into the same

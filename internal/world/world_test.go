@@ -439,7 +439,7 @@ func TestPinnedProjects(t *testing.T) {
 		Rows:   []fleet.Row{sess("s", "/w/alpha")},
 		Pinned: []string{"/w/alpha", "/w/delta", "/p/delta/", ""},
 		Trackers: map[string]Tracker{
-			"/w/delta": {ID: "delta", Open: []issues.Issue{issue(2, issues.Ready)}, Failed: true},
+			"/w/delta": {ID: "delta", Open: []issues.Issue{issue(2, issues.Ready)}, Err: "exit status 1"},
 		},
 		User: "/p",
 	})
@@ -458,7 +458,7 @@ func TestPinnedProjects(t *testing.T) {
 	// unpinned.
 	eq(t, "~/delta's pins", home.Pins, []string{"/p/delta/"})
 	eq(t, "alpha's pins", alpha.Pins, []string{"/w/alpha"})
-	if tr, ok := w.Tracker("/w/delta"); !ok || tr.ID != "delta" || !tr.Failed {
+	if tr, ok := w.Tracker("/w/delta"); !ok || tr.ID != "delta" || tr.Err != "exit status 1" {
 		t.Errorf("delta's tracker %+v %v", tr, ok)
 	}
 	if _, ok := w.Tracker("/w/alpha"); ok {

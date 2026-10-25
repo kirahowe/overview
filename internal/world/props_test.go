@@ -90,8 +90,10 @@ func genTrackers(t *rapid.T) map[string]Tracker {
 			continue
 		}
 		tr := Tracker{
-			ID:     rapid.SampledFrom([]string{"alpha", "gamma", ""}).Draw(t, "tid"),
-			Failed: rapid.IntRange(0, 4).Draw(t, "failed") == 0,
+			ID: rapid.SampledFrom([]string{"alpha", "gamma", ""}).Draw(t, "tid"),
+		}
+		if rapid.IntRange(0, 4).Draw(t, "failed") == 0 {
+			tr.Err = "exit status 1"
 		}
 		for _, id := range rapid.SliceOfDistinct(rapid.IntRange(1, 5), rapid.ID[int]).Draw(t, "issues") {
 			tr.Open = append(tr.Open, issues.Issue{

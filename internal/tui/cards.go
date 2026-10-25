@@ -545,13 +545,14 @@ func pickable(others []issues.Issue) []issues.Issue {
 
 // issuesCard lists the project's other open issues. linked counts the
 // sessions on each, by number. With the keyboard, pick marks the issue
-// enter acts on. err is why the last read of them failed, if it did, and
-// the card then lists what the last good read found.
-func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, err error) card {
+// enter acts on. failed is why the last read of them failed, on one line,
+// "" when it worked, and the card then lists what the last good read
+// found.
+func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, failed string) card {
 	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel, body: func(w int) []string {
 		var out []string
-		if err != nil {
-			out = wrap(fg(pal.Asking).Render("issues failed: "+issues.OneLine(err.Error())), w)
+		if failed != "" {
+			out = wrap(fg(pal.Asking).Render("issues failed: "+failed), w)
 		}
 		groups, inbox := issueGroups(others)
 		if len(pickable(others)) == 0 && inbox == 0 {

@@ -131,10 +131,10 @@ type Inputs struct {
 }
 
 type Tracker struct {
-	ID     string         // the issues project id
-	Open   []issues.Issue // the open issues, in the tool's order
-	Failed bool           // the last read failed; Open is the last that worked
-}
+	ID   string         // the issues project id
+	Open []issues.Issue // the open issues, in the tool's order
+	Err  string         // why the last read failed, on one line; Open is then the last that worked
+} // Failed() says Err is set
 
 type World struct {
 	Projects  []*Project          // the projects the list shows, by name
@@ -205,6 +205,13 @@ is listed in a project. `World.Root(dir)`, `World.Name(dir)` and
 `World.Short(dir)` shows it as the view does.
 `NameLess`, `ActiveLess`, `StreamLess` and `WindowLess` are the orders
 `Derive` uses.
+`World.Tracker(root)` is a root's tracker as the World holds it, with
+its id, its open issues and why its last read failed: the task picker
+and the cockpit's issues card read it there, and a workstream's ref
+uses `Project.ID`. The model's own tracker cache, with the `.issues`
+stamps and the reads in flight, is effect bookkeeping. No view reads
+it, except to ask `trackerReading` whether a read is out, which the task
+picker shows as "reading…".
 
 The rules that used to be spread across the view now live in `Derive`.
 

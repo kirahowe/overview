@@ -55,7 +55,7 @@ func checkInvariants(t *rapid.T, m model) {
 	}
 	// The keys are in the issues card only while it is there.
 	if m.inIssues() {
-		if _, tracked := m.trackers[m.target().root]; !tracked || !m.issuesShown() {
+		if _, tracked := m.world().Tracker(m.target().root); !tracked || !m.issuesShown() {
 			t.Fatalf("the keys are in the issues card, which is not shown (tracked %v)", tracked)
 		}
 	}

@@ -177,7 +177,7 @@ func TestIssuesCard(t *testing.T) {
 		{ID: 13, Title: "another", Status: issues.Inbox},
 		{ID: 14, Title: "stuck", Status: issues.Blocked},
 	}
-	got := drawn(issuesCard(others, map[int]int{7: 2}, true, 2, nil), 50)
+	got := drawn(issuesCard(others, map[int]int{7: 2}, true, 2, ""), 50)
 	wantLines(t, "issues", got, []string{
 		"── Issues ────────────────────────────── 9 open ──",
 		"   in review    #4 show cost",
@@ -203,7 +203,7 @@ func TestIssuesCard(t *testing.T) {
 			many = append(many, issues.Issue{ID: 100 + len(many), Title: "x", Status: n})
 		}
 	}
-	text := ansi.Strip(strings.Join(drawn(issuesCard(many, nil, false, 0, nil), 50), "\n"))
+	text := ansi.Strip(strings.Join(drawn(issuesCard(many, nil, false, 0, ""), 50), "\n"))
 	for _, want := range []string{"… 2 more", "… 2 more", "… 2 more", "… 6 more"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("lacks %q:\n%s", want, text)
@@ -212,7 +212,7 @@ func TestIssuesCard(t *testing.T) {
 	if n := len(pickable(many)); n != 3+4+2+3 {
 		t.Fatalf("%d pickable, want those listed", n)
 	}
-	if got := drawn(issuesCard(nil, nil, false, 0, nil), 40); !strings.Contains(got[1], "no other open issues") {
+	if got := drawn(issuesCard(nil, nil, false, 0, ""), 40); !strings.Contains(got[1], "no other open issues") {
 		t.Fatalf("empty: %q", got)
 	}
 }
@@ -428,7 +428,7 @@ func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
 
 func TestIssuesCardSaysWhyTheReadFailed(t *testing.T) {
 	others := []issues.Issue{{ID: 4, Title: "show cost", Status: issues.Review}}
-	got := drawn(issuesCard(others, nil, false, 0, errors.New("issues --dir /w/app list --json: exit status 2:\nno such\tthing")), 40)
+	got := drawn(issuesCard(others, nil, false, 0, issues.OneLine("issues --dir /w/app list --json: exit status 2:\nno such\tthing")), 40)
 	text := strings.Join(got, "\n")
 	for _, want := range []string{"issues failed: issues --dir", "exit status 2: no such thing", "#4 show cost"} {
 		if !strings.Contains(strings.Join(strings.Fields(strings.ReplaceAll(text, "│", " ")), " "), want) {

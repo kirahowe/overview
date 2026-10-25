@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"overview/internal/issues"
+	"overview/internal/world"
 )
 
 // The task picker is s in the list: it takes the list pane, as the
@@ -98,10 +99,10 @@ func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, q
 }
 
 // taskListOf is what the picker shows for the project called name. tool
-// says whether overview has the issues binary, tracked whether the
-// project's tracker has been read, as t, and reading whether a read of
-// it is out.
-func taskListOf(name string, t tracker, tracked, reading, tool bool, sessions func(issues.Issue) int, query string) taskList {
+// says whether overview has the issues binary, tracked whether the World
+// holds the project's tracker, as t, and reading whether a read of it is
+// out.
+func taskListOf(name string, t world.Tracker, tracked, reading, tool bool, sessions func(issues.Issue) int, query string) taskList {
 	switch {
 	case !tool:
 		return taskList{note: "Install the issues tool to track tasks."}
@@ -110,11 +111,11 @@ func taskListOf(name string, t tracker, tracked, reading, tool bool, sessions fu
 	case !tracked:
 		return taskList{note: untrackedNote(name)}
 	}
-	l := taskList{rows: taskRows(t.issues, t.id, sessions, query)}
+	l := taskList{rows: taskRows(t.Open, t.ID, sessions, query)}
 	switch {
-	case t.err != nil:
-		l.note = "issues failed: " + oneLine(t.err.Error())
-	case !slices.ContainsFunc(t.issues, func(i issues.Issue) bool { return issues.Open(i.Status) }):
+	case t.Failed():
+		l.note = "issues failed: " + t.Err
+	case !slices.ContainsFunc(t.Open, func(i issues.Issue) bool { return issues.Open(i.Status) }):
 		l.note = "No open issues in " + name + "."
 	case len(l.rows) == 0:
 		l.note = "Nothing matches."
@@ -147,8 +148,8 @@ func taskGoes(r taskRow) bool { return r.sessions > 0 }
 // taskList is what the open picker shows now.
 func (m model) taskList() taskList {
 	root := m.taskPick.root
-	t, tracked := m.trackers[root]
-	return taskListOf(m.name(root), t, tracked, m.reading[root], m.issues != nil, m.sessionsOn(root), m.taskPick.query)
+	t, tracked := m.world().Tracker(root)
+	return taskListOf(m.name(root), t, tracked, m.trackerReading(root), m.issues != nil, m.sessionsOn(root), m.taskPick.query)
 }
 
 // taskSel is the selected row of l, -1 when it has none.
@@ -162,8 +163,8 @@ func (m model) taskSel(l taskList) int {
 // openTasks opens the task picker on the project at root, or says why
 // not.
 func (m model) openTasks(root string) (model, tea.Cmd) {
-	_, tracked := m.trackers[root]
-	open, note := taskOpens(m.name(root), tracked, m.reading[root], m.issues != nil)
+	_, tracked := m.world().Tracker(root)
+	open, note := taskOpens(m.name(root), tracked, m.trackerReading(root), m.issues != nil)
 	if !open {
 		return m.say(note), nil
 	}

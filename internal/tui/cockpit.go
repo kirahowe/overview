@@ -553,10 +553,10 @@ func (m model) cockpitRows(t target) [][]card {
 	if _, ok := m.changeReads[cockpitKey(t)]; !ok {
 		info.loading = true
 	}
-	_, tracked := m.world().Tracker(t.root)
+	tr, tracked := m.world().Tracker(t.root)
 	others, linked := m.others(t)
 	pick := max(0, min(m.cockpit.pick, len(pickable(others))-1))
-	issuesRow := []card{issuesCard(others, linked, m.inIssues(), pick, m.trackers[t.root].err)}
+	issuesRow := []card{issuesCard(others, linked, m.inIssues(), pick, tr.Err)}
 	if !tracked {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}
@@ -590,7 +590,7 @@ func (m model) cockpitRows(t target) [][]card {
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{
-		{streamHeader(issueRef(m.projectID(t.root), t.stream.Issue), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms)},
+		{streamHeader(issueRef(t.stream.Project.ID, t.stream.Issue), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms)},
 		{issueCard(t.stream.ID, details)},
 		{changesCard("Changes", since, info), reviewCard(sum)},
 		issuesRow,

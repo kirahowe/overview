@@ -86,7 +86,7 @@ func TestTaskListNotes(t *testing.T) {
 		{"rows", some, true, true, true, "", "", 1},
 	}
 	for _, c := range cases {
-		l := taskListOf("app", c.t, c.tracked, c.reading, c.tool, counted(nil), c.query)
+		l := taskListOf("app", c.t.world(), c.tracked, c.reading, c.tool, counted(nil), c.query)
 		if l.note != c.note || len(l.rows) != c.rows {
 			t.Errorf("%s: note %q rows %d, want %q and %d", c.name, l.note, len(l.rows), c.note, c.rows)
 		}

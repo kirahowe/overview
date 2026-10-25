@@ -159,7 +159,7 @@ func Derive(in Inputs) World {
 			if !p.Tracked && t.ID != "" {
 				p.ID = t.ID
 			}
-			p.Tracked, p.Failed = true, p.Failed || t.Failed
+			p.Tracked, p.Failed = true, p.Failed || t.Failed()
 			for _, i := range t.Open {
 				if issues.Open(i.Status) {
 					p.Open = append(p.Open, i)
