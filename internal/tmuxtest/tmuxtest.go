@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Socket is a private server's socket. The server starts with the first
@@ -70,4 +71,32 @@ func (s Socket) Must(args ...string) string {
 		s.t.Fatal(err)
 	}
 	return out
+}
+
+// Deadline is how long Wait waits. It is generous because a loaded
+// machine, with property tests running in other packages, can delay a
+// process's exec by seconds. A passing test never waits that long.
+const Deadline = 30 * time.Second
+
+// Wait polls cond until it reports true, and fails the test if it does
+// not by Deadline. cond returns whether the state holds and a
+// description of what it saw, and the failure message carries the last
+// description. Tests use it for every piece of state tmux settles on its
+// own (a pane's command or path, a pane dying, a client attaching), never
+// a fixed sleep or an immediate read.
+func Wait(t testing.TB, what string, cond func() (bool, string)) {
+	t.Helper()
+	deadline := time.Now().Add(Deadline)
+	last := ""
+	for {
+		ok, saw := cond()
+		if ok {
+			return
+		}
+		last = saw
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s; last saw: %s", Deadline, what, last)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

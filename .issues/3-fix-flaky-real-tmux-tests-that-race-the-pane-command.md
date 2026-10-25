@@ -25,18 +25,37 @@ is wrong.
 
 ## Acceptance criteria
 
-- [ ] Every real-tmux test waits for the state it checks through one
+- [x] Every real-tmux test waits for the state it checks through one
       shared helper, with a deadline generous enough for a loaded
       machine. The helper reports the last observed value on failure. No
       test asserts on pane commands, paths or deadness right after a
       spawn or respawn without waiting.
-- [ ] Every real-tmux test in `internal/tmux`, and the tui tests that use
+- [x] Every real-tmux test in `internal/tmux`, and the tui tests that use
       `internal/tmuxtest`, has been audited for fixed sleeps and
       immediate reads of async state, and fixed where found.
-- [ ] `go test -race -count=50 ./internal/tmux` passes while
+- [x] `go test -race -count=50 ./internal/tmux` passes while
       `scripts/check --deep 2000` runs alongside it.
-- [ ] `scripts/check --deep 2000` passes three times in a row.
+- [x] `scripts/check --deep 2000` passes three times in a row.
 
 ## Plan
 
 ## Log
+
+2026-10-25: `tmuxtest.Wait` (30s deadline, 20ms poll, failure message carries
+the last observed value) is the one wait helper. It now backs the pane
+command, path and pid checks in `internal/tmux` (respawn, a lone command,
+pane fields, Self, Live, the paste, client attach, the framed panel
+tests), the view-marking wait in `internal/tui`, and e2e's `waitFor`.
+`TestWithoutAcceptedByTmux` now uses a server per round instead of
+kill-server followed by new-session on the same socket. The fixed sleeps
+left in e2e are deliberate: tmux's one-second activity and git mtime
+granularity, the 3-second "list stays put" checks, and two waits for the
+view's half-second refresh that nothing on screen reveals (both
+lengthened).
+
+Evidence: `go test -race -count=50 ./internal/tmux` passed (156.9s) while
+`scripts/check --deep 2000` ran alongside it and passed. Three further
+`scripts/check --deep 2000` runs in a row passed. An earlier pair of deep
+runs failed in `internal/review` (TestPropMessage, a leading CR in the
+generated body), which is unrelated to tmux and fixed in its own commit.
+`scripts/e2e` passes.

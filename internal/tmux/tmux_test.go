@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"pgregory.net/rapid"
 
@@ -324,10 +323,11 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	comm, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil || filepath.Base(strings.TrimSpace(string(comm))) != "sleep" {
-		t.Fatalf("pane %s runs %q, %v; want sleep itself", p.ID, comm, err)
-	}
+	// The pane's process is forked before it execs sleep.
+	tmuxtest.Wait(t, "pane "+p.ID+"'s own process to be sleep", func() (bool, string) {
+		comm, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		return err == nil && filepath.Base(strings.TrimSpace(string(comm))) == "sleep", fmt.Sprintf("%q, %v", comm, err)
+	})
 	if id, ok, err := s.Self(pid); err != nil || !ok || id != p.ID {
 		t.Fatalf("Self(%d) = %q, %v, %v; want %s", pid, id, ok, err, p.ID)
 	}
@@ -339,17 +339,12 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	// tmux reports its own name as the command until the new process has
-	// exec'd, so give it a moment.
-	for range 100 {
-		out, _ = s.run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
-		if f := strings.Fields(out); len(f) == 2 && f[1] == "sleep" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
-		t.Fatalf("after respawn: %q", out)
-	}
+	// exec'd, so wait for it.
+	tmuxtest.Wait(t, "the respawned pane to run sleep under a new pid", func() (bool, string) {
+		out, _ := s.run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
+		f := strings.Fields(out)
+		return len(f) == 2 && f[1] == "sleep" && f[0] != strconv.Itoa(pid), out
+	})
 }
 
 // A command of one word, such as a claude with no arguments, is run as it
@@ -376,15 +371,11 @@ func TestALoneCommandHasNoShellBetween(t *testing.T) {
 	}
 	check := func(id string) {
 		t.Helper()
-		var out string
-		for range 40 { // the script takes a moment to exec sleep
-			out, _ = s.run("display-message", "-p", "-t", id, "#{pane_dead} #{pane_current_command}")
-			if strings.TrimSpace(out) == "0 sleep" {
-				return
-			}
-			time.Sleep(25 * time.Millisecond)
-		}
-		t.Fatalf("pane %s: %q, want it running sleep", id, out)
+		// the script takes a moment to exec sleep
+		tmuxtest.Wait(t, "pane "+id+" to run sleep", func() (bool, string) {
+			out, _ := s.run("display-message", "-p", "-t", id, "#{pane_dead} #{pane_current_command}")
+			return strings.TrimSpace(out) == "0 sleep", out
+		})
 	}
 	check(p.ID)
 	if err := s.Respawn(q.ID, nil, cmd); err != nil {
@@ -421,7 +412,7 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Session != "ov" || !strings.HasPrefix(a.Window, "@") || a.Path != dir {
+	if a.Session != "ov" || !strings.HasPrefix(a.Window, "@") {
 		t.Fatalf("spawned %+v", a)
 	}
 	split := strings.TrimSpace(must(t)(s.run("split-window", "-d", "-c", dir, "-P", "-F", "#{pane_id}", "-t", a.ID, "sleep 301")))
@@ -441,15 +432,27 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	if err := s.SetPaneOption(split, HolderOption, "1"); err != nil {
 		t.Fatal(err)
 	}
-	panes := byID(t, s)
+	// The command and path are the foreground process's, which are not
+	// the sleeps' and the shell's until they have exec'd.
+	var panes map[string]Pane
+	tmuxtest.Wait(t, "the panes to report their commands and paths", func() (bool, string) {
+		panes = byID(t, s)
+		for _, id := range []string{a.ID, split} {
+			if p := panes[id]; p.Command != "sleep" || p.Path != dir {
+				return false, fmt.Sprintf("%s: %+v", id, p)
+			}
+		}
+		shell := panes[b.ID]
+		return shell.Command != "" && shell.Command != "sleep" && shell.Path == "/", fmt.Sprintf("the shell: %+v", shell)
+	})
 	for _, id := range []string{a.ID, split} {
 		p := panes[id]
-		if p.Project != "/w/a b" || p.Task != "/w/a b#6" || p.Attach != "" || p.Holder != (id == split) || p.Command != "sleep" || p.Path != dir || p.Window != a.Window {
+		if p.Project != "/w/a b" || p.Task != "/w/a b#6" || p.Attach != "" || p.Holder != (id == split) || p.Window != a.Window {
 			t.Fatalf("%s: %+v", id, p)
 		}
 	}
 	shell := panes[b.ID]
-	if shell.Project != "" || shell.Task != "" || shell.Attach != "bg1" || shell.Holder || shell.Command == "" || shell.Command == "sleep" || shell.Path != "/" {
+	if shell.Project != "" || shell.Task != "" || shell.Attach != "bg1" || shell.Holder {
 		t.Fatalf("the shell: %+v", shell)
 	}
 	if err := s.KillWindow(a.Window); err != nil {
@@ -583,12 +586,10 @@ func TestFocused(t *testing.T) {
 	want(list, false) // no client
 	term := tmuxtest.New(t, "")
 	term.Must("new-session", "-d", "-x", "80", "-y", "24", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
-	for range 100 {
-		if out, _ := sock.Run("list-clients"); out != "" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	tmuxtest.Wait(t, "the client to attach", func() (bool, string) {
+		out, _ := sock.Run("list-clients")
+		return out != "", out
+	})
 	want(list, true)
 	want(other, false)
 	sock.Must("select-pane", "-t", other)
@@ -646,10 +647,10 @@ func TestSplitCaptureAndPaste(t *testing.T) {
 	if _, err := s.run("copy-mode", "-t", target.ID); err != nil {
 		t.Fatal(err)
 	}
-	command, _, err := s.Live(target.ID)
-	if err != nil || command != "cat" {
-		t.Fatalf("command %q err %v", command, err)
-	}
+	tmuxtest.Wait(t, "the pane to report cat", func() (bool, string) {
+		command, _, err := s.Live(target.ID)
+		return err == nil && command == "cat", fmt.Sprintf("command %q err %v", command, err)
+	})
 	if out, _ := s.run("display-message", "-p", "-t", target.ID, "#{pane_in_mode}"); strings.TrimSpace(out) != "0" {
 		t.Fatalf("still in copy mode: %q", out)
 	}
@@ -662,21 +663,14 @@ func TestSplitCaptureAndPaste(t *testing.T) {
 	if out, _ := s.run("list-buffers"); strings.Contains(out, "ovt-msg") {
 		t.Fatalf("the buffer should go with the paste: %q", out)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	tmuxtest.Wait(t, "the paste to arrive whole", func() (bool, string) {
 		_, out, err := s.Live(target.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// cat echoes the typed line, then writes it back after Enter.
-		if strings.Count(out, "second line xxxxxxxxxx") == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the paste never arrived whole:\n%s", out)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return strings.Count(out, "second line xxxxxxxxxx") == 2, out
+	})
 }
 
 // Zoom makes a pane fill its window, and the listing says so for every
@@ -814,13 +808,7 @@ func (f framed) table() string {
 // until polls for cond, which the client takes a moment to meet.
 func (f framed) until(what string, cond func() bool) {
 	f.t.Helper()
-	for range 100 {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("%s", what)
+	tmuxtest.Wait(f.t, what, func() (bool, string) { return cond(), "" })
 }
 
 // rows is the client's screen, once it shows want in the border's top
@@ -828,15 +816,11 @@ func (f framed) until(what string, cond func() bool) {
 func (f framed) rows(step, want string) [][]drawn {
 	f.t.Helper()
 	var rows [][]drawn
-	for range 100 {
+	tmuxtest.Wait(f.t, step+": the border's top to be "+want, func() (bool, string) {
 		rows = cells(f.client.Must("capture-pane", "-e", "-p"))
-		if len(rows) > 1 && len(rows[0]) > f.col && rows[0][f.col].fg == want {
-			return rows
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("%s: the border's top is not %s:\n%v", step, want, rows)
-	return nil
+		return len(rows) > 1 && len(rows[0]) > f.col && rows[0][f.col].fg == want, fmt.Sprint(rows)
+	})
+	return rows
 }
 
 // top is the text of the client's top row.

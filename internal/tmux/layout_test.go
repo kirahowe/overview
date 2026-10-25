@@ -110,9 +110,10 @@ func TestWithoutJSONForm(t *testing.T) {
 // tmux itself is the judge of whether the result is a layout it accepts:
 // remove each pane of a real window, then apply the result to what is left.
 func TestWithoutAcceptedByTmux(t *testing.T) {
-	tm := tmuxtest.New(t, "").Run
 	for victim := 0; victim < 6; victim++ {
-		tm("kill-server") //nolint:errcheck
+		// A server of its own each round: a new-session sent right after
+		// kill-server can reach the dying server instead of a fresh one.
+		tm := tmuxtest.New(t, "").Run
 		if out, err := tm("new-session", "-d", "-x", "200", "-y", "50", "sleep 300"); err != nil {
 			t.Fatalf("new-session: %v %s", err, out)
 		}

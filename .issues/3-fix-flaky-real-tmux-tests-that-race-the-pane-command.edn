@@ -1,6 +1,6 @@
 {:id 3
  :title "Fix flaky real-tmux tests that race the pane command"
- :status :inbox
+ :status :done
  :type :bug
  :priority :p1
  :created "2026-10-25"

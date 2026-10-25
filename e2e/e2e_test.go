@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"overview/internal/tmuxtest"
 )
 
 // pane is one line of the private server's pane listing.
@@ -81,20 +83,11 @@ func (s server) panes() []pane {
 	return ps
 }
 
-// waitFor polls until cond holds, failing with what it last said.
+// waitFor polls until cond holds, failing with what it last said. It is
+// tmuxtest.Wait, so every wait in the repo has the same generous deadline.
 func waitFor(t *testing.T, what string, cond func() (bool, string)) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	last := ""
-	for time.Now().Before(deadline) {
-		ok, say := cond()
-		if ok {
-			return
-		}
-		last = say
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s: %s", what, last)
+	tmuxtest.Wait(t, what, cond)
 }
 
 // beside reports whether the list sits in the window of pane id, leftmost,
@@ -292,8 +285,9 @@ func TestOverviewInTmux(t *testing.T) {
 	split := ov.must("split-window", "-d", "-v", "-t", first.id, "-P", "-F", "#{pane_id}", "sleep 600")
 	ov.must("resize-pane", "-t", list.id, "-x", "57")
 	waitFor(t, "the drag", func() (bool, string) { return beside(ov.panes(), first.id, 57) })
-	// The view rereads tmux's panes twice a second; let it see the width.
-	time.Sleep(1200 * time.Millisecond)
+	// The view rereads tmux's panes twice a second, and nothing on screen
+	// shows that it has seen the width, so wait for several refreshes.
+	time.Sleep(2500 * time.Millisecond)
 
 	inWindow := func(id string) string {
 		for _, p := range ov.panes() {
@@ -497,7 +491,9 @@ func TestTerminalsAndProjects(t *testing.T) {
 	r.press("g")
 	waitFor(t, "the list beside the session", func() (bool, string) { return beside(r.ov.panes(), session.id, 0) })
 	split := r.ov.must("split-window", "-d", "-v", "-t", session.id, "-P", "-F", "#{pane_id}", "sleep 600")
-	time.Sleep(700 * time.Millisecond) // the view sees the split
+	// Nothing on screen shows that the view has seen the split, so this
+	// waits for several of its half-second refreshes.
+	time.Sleep(2 * time.Second)
 	r.ov.must("kill-pane", "-t", session.id)
 	r.lists(t, r.work)
 	waitFor(t, "two terminals and no session", func() (bool, string) {

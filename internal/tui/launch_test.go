@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -95,13 +96,10 @@ func TestEnsureView(t *testing.T) {
 		return list, all
 	}
 	waitForList := func() {
-		for range 50 {
-			if l, _ := count(); l > 0 {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		t.Fatal("the view never marked its pane")
+		tmuxtest.Wait(t, "the view to mark its pane", func() (bool, string) {
+			l, all := count()
+			return l > 0, fmt.Sprintf("%d list panes of %d", l, all)
+		})
 	}
 	pid := func() string {
 		panes, _ := srv.Panes()
