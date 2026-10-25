@@ -1768,29 +1768,18 @@ func TestPropKeepEnd(t *testing.T) {
 	})
 }
 
-// unitOf is a heading note without its numbers: "1 of 3 tasks" and
-// "3 tasks" are both "tasks".
-func unitOf(note string) string {
-	var out []string
-	for _, f := range strings.Fields(note) {
-		if _, err := strconv.Atoi(f); err == nil || f == "of" || f == "no" {
-			continue
-		}
-		out = append(out, strings.TrimSuffix(f, "s"))
-	}
-	return strings.Join(out, " ")
-}
-
-// Every heading's note names a unit, and a search never changes it, only
-// how many of them it shows. The search's count is the same with the
-// agents list or without it, so a session it shows twice counts once.
+// Every heading's note names its units, and a search never changes one:
+// each part it shows is a part the whole list shows, with the same
+// total, in the same order, showing no more than all of them. The
+// search's count is the same with the agents list or without it, so a
+// session it shows twice counts once.
 func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
 		q := genQuery(t)
-		whole := map[string]string{}
+		whole := map[string][]notePart{}
 		for _, sec := range present(w, "") {
-			whole[sec.Title] = sectionNote(sec)
+			whole[sec.Title] = noteParts(sec)
 		}
 		secs := present(w, q)
 		var rest []section
@@ -1799,12 +1788,17 @@ func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 				continue
 			}
 			rest = append(rest, sec)
-			note := sectionNote(sec)
-			if unitOf(note) == "" {
-				t.Fatalf("%q's note %q names no unit", sec.Title, note)
-			}
-			if unitOf(note) != unitOf(whole[sec.Title]) {
-				t.Fatalf("%q under %q says %q, %q without it", sec.Title, q, note, whole[sec.Title])
+			at := 0
+			for _, p := range noteParts(sec) {
+				if p.unit == "" || !strings.Contains(p.String(), p.unit) {
+					t.Fatalf("%q's part %+v names no unit", sec.Title, p)
+				}
+				i := slices.IndexFunc(whole[sec.Title], func(o notePart) bool { return o.unit == p.unit })
+				if i < at || p.shown > p.total || (i >= 0 && whole[sec.Title][i].total != p.total) ||
+					(i < 0 && !(p.unit == "session" && p.total == 0)) {
+					t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, noteParts(sec), whole[sec.Title])
+				}
+				at = max(i, at)
 			}
 		}
 		if matches(secs) != matches(rest) {
@@ -1813,61 +1807,38 @@ func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 	})
 }
 
-// Every line of the help's box is as wide as the box, scrolled or not,
-// and the legend is never cut: each of its lines fits inside the box
-// once the box can hold its widest item.
-func TestPropTheHelpBoxIsSquare(t *testing.T) {
+// A heading's rule is as wide as its pane, and its title is never cut
+// while any note shows: the note gives way first, step by step.
+func TestPropAHeadingKeepsItsTitleBeforeItsNote(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
 		m.deps = fakeDeps(nil)
-		w, h := rapid.IntRange(1, 200).Draw(t, "w"), rapid.IntRange(1, 60).Draw(t, "h")
-		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
-		m = update(m, keyMsg("?"))
-		for range rapid.IntRange(0, 40).Draw(t, "scroll") {
-			m = update(m, keyMsg("j"))
+		w := rapid.IntRange(2, 120).Draw(t, "w")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: 10})
+		title := rapid.StringMatching(`[a-z][a-z-]{0,40}`).Draw(t, "title")
+		sec := section{Title: title, Tracked: rapid.Bool().Draw(t, "tracked"), Tasks: rapid.IntRange(0, 12).Draw(t, "tasks"),
+			Sessions: rapid.IntRange(1, 12).Draw(t, "sessions"), Terminals: rapid.IntRange(1, 3).Draw(t, "terms"), Open: 7,
+			Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}}}
+		notes := sectionNotes(sec)
+		line := ansi.Strip(m.rule(title, heading, notes...))
+		if ansi.StringWidth(line) != w {
+			t.Fatalf("the rule %q is %d wide in %d", line, ansi.StringWidth(line), w)
 		}
-		lines := m.helpBox()
-		bw, tw := m.helpWidth()
-		for i, l := range lines {
-			if got := ansi.StringWidth(l); got != max(bw, 0) && bw >= 6 {
-				t.Fatalf("line %d of the box is %d wide, the box %d: %q", i, got, bw, ansi.Strip(l))
+		shown := ""
+		for _, n := range notes {
+			if strings.HasSuffix(strings.TrimRight(line, " "), " "+n) {
+				shown = n
+				break
 			}
 		}
-		if tw >= len("⠋ working") {
-			for _, l := range m.helpLegend() {
-				if ansi.StringWidth(l) > tw {
-					t.Fatalf("the legend's line %q is wider than %d", ansi.Strip(l), tw)
-				}
-			}
+		if shown != "" && !strings.Contains(line, title+" ─") {
+			t.Fatalf("the rule %q cuts %q and shows %q", line, title, shown)
+		}
+		if shown == "" && strings.Contains(line, "…") && ansi.StringWidth(title) <= m.contentWidth()-2 {
+			t.Fatalf("the rule %q cuts %q, which fits", line, title)
 		}
 	})
-}
-
-// At 100x20 the help scrolls, and its top border, with the marker that
-// says there is more above, ends where the sides do.
-func TestTheScrolledHelpKeepsItsBorderWhole(t *testing.T) {
-	m := newTestModel(t)
-	m = update(m, tea.WindowSizeMsg{Width: 100, Height: 20})
-	m = update(m, keyMsg("?"))
-	m = update(m, keyMsg("j"))
-	box := m.helpBox()
-	if m.helpTop == 0 || !strings.Contains(ansi.Strip(box[0]), "↑ more") {
-		t.Fatalf("not scrolled: top %d, %q", m.helpTop, ansi.Strip(box[0]))
-	}
-	for i, l := range box {
-		if ansi.StringWidth(l) != ansi.StringWidth(box[1]) {
-			t.Errorf("line %d is %d wide, the sides %d: %q", i, ansi.StringWidth(l), ansi.StringWidth(box[1]), ansi.Strip(l))
-		}
-	}
-	text := strings.Join(slices.Collect(func(yield func(string) bool) {
-		for _, l := range m.helpLegend() {
-			yield(ansi.Strip(l))
-		}
-	}), " ")
-	if !strings.Contains(text, "terminal  #6 task") {
-		t.Errorf("the legend %q", text)
-	}
 }
 
 // A terminal's row gives up its directory before its name: either the

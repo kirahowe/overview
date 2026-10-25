@@ -86,7 +86,7 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	}
 	// tmux draws the rule above, with the list's title in it.
 	want := []string{
-		rule("overview", "3 tasks"),
+		rule("overview", "3 tasks · 1 session"),
 		l("#4 show session cost", "review p2"),
 		l("   no sessions", ""),
 		"▌" + l("#6 keep the list's width", "p1")[1:],
@@ -219,7 +219,7 @@ func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 	if got := sectionNote(idle); got != "4 open issues" {
 		t.Errorf("idle tracked project: %q, want 4 open issues", got)
 	}
-	busy := section{Title: "app", Tracked: true, Open: 4, Tasks: 1, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry}}}
+	busy := section{Title: "app", Tracked: true, Open: 4, Tasks: 1, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry, stream: &world.Stream{}}}}
 	if got := sectionNote(busy); got != "1 task" {
 		t.Errorf("project with a workstream: %q, want 1 task", got)
 	}
@@ -236,7 +236,8 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 	}{
 		{section{Title: "pinned", Entries: []entry{{kind: projectEntry}}}, "no sessions"},
 		{section{Title: "web", Sessions: 1, Terminals: 2, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}, {kind: terminalEntry}}}, "1 session · 2 terminals"},
-		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions · 0 of 1 terminal"},
+		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions"},
+		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 tasks · 1 of 2 sessions"},
 		{section{Title: "away", Away: true, Sessions: 2, Entries: []entry{{kind: sessionEntry}, {kind: sessionEntry}}}, "2 sessions"},
 		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks"},
 		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3}, "0 of 3 tasks"},
@@ -370,5 +371,27 @@ func TestADigestNoteLeavesTheListsSearchOut(t *testing.T) {
 	m.screen = sessionsScreen
 	if foot := ansi.Strip(m.footer()); !strings.Contains(foot, "/red") || !strings.Contains(foot, "panels") {
 		t.Fatalf("on the sessions screen: footer %q", foot)
+	}
+}
+
+// A heading's note gives way before its project's name: the whole note,
+// then its first part, then a bare count, then nothing.
+func TestAHeadingNoteGivesWayToTheName(t *testing.T) {
+	sec := section{Title: "website-admin", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}}}
+	for _, c := range []struct {
+		w    int
+		want string
+	}{
+		{48, "website-admin ─── 1 of 2 sessions · 1 terminal"},
+		{40, "website-admin ──────── 1 of 2 sessions"},
+		{22, "website-admin ── 1/2"},
+		{17, "website-admin ─"},
+		{10, "…admin ─"},
+	} {
+		m := newTestModel(t)
+		m = update(m, tea.WindowSizeMsg{Width: c.w, Height: 5})
+		if got := strings.TrimSpace(ansi.Strip(m.rule(sec.Title, heading, sectionNotes(sec)...))); got != c.want {
+			t.Errorf("at %d: %q, want %q", c.w, got, c.want)
+		}
 	}
 }

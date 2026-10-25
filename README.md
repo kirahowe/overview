@@ -76,12 +76,16 @@ it is the agents' rule while the cursor is in the agents.
 The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list
 each project has a section, headed by a rule with its name. The rule ends
-with a count that always names its unit: `3 tasks` in a project that
-tracks its issues, or `4 open issues` when no task is under way, and
-`2 sessions · 1 terminal` in one that does not, or `no sessions` for a
-pinned project with nothing in it. A search keeps the unit and says how
-many it shows, as `1 of 3 tasks`, and the footer counts the matches,
-each session once even when it is listed twice. A project is
+with counts that always name their unit: a project that tracks its
+issues counts its tasks, or its open issues when no task is under way,
+and then the sessions and terminals listed under no task, as
+`3 tasks · 1 session`. One that does not track them counts only its
+sessions and terminals, and a pinned project with nothing in it says
+`no sessions`. A search keeps each unit and says how many it shows, as
+`0 of 3 tasks · 1 of 2 sessions`, and the footer counts the matches,
+each session once even when it is listed twice. When the pane is narrow
+the counts give way before the name: first all but the first count go,
+then its unit, as `1/3`, then the count itself. A project is
 the nearest parent directory with a `.jj` or `.git` in it, or the session's
 own directory when there is none, and projects are in alphabetical order.
 Every entry takes one line. Inside a project, working sessions come before

@@ -448,20 +448,25 @@ func (m model) plain(s string) string {
 	return " " + fit(s, m.contentWidth()) + " "
 }
 
-// rule heads a section: its title, a line to the right edge, and a note,
-// which goes when there is no room for it beside a few cells of title.
-func (m model) rule(title string, style lipgloss.Style, note string) string {
+// rule heads a section: its title, a line to the right edge, and the
+// first of notes that fits beside the whole title, with at least one ─
+// between them. The title comes first: it is cut only when no note fits,
+// and then it keeps its end, where a project's name is.
+func (m model) rule(title string, style lipgloss.Style, notes ...string) string {
 	cw := m.contentWidth()
-	nw := ansi.StringWidth(note)
-	if note != "" && cw < nw+8 {
-		note, nw = "", 0
+	tw := ansi.StringWidth(title)
+	note := ""
+	for _, n := range notes {
+		if n != "" && tw+ansi.StringWidth(n)+3 <= cw {
+			note = n
+			break
+		}
 	}
 	// title, a space, at least one ─, and a space and the note.
 	room := cw - 2
 	if note != "" {
-		room -= nw + 1
+		room -= ansi.StringWidth(note) + 1
 	}
-	// A long title keeps its end, where a project's name is.
 	title = keepEnd(title, max(room, 1))
 	n := max(room-ansi.StringWidth(title)+1, 0)
 	s := style.Render(title) + " " + fg(pal.Border).Render(strings.Repeat("─", n))
@@ -471,16 +476,29 @@ func (m model) rule(title string, style lipgloss.Style, note string) string {
 	return m.plain(s)
 }
 
-// sectionNote is what a project's rule says on the right, always with
-// its unit: how many tasks a tracked project has, or how many issues are
-// open when it has none, or that reading them failed; and how many
-// sessions and terminals an untracked one has. The counts are the
-// World's, so a search does not change their unit: one that hides some
-// shows "1 of 3 tasks".
-func sectionNote(sec section) string {
-	if sec.Failed {
-		return "issues failed"
+// notePart is one count in a project's heading: shown of total units.
+type notePart struct {
+	shown, total int
+	unit         string
+}
+
+func (p notePart) String() string { return countOf(p.shown, p.total, p.unit) }
+
+// compact is the part as a bare count, "1/3" or "3".
+func (p notePart) compact() string {
+	if p.shown < p.total {
+		return strconv.Itoa(p.shown) + "/" + strconv.Itoa(p.total)
 	}
+	return strconv.Itoa(p.total)
+}
+
+// noteParts are the counts a project's rule ends with, each naming its
+// unit: a tracked project's tasks, or its open issues when it has no
+// task, and then the sessions and terminals under no task that the
+// section shows. The totals are the World's, so a search never changes a
+// part's unit, only how many it shows: "1 of 3 tasks · 1 of 2 sessions".
+// A section with nothing to count says "no sessions".
+func noteParts(sec section) []notePart {
 	tasks, sessions, terms := 0, 0, 0
 	for _, e := range sec.Entries {
 		switch {
@@ -493,24 +511,50 @@ func sectionNote(sec section) string {
 			terms++
 		}
 	}
-	if sec.Tracked {
-		if sec.Tasks > 0 {
-			return countOf(tasks, sec.Tasks, "task")
-		}
-		return countOf(sec.Open, sec.Open, "open issue")
+	var out []notePart
+	switch {
+	case sec.Tracked && sec.Tasks > 0:
+		out = append(out, notePart{tasks, sec.Tasks, "task"})
+	case sec.Tracked:
+		out = append(out, notePart{sec.Open, sec.Open, "open issue"})
 	}
-	var parts []string
-	if sec.Sessions > 0 {
-		parts = append(parts, countOf(sessions, sec.Sessions, "session"))
+	if sessions > 0 {
+		out = append(out, notePart{sessions, sec.Sessions, "session"})
 	}
-	if sec.Terminals > 0 {
-		parts = append(parts, countOf(terms, sec.Terminals, "terminal"))
+	if terms > 0 {
+		out = append(out, notePart{terms, sec.Terminals, "terminal"})
 	}
-	if len(parts) == 0 {
-		return countOf(0, 0, "session")
+	if len(out) == 0 {
+		out = append(out, notePart{0, 0, "session"})
 	}
-	return strings.Join(parts, " · ")
+	return out
 }
+
+// sectionNotes are what a project's rule can say on the right, the
+// fullest first: every part, then the first part alone, then that as a
+// bare count. The rule takes the first that fits beside the whole title.
+// A project whose issues failed to read says so, or nothing.
+func sectionNotes(sec section) []string {
+	if sec.Failed {
+		return []string{"issues failed"}
+	}
+	ps := noteParts(sec)
+	full := make([]string, len(ps))
+	for i, p := range ps {
+		full[i] = p.String()
+	}
+	out := []string{strings.Join(full, " · ")}
+	if len(ps) > 1 {
+		out = append(out, full[0])
+	}
+	if ps[0].total > 0 {
+		out = append(out, ps[0].compact())
+	}
+	return out
+}
+
+// sectionNote is the fullest of sectionNotes.
+func sectionNote(sec section) string { return sectionNotes(sec)[0] }
 
 // searchCount is how many things a search shows, each once.
 func searchCount(secs []section) string {
@@ -575,7 +619,7 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 		if sec.Away {
 			style = dim.Bold(true)
 		}
-		add("", m.rule(sec.Title, style, sectionNote(sec)))
+		add("", m.rule(sec.Title, style, sectionNotes(sec)...))
 		for j, e := range sec.Entries {
 			add(e.key(), m.entryLine(e, e.key() == sel))
 			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].stream != e.stream) {
