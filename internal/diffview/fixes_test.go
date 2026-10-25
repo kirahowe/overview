@@ -1,11 +1,13 @@
 package diffview
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rivo/uniseg"
 )
 
 // s pressed twice before the first send lands sends once: the notes are
@@ -214,5 +216,34 @@ func TestANoteKeepsTheHunkHeader(t *testing.T) {
 		if !strings.Contains(before, "@@ -0,0 +1,1 @@") || !strings.Contains(after, "@@ -0,0 +1,1 @@") {
 			t.Fatalf("w %d: the hunk header went:\nbefore\n%s\nafter\n%s", w, before, after)
 		}
+	}
+}
+
+// rowText is a row's text as drawn.
+func rowText(r []Seg) string {
+	var b strings.Builder
+	for _, s := range r {
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+// A long note in the status line is cut before the counts, with room
+// between them, and the counts stay whole.
+func TestALongNoteLeavesTheCountsAlone(t *testing.T) {
+	f, cfg := newTest(t, twoFiles)
+	m := open(t, f, cfg, 120, 30)
+	m = press(t, m, "c")
+	m = typeText(t, m, "a note")
+	m = press(t, m, "enter")
+	m = m.complain(errors.New("not sent: the session is not at its prompt: " + strings.Repeat("it is busy with something else ", 4)))
+	row := rowText(m.statusRow())
+	if !strings.Contains(row, "…  1 open · 1 to send  ? keys ") || uniseg.StringWidth(row) != 120 {
+		t.Fatalf("status line %q", row)
+	}
+	// Too narrow for the keys hint, the counts keep their room.
+	m.w = 25
+	if row := rowText(m.statusRow()); !strings.HasSuffix(row, "…  1 open · 1 to send ") {
+		t.Fatalf("narrow status line %q", row)
 	}
 }

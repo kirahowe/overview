@@ -583,18 +583,31 @@ func (m model) statusRow() []Seg {
 	if sum.Waiting > 0 {
 		right = append(right, fmt.Sprintf("%d waiting", sum.Waiting))
 	}
-	r := strings.Join(right, " · ") + "  ? keys "
 	// A note takes the place of the scope, which it matters more than.
 	leftSt := st
 	if m.note != "" {
 		left = " " + plain(m.note, st).Text
 		leftSt.Bold = m.warn
 	}
-	rw := uniseg.StringWidth(r)
-	lw := max(0, m.w-rw)
-	leftSegs := pad([]Seg{{truncate(left, lw), leftSt}}, lw, st)
-	return pad(append(leftSegs, Seg{truncate(r, m.w-lw), key}), m.w, st)
+	// The counts keep their room and a gap before them: the left side is
+	// cut to what is left, and the keys hint goes first when it does not
+	// fit beside them.
+	counts := strings.Join(right, " · ")
+	r := counts + "  ? keys "
+	if counts == "" {
+		r = "? keys "
+	} else if uniseg.StringWidth(r)+statusGap > m.w {
+		r = counts + " "
+	}
+	rw := min(uniseg.StringWidth(r), m.w)
+	lw := max(0, m.w-rw-statusGap)
+	leftSegs := pad([]Seg{{truncate(left, lw), leftSt}}, m.w-rw, st)
+	return pad(append(leftSegs, Seg{truncate(r, rw), key}), m.w, st)
 }
+
+// statusGap is the least room between the status line's left side and
+// its counts.
+const statusGap = 2
 
 // short is a commit id cut to twelve characters.
 func short(id string) string {

@@ -850,3 +850,53 @@ func TestNotesKeepTheHunkHeaderProperty(t *testing.T) {
 		}
 	})
 }
+
+// The status line's counts are always whole, with a gap before them and
+// only the keys hint or a space after, whatever note is shown, as long as
+// the counts and the gap fit the width at all.
+func TestStatusCountsProperty(t *testing.T) {
+	theme := testTheme(t)
+	rapid.Check(t, func(t *rapid.T) {
+		files := genFiles(t)
+		m := model{pal: newPalette(theme), rev: review.Fold(genEvents(t, files)), mark: -1}
+		m.w = rapid.IntRange(1, 250).Draw(t, "w")
+		m.opts.split = rapid.Bool().Draw(t, "split")
+		if rapid.Bool().Draw(t, "noted") {
+			m.note, m.warn = genPiecesText(t, "note"), rapid.Bool().Draw(t, "warn")
+		}
+		sum := review.Summarise(m.rev)
+		var parts []string
+		for _, p := range []struct {
+			n    int
+			what string
+		}{{sum.Open, "open"}, {sum.Unsent, "to send"}, {sum.Waiting, "waiting"}} {
+			if p.n > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", p.n, p.what))
+			}
+		}
+		row := m.statusRow()
+		text := ""
+		for _, s := range row {
+			text += s.Text
+		}
+		if got := width(row); got != m.w {
+			t.Fatalf("status line is %d cells at %d: %q", got, m.w, text)
+		}
+		counts := strings.Join(parts, " · ")
+		if counts == "" || uniseg.StringWidth(counts)+1+statusGap > m.w {
+			return
+		}
+		var rest string
+		switch {
+		case strings.HasSuffix(text, counts+"  ? keys "):
+			rest = strings.TrimSuffix(text, counts+"  ? keys ")
+		case strings.HasSuffix(text, counts+" "):
+			rest = strings.TrimSuffix(text, counts+" ")
+		default:
+			t.Fatalf("the counts %q are not whole at the end of %q", counts, text)
+		}
+		if !strings.HasSuffix(rest, strings.Repeat(" ", statusGap)) {
+			t.Fatalf("no gap before the counts in %q", text)
+		}
+	})
+}
