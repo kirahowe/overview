@@ -1603,6 +1603,35 @@ func TestWrapStaysWithinItsWidth(t *testing.T) {
 	})
 }
 
+// wrap never splits a word that fits on a line of its own, and splits a
+// wider one after a slash when one fits on the line.
+func TestPropWrapSplitsOnlyWordsWiderThanTheLine(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		words := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,8}(/[a-z]{1,8}){0,3}`), 1, 8).Draw(t, "words")
+		w := rapid.IntRange(1, 30).Draw(t, "w")
+		lines := wrap(strings.Join(words, " "), w)
+		var pieces []string
+		for _, l := range lines {
+			pieces = append(pieces, strings.Fields(l)...)
+		}
+		for _, word := range words {
+			if len(word) <= w && !slices.Contains(pieces, word) {
+				t.Fatalf("%q fits in %d but was split: %q", word, w, lines)
+			}
+		}
+		for _, p := range pieces {
+			// A piece cut from a wider word ends at a slash unless no
+			// slash fit in the line it was cut to.
+			if len(p) == w || strings.HasSuffix(p, "/") || slices.Contains(words, p) {
+				continue
+			}
+			if !slices.ContainsFunc(words, func(word string) bool { return strings.HasSuffix(word, p) }) {
+				t.Fatalf("piece %q is neither a word, a cut at a slash, a full line nor a word's end: %q", p, lines)
+			}
+		}
+	})
+}
+
 // At any size the list works at, scrolling through the help shows every
 // one of its lines, and no line of the box is wider than the pane.
 func TestPropHelpScrollsToEveryLine(t *testing.T) {

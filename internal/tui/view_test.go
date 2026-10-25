@@ -418,3 +418,27 @@ func TestTheHelpColumnFitsItsWidestLine(t *testing.T) {
 		t.Fatalf("two columns at %d, under 2*helpCol+6 inside the box", m.w)
 	}
 }
+
+// wrap breaks at spaces and keeps a word that fits whole, and breaks a
+// path wider than the line after a slash, never mid-name when a slash
+// fits.
+func TestWrapKeepsWordsWholeAndBreaksPathsAtSlashes(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		w    int
+		want []string
+	}{
+		{"No sessions in …/qa2/work/alpha. c starts one.", 16, []string{"No sessions in", "…/qa2/work/", "alpha. c starts", "one."}},
+		{"enter adds ~/long/nonexistent if it is a directory.", 20, []string{"enter adds", "~/long/nonexistent", "if it is a", "directory."}},
+		{"no project at /tmp/long/nonexistent", 8, []string{"no", "project", "at", "/tmp/", "long/", "nonexist", "ent"}},
+		{"  indented text", 20, []string{"  indented text"}},
+	} {
+		got := wrap(c.s, c.w)
+		for i := range got {
+			got[i] = strings.TrimRight(got[i], " ")
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("wrap(%q, %d) = %q, want %q", c.s, c.w, got, c.want)
+		}
+	}
+}

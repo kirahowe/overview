@@ -1623,22 +1623,95 @@ func pad(lines []string, h int) []string {
 	return lines[:h]
 }
 
-// wrap breaks s, which may be styled, into lines w cells wide, at spaces
-// where it can, each padded to w. It is the one word wrap in the view. A
-// line the wrapper leaves too wide, as ansi.Wrap does when it keeps a
-// hyphen with the letter before it, is broken again at w, so no line is
-// ever wider than w.
+// wrap breaks s, which may be styled, into lines w cells wide, each
+// padded to w. It is the one word wrap in the view. It breaks at spaces,
+// and a word that fits on a line of its own is never split: it moves to
+// the next line whole. Only a word wider than the line is broken, after
+// its last path separator that fits, else at w, so a path splits at a
+// slash where it can. No line is ever wider than w.
 func wrap(s string, w int) []string {
 	if w <= 0 {
 		return nil
 	}
 	var out []string
-	for _, l := range strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n") {
-		if ansi.StringWidth(l) <= w {
-			out = append(out, l)
+	for _, para := range strings.Split(s, "\n") {
+		for _, r := range wrapRanges(ansi.Strip(para), w) {
+			out = append(out, fit(ansi.Cut(para, r[0], r[1]), w))
+		}
+	}
+	return out
+}
+
+// wrapRanges is where wrap cuts plain text: the cells [from, to) of each
+// line. A line keeps the spaces between its words and loses those it
+// breaks at. The first line keeps the text's indent when it fits.
+func wrapRanges(text string, w int) [][2]int {
+	var gs []string
+	var at []int // the cell each grapheme starts at, and one past the end
+	cell := 0
+	g := uniseg.NewGraphemes(text)
+	for g.Next() {
+		gs, at = append(gs, g.Str()), append(at, cell)
+		cell += ansi.StringWidth(g.Str())
+	}
+	at = append(at, cell)
+
+	var out [][2]int
+	from, to := -1, -1 // the line so far, empty while from < 0
+	flush := func() {
+		if from >= 0 {
+			out = append(out, [2]int{from, to})
+		}
+		from, to = -1, -1
+	}
+	first := true
+	for i := 0; i < len(gs); {
+		if gs[i] == " " {
+			i++
 			continue
 		}
-		out = append(out, strings.Split(ansi.Hardwrap(l, w, true), "\n")...)
+		j := i
+		for j < len(gs) && gs[j] != " " {
+			j++
+		}
+		start, end := at[i], at[j]
+		switch {
+		case from >= 0 && end-from <= w:
+			to = end
+		case end-start <= w:
+			flush()
+			from, to = start, end
+			if first && end <= w {
+				from = 0 // the indent
+			}
+		default:
+			flush()
+			// Too wide for any line: cut it into pieces, each ending
+			// after the last slash that fits, else at w.
+			k := i
+			for at[j]-at[k] > w {
+				e := k + 1
+				for e < j && at[e+1]-at[k] <= w {
+					e++
+				}
+				cut := e
+				for c := e; c > k+1; c-- {
+					if gs[c-1] == "/" {
+						cut = c
+						break
+					}
+				}
+				out = append(out, [2]int{at[k], at[cut]})
+				k = cut
+			}
+			from, to = at[k], end
+		}
+		first = false
+		i = j
+	}
+	flush()
+	if len(out) == 0 {
+		out = append(out, [2]int{0, 0})
 	}
 	return out
 }
