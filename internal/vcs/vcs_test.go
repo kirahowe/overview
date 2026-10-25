@@ -527,7 +527,8 @@ func TestRealGitColorAlways(t *testing.T) {
 	}
 }
 
-// A failed read says why in a few words, never with git's whole message.
+// A failed read says why in a few words, never with git's whole message,
+// and tells an empty repository from a start commit that is gone.
 func TestShort(t *testing.T) {
 	for _, c := range []struct {
 		err  error
@@ -535,7 +536,13 @@ func TestShort(t *testing.T) {
 	}{
 		{errors.New("git rev-parse --verify: exit status 128: fatal: not a git repository (or any of the parent directories): .git"), "not a git repository"},
 		{errors.New("jj --no-pager --ignore-working-copy: exit status 1: Error: There is no jj repo in \".\""), "not a jj repository"},
-		{errors.New("git rev-parse --verify: exit status 128: fatal: Needed a single revision"), "no commits yet"},
+		{&RevError{"HEAD", errors.New("git rev-parse --verify: exit status 128: fatal: Needed a single revision")}, "no commits yet"},
+		{&RevError{"@-", errors.New("@- names no commit")}, "no commits yet"},
+		{&RevError{"abc123", errors.New("git diff: exit status 128: fatal: bad object abc123")}, "its start commit is gone"},
+		{&RevError{"abc123", errors.New("git rev-parse --verify: exit status 128: fatal: Needed a single revision")}, "its start commit is gone"},
+		{&RevError{"abc123", errors.New("jj --no-pager --color=never: exit status 1: Error: Revision `abc123` doesn't exist")}, "its start commit is gone"},
+		// Without the revision, git's message alone says nothing of which.
+		{errors.New("git rev-parse --verify: exit status 128: fatal: Needed a single revision"), "git rev-parse --verify: exit status 128: fatal: Needed a single revision"},
 		{fmt.Errorf("git: %w", exec.ErrNotFound), "git or jj is not installed"},
 		{errors.New("first line\nsecond"), "first line"},
 		{nil, ""},
@@ -543,5 +550,22 @@ func TestShort(t *testing.T) {
 		if got := Short(c.err); got != c.want {
 			t.Errorf("Short(%v) = %q, want %q", c.err, got, c.want)
 		}
+	}
+}
+
+// Resolve and Diff say which revision failed, so Short can tell HEAD from
+// a commit id.
+func TestRevisionsFailAsRevErrors(t *testing.T) {
+	fail := func(dir string, args ...string) ([]byte, error) { return nil, errors.New("fatal: bad object") }
+	r := Repo{Root: "/r", Kind: Git}
+	if _, err := r.Uncommitted(fail); Short(err) != "no commits yet" {
+		t.Errorf("HEAD: %q", Short(err))
+	}
+	if _, err := r.Diff(fail, ReadUntracked, "abc123"); Short(err) != "its start commit is gone" {
+		t.Errorf("a base: %q", Short(err))
+	}
+	empty := func(dir string, args ...string) ([]byte, error) { return nil, nil }
+	if _, err := (Repo{Root: "/r", Kind: JJ}).Resolve(empty, "@-"); Short(err) != "no commits yet" {
+		t.Errorf("@- with no commit: %q", Short(err))
 	}
 }

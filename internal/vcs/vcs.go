@@ -151,13 +151,13 @@ func (r Repo) Diff(run Runner, read func(path string) (Untracked, error), base s
 	if r.Kind == JJ {
 		out, err := run(r.Root, jjDiffArgs(base)...)
 		if err != nil {
-			return nil, err
+			return nil, &RevError{base, err}
 		}
 		return diff.Parse(string(out))
 	}
 	out, err := run(r.Root, gitDiffArgs(base)...)
 	if err != nil {
-		return nil, err
+		return nil, &RevError{base, err}
 	}
 	files, err := diff.Parse(string(out))
 	if err != nil {
@@ -210,19 +210,30 @@ func (r Repo) Resolve(run Runner, rev string) (string, error) {
 	if err := checkRev(rev); err != nil {
 		return "", err
 	}
+	args := []string{"git", "rev-parse", "--verify", rev + "^{commit}"}
 	if r.Kind == JJ {
-		out, err := run(r.Root, jjResolveArgs(rev)...)
-		if err != nil {
-			return "", err
+		args = jjResolveArgs(rev)
+	}
+	out, err := run(r.Root, args...)
+	if err == nil {
+		var id string
+		if id, err = oneCommit(string(out), rev); err == nil {
+			return id, nil
 		}
-		return oneCommit(string(out), rev)
 	}
-	out, err := run(r.Root, "git", "rev-parse", "--verify", rev+"^{commit}")
-	if err != nil {
-		return "", err
-	}
-	return oneCommit(string(out), rev)
+	return "", &RevError{rev, err}
 }
+
+// RevError is a failure to read the revision Rev, a symbol such as HEAD
+// or a commit id, so Short can tell an empty repository from a commit
+// that is gone.
+type RevError struct {
+	Rev string
+	Err error
+}
+
+func (e *RevError) Error() string { return e.Err.Error() }
+func (e *RevError) Unwrap() error { return e.Err }
 
 func jjResolveArgs(rev string) []string {
 	return []string{"jj", "--no-pager", "--ignore-working-copy", "log", "--no-graph", "-r", rev, "-T", `commit_id ++ "\n"`}
@@ -329,7 +340,10 @@ func gitEmptyTreeArgs() []string { return []string{"git", "hash-object", "-t", "
 
 // Short says in a few words why reading a repository failed, for a card
 // with no room for git's or jj's own message: the known failures by name,
-// and anything else by the first line of its error.
+// and anything else by the first line of its error. A revision that names
+// nothing is an empty repository when it was the working copy's parent,
+// HEAD or @-, and otherwise a commit that is gone: a workstream's start,
+// rebased away, abandoned or collected.
 func Short(err error) string {
 	if err == nil {
 		return ""
@@ -341,15 +355,25 @@ func Short(err error) string {
 	for _, k := range []struct{ in, say string }{
 		{"not a git repository", "not a git repository"},
 		{"There is no jj repo", "not a jj repository"},
-		{"unknown revision", "no commits yet"},
-		{"ambiguous argument 'HEAD'", "no commits yet"},
-		{"Needed a single revision", "no commits yet"},
-		{"does not have any commits yet", "no commits yet"},
 		{"dubious ownership", "git does not trust this repository's owner"},
-		{"names no commit", "no commits yet"},
+		{"does not have any commits yet", "no commits yet"},
 	} {
 		if strings.Contains(msg, k.in) {
 			return k.say
+		}
+	}
+	var re *RevError
+	if errors.As(err, &re) {
+		for _, gone := range []string{"unknown revision", "ambiguous argument", "Needed a single revision", "names no commit",
+			"bad object", "bad revision", "doesn't exist"} {
+			if !strings.Contains(msg, gone) {
+				continue
+			}
+			switch re.Rev {
+			case "HEAD", "@", "@-":
+				return "no commits yet"
+			}
+			return "its start commit is gone"
 		}
 	}
 	line, _, _ := strings.Cut(msg, "\n")
