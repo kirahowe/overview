@@ -1851,3 +1851,43 @@ func TestTheScrolledHelpKeepsItsBorderWhole(t *testing.T) {
 		t.Errorf("the legend %q", text)
 	}
 }
+
+// A terminal's row gives up its directory before its name: either the
+// whole name shows, or no directory does. A directory that shows keeps
+// its end. No row is wider than the pane.
+func TestPropATerminalKeepsItsNameBeforeItsDirectory(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		w := rapid.IntRange(2, 120).Draw(t, "w")
+		m = update(m, tea.WindowSizeMsg{Width: w, Height: 10})
+		name := rapid.StringMatching(`[a-z][a-z 0-9]{0,30}`).Draw(t, "name")
+		dir := rapid.StringMatching(`[A-Z]{1,8}(/[a-z0-9-]{1,20}){1,5}`).Draw(t, "dir")
+		text := fg(pal.Text)
+		row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {name, text}}, []seg{{dir, dim}}, true, false))
+		if ansi.StringWidth(row) != w {
+			t.Fatalf("the row %q is %d wide in %d", row, ansi.StringWidth(row), w)
+		}
+		showsDir := strings.ContainsAny(row, "ABCDEFGHIJKLMNOPQRSTUVWXYZ/")
+		if showsDir && !strings.Contains(row, "$ "+name+" ") {
+			t.Fatalf("the row %q cuts the name %q but shows the directory", row, name)
+		}
+		if showsDir {
+			tail := strings.TrimSpace(row[strings.LastIndex(row, " "):])
+			if !strings.HasSuffix(dir, strings.TrimPrefix(tail, "…")) {
+				t.Fatalf("the row %q shows %q, not an end of %q", row, tail, dir)
+			}
+		}
+	})
+}
+
+func TestATerminalRowKeepsItsName(t *testing.T) {
+	m := newTestModel(t)
+	m = update(m, tea.WindowSizeMsg{Width: 40, Height: 10})
+	dir := "/private/tmp/claude-501/30e99375-3942-48f0/work/beta"
+	row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {"sleep 600", fg(pal.Text)}}, []seg{{dir, dim}}, true, false))
+	if !strings.Contains(row, "$ sleep 600 ") || !strings.HasSuffix(strings.TrimSpace(row), "/work/beta") {
+		t.Fatalf("row %q", row)
+	}
+}

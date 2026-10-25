@@ -379,13 +379,18 @@ func cutSegs(ss []seg, w int) []seg {
 // line renders one line of the list: left at the left edge and right at
 // the right one, cut to fit. A right side that does not fit beside at
 // least a few cells of the left goes, unless shrink lets it lose its
-// start instead, as a directory can. The selected line gets the cursor's
-// bar and background.
+// start instead, as a directory can. A right side that shrinks gives way
+// to the whole left first, so a terminal keeps its name and loses its
+// directory, and the name is cut only once the directory has gone. The
+// selected line gets the cursor's bar and background.
 func (m model) line(left, right []seg, shrink, selected bool) string {
 	cw := m.contentWidth()
 	lw, rw := segsWidth(left), segsWidth(right)
 	if rw > 0 {
 		room := cw - min(lw, 6) - 1
+		if shrink {
+			room = cw - lw - 1
+		}
 		switch {
 		case rw <= room:
 		case shrink && room >= 4:
