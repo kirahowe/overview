@@ -772,22 +772,38 @@ func follow(ps []place, stage, sel string) (string, bool) {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// reduce: the message changes the inputs or the UI state. The World is
+	// derived when settle first asks for it, once per generation.
 	before := m
 	next, cmd := m.update(msg)
-	m = next.(model)
+	m = next.(model).settle(before)
+	m, effects := m.effects()
+	return m, tea.Batch(cmd, effects)
+}
+
+// settle makes the UI state valid for the list as it is now: the cursor
+// on an entry that is shown, the list scrolled only as far as the cursor
+// needs, and the issues card's cursor on an issue it lists.
+func (m model) settle(before model) model {
 	m = m.keepCursor(before)
-	// Keep the list where it is, scrolled only as far as the cursor needs.
 	if m.w > 0 && m.screen == sessionsScreen {
 		col := m.shownColumn()
 		m.listTop, m.agentsTop = col.projTop, col.agentsTop
 	}
+	return m.keepCockpit()
+}
+
+// effects compares what tmux and the reads should be with what is in
+// flight, and sends the differences as Cmds: the list's place and the
+// holder, the selected session's turns, the cockpit's and the task
+// picker's reads, and the panes' rules.
+func (m model) effects() (model, tea.Cmd) {
 	m, stage := m.restage()
 	m, turns := m.askTurns()
-	m = m.keepCockpit()
 	m, reads := m.cockpitReads()
 	m, taskRead := m.taskReads()
 	m, frame := m.reframe()
-	return m, tea.Batch(cmd, stage, turns, reads, taskRead, frame)
+	return m, tea.Batch(stage, turns, reads, taskRead, frame)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
