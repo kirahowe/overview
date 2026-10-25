@@ -395,3 +395,26 @@ func TestAHeadingNoteGivesWayToTheName(t *testing.T) {
 		}
 	}
 }
+
+// In two columns every help entry is drawn whole, and the second column
+// starts one cell after the first's widest line.
+func TestTheHelpColumnFitsItsWidestLine(t *testing.T) {
+	m := newTestModel(t)
+	m = update(m, tea.WindowSizeMsg{Width: 2*helpCol + 10, Height: 80})
+	if !m.helpWide() {
+		t.Fatalf("one column at %d", m.w)
+	}
+	body := ansi.Strip(strings.Join(m.helpBody(), "\n"))
+	left, right := helpSections()
+	for _, s := range append(left, right...) {
+		for _, e := range s.entries {
+			if !strings.Contains(body, e.what) {
+				t.Errorf("%q is cut from the help", e.what)
+			}
+		}
+	}
+	m = update(m, tea.WindowSizeMsg{Width: 2*helpCol + 5, Height: 80})
+	if m.helpWide() {
+		t.Fatalf("two columns at %d, under 2*helpCol+6 inside the box", m.w)
+	}
+}

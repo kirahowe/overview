@@ -1397,8 +1397,19 @@ func helpSections() (left, right []helpSection) {
 	return left, right
 }
 
-// helpCol is the width of the help's first column when two sit side by side.
-const helpCol = 44
+// helpCol is the width of the help's first column when two sit side by
+// side: its widest line and one cell more, measured from the entries so a
+// longer one cannot be cut.
+var helpCol = func() int {
+	left, _ := helpSections()
+	w := 0
+	for _, s := range left {
+		for _, e := range s.entries {
+			w = max(w, ansi.StringWidth(fmt.Sprintf("  %-9s %s", e.keys, e.what)))
+		}
+	}
+	return w + 1
+}()
 
 // helpWide says whether the help has two columns: the pane has room.
 func (m model) helpWide() bool { return m.w-4 >= 2*helpCol+6 }
