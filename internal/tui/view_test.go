@@ -425,9 +425,9 @@ func TestTheHelpColumnFitsItsWidestLine(t *testing.T) {
 	}
 }
 
-// wrap breaks at spaces and keeps a word that fits whole, and breaks a
-// path wider than the line after a slash, never mid-name when a slash
-// fits.
+// wrap breaks at spaces and after hyphens and keeps a word that fits
+// whole, breaks a path wider than the line after a slash, never mid-name
+// when a slash fits, and measures a tab as the terminal draws it.
 func TestWrapKeepsWordsWholeAndBreaksPathsAtSlashes(t *testing.T) {
 	for _, c := range []struct {
 		s    string
@@ -436,7 +436,13 @@ func TestWrapKeepsWordsWholeAndBreaksPathsAtSlashes(t *testing.T) {
 	}{
 		{"No sessions in …/qa2/work/alpha. c starts one.", 16, []string{"No sessions in", "…/qa2/work/", "alpha. c starts", "one."}},
 		{"enter adds ~/long/nonexistent if it is a directory.", 20, []string{"enter adds", "~/long/nonexistent", "if it is a", "directory."}},
-		{"no project at /tmp/long/nonexistent", 8, []string{"no", "project", "at", "/tmp/", "long/", "nonexist", "ent"}},
+		{"no project at /tmp/long/nonexistent", 8, []string{"no", "project", "at /tmp/", "long/", "nonexist", "ent"}},
+		// A tab draws to the next stop of four, and is measured so.
+		{"a\tb\tccc dddd", 6, []string{"a   b", "ccc", "dddd"}},
+		// A hyphen is a break point, after it.
+		{"keep the list-width", 15, []string{"keep the list-", "width"}},
+		// A glyph wider than the line draws as one ellipsis per word.
+		{"日本語", 1, []string{"…"}},
 		{"  indented text", 20, []string{"  indented text"}},
 	} {
 		got := wrap(c.s, c.w)

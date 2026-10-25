@@ -1603,30 +1603,71 @@ func TestWrapStaysWithinItsWidth(t *testing.T) {
 	})
 }
 
-// wrap never splits a word that fits on a line of its own, and splits a
-// wider one after a slash when one fits on the line.
-func TestPropWrapSplitsOnlyWordsWiderThanTheLine(t *testing.T) {
+// wrap draws no line wider than w, tabs, wide glyphs, indents and
+// hyphens included, loses no text but the spaces it breaks at, and breaks
+// a line only where the next word, or the next part of a hyphenated one,
+// does not fit on it: at the last break point that fits.
+func TestPropWrapBreaksAtTheLastPointThatFits(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		words := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,8}(/[a-z]{1,8}){0,3}`), 1, 8).Draw(t, "words")
+		word := rapid.OneOf(
+			rapid.StringMatching(`[a-z]{1,9}`),
+			rapid.StringMatching(`[a-z]{1,5}-[a-z]{1,5}`),
+			rapid.StringMatching(`[a-z]{1,6}(/[a-z]{1,6}){1,3}`),
+			rapid.SampledFrom([]string{"日本", "語", "❤️", "e\u0301", "👍🏽x"}),
+		)
+		words := rapid.SliceOfN(word, 1, 10).Draw(t, "words")
+		// Single spaces let the test measure where a break had to be;
+		// tabs and runs of spaces only have to stay within the width.
+		single := rapid.Bool().Draw(t, "single")
+		seps := make([]string, len(words))
+		for i := range seps {
+			seps[i] = " "
+			if !single {
+				seps[i] = rapid.SampledFrom([]string{" ", "  ", "\t", " \t"}).Draw(t, "sep")
+			}
+		}
+		indent := rapid.SampledFrom([]string{"", "  ", "\t"}).Draw(t, "indent")
+		text := indent
+		for i, wd := range words {
+			if i > 0 {
+				text += seps[i]
+			}
+			text += wd
+		}
 		w := rapid.IntRange(1, 30).Draw(t, "w")
-		lines := wrap(strings.Join(words, " "), w)
-		var pieces []string
+		lines := wrap(text, w)
+		var plain []string
 		for _, l := range lines {
-			pieces = append(pieces, strings.Fields(l)...)
-		}
-		for _, word := range words {
-			if len(word) <= w && !slices.Contains(pieces, word) {
-				t.Fatalf("%q fits in %d but was split: %q", word, w, lines)
+			if ansi.StringWidth(l) > w || strings.ContainsAny(l, "\t\x00") {
+				t.Fatalf("line %q draws wider than %d, or holds a tab", l, w)
 			}
+			plain = append(plain, strings.TrimRight(l, " "))
 		}
-		for _, p := range pieces {
-			// A piece cut from a wider word ends at a slash unless no
-			// slash fit in the line it was cut to.
-			if len(p) == w || strings.HasSuffix(p, "/") || slices.Contains(words, p) {
-				continue
+		if len(plain) > 1 && plain[len(plain)-1] == "" {
+			t.Fatalf("an empty last line: %q", plain)
+		}
+		if strings.Contains(strings.Join(plain, ""), "…") {
+			return // a glyph too wide for the line, drawn as an ellipsis
+		}
+		if got, want := strings.Join(strings.Fields(strings.Join(plain, "")), ""), strings.Join(strings.Fields(text), ""); got != want {
+			t.Fatalf("wrapped to %q, lost text of %q", plain, text)
+		}
+		// The next line's first part did not fit on the line before it.
+		for i := 0; single && i+1 < len(plain); i++ {
+			cur, next := plain[i], strings.TrimLeft(plain[i+1], " ")
+			if ansi.StringWidth(cur) == w || strings.HasSuffix(cur, "/") {
+				continue // a cut inside a word too wide for any line
 			}
-			if !slices.ContainsFunc(words, func(word string) bool { return strings.HasSuffix(word, p) }) {
-				t.Fatalf("piece %q is neither a word, a cut at a slash, a full line nor a word's end: %q", p, lines)
+			part, _, _ := strings.Cut(next, " ")
+			if k := strings.Index(part, "-"); k > 0 && k < len(part)-1 {
+				part = part[:k+1]
+			}
+			gap := 1
+			if strings.HasSuffix(cur, "-") && !strings.HasSuffix(cur, " -") {
+				gap = 0
+			}
+			if ansi.StringWidth(cur)+gap+ansi.StringWidth(part) <= w && ansi.StringWidth(part) <= w {
+				t.Fatalf("%q would fit after %q in %d: %q", part, cur, w, plain)
 			}
 		}
 	})

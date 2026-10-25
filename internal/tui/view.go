@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -1785,7 +1787,7 @@ func keepEnd(s string, w int) string {
 
 // fit cuts s to w cells and pads it to exactly w, so panes line up.
 func fit(s string, w int) string {
-	s = ansi.Truncate(s, w, "…")
+	s = ansi.Truncate(drawable(s), w, "…")
 	return s + strings.Repeat(" ", max(w-ansi.StringWidth(s), 0))
 }
 
@@ -1797,22 +1799,99 @@ func pad(lines []string, h int) []string {
 }
 
 // wrap breaks s, which may be styled, into lines w cells wide, each
-// padded to w. It is the one word wrap in the view. It breaks at spaces,
-// and a word that fits on a line of its own is never split: it moves to
-// the next line whole. Only a word wider than the line is broken, after
-// its last path separator that fits, else at w, so a path splits at a
-// slash where it can. No line is ever wider than w.
+// padded to w. It is the one word wrap in the view. It breaks at spaces
+// and after hyphens, at the last of them that fits, and a word that fits
+// on a line of its own is never split: it moves to the next line whole.
+// Only a word wider than the line is broken, after its last path
+// separator that fits, else at w, so a path splits at a slash where it
+// can. Tabs are expanded and other control characters dropped first, as
+// drawable does, so no line is ever drawn wider than w.
 func wrap(s string, w int) []string {
 	if w <= 0 {
 		return nil
 	}
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
+		para = drawable(para)
 		for _, r := range wrapRanges(ansi.Strip(para), w) {
 			out = append(out, fit(ansi.Cut(para, r[0], r[1]), w))
 		}
 	}
 	return out
+}
+
+// tabStop is how far apart wrap and fit set tab stops, as lipgloss does.
+const tabStop = 4
+
+// drawable is styled s as the terminal draws it, so it can be measured:
+// a tab becomes the spaces to the next stop, and other control
+// characters, which draw nothing but move the cursor or nothing at all,
+// go. Escape sequences, its styles, are kept whole. printable does the
+// same for typed text, which has no styles.
+func drawable(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 0x20 && c != 0x1b) || c == 0x7f || c == 0xc2 {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	col := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == 0x1b {
+			n := escLen(s[i:])
+			b.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == '\t':
+			n := tabStop - col%tabStop
+			b.WriteString(strings.Repeat(" ", n))
+			col += n
+		case unicode.IsControl(r):
+		default:
+			b.WriteString(s[i : i+size])
+			col += ansi.StringWidth(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// escLen is the length of the escape sequence s starts with: a CSI up to
+// its final byte, an OSC, DCS, APC, PM or SOS up to its terminator, or
+// ESC and the one byte after it.
+func escLen(s string) int {
+	if len(s) < 2 {
+		return len(s)
+	}
+	switch s[1] {
+	case '[':
+		for i := 2; i < len(s); i++ {
+			if s[i] >= 0x40 && s[i] <= 0x7e {
+				return i + 1
+			}
+		}
+		return len(s)
+	case ']', 'P', '_', '^', 'X':
+		for i := 2; i < len(s); i++ {
+			if s[i] == 0x07 {
+				return i + 1
+			}
+			if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
+				return i + 2
+			}
+		}
+		return len(s)
+	}
+	return 2
 }
 
 // isASCII says whether s is printable ASCII, a cell to a byte.
@@ -1825,9 +1904,12 @@ func isASCII(s string) bool {
 	return true
 }
 
-// wrapRanges is where wrap cuts plain text: the cells [from, to) of each
-// line. A line keeps the spaces between its words and loses those it
-// breaks at. The first line keeps the text's indent when it fits.
+// wrapRanges is where wrap cuts plain text, which has no control
+// characters: the cells [from, to) of each line. Words are split at
+// spaces, and after each hyphen inside one, and a line takes words while
+// the next fits. A line keeps the spaces between its words and loses
+// those it breaks at. The first line keeps the text's indent when it
+// fits.
 func wrapRanges(text string, w int) [][2]int {
 	var gs []string
 	var at []int // the cell each grapheme starts at, and one past the end
@@ -1860,9 +1942,14 @@ func wrapRanges(text string, w int) [][2]int {
 			i++
 			continue
 		}
+		// The next token: up to a space, or just after a hyphen that has
+		// more of the word after it.
 		j := i
 		for j < len(gs) && gs[j] != " " {
 			j++
+			if gs[j-1] == "-" && j < len(gs) && gs[j] != " " && j-1 > i {
+				break
+			}
 		}
 		start, end := at[i], at[j]
 		switch {
@@ -1875,11 +1962,28 @@ func wrapRanges(text string, w int) [][2]int {
 				from = 0 // the indent
 			}
 		default:
-			flush()
 			// Too wide for any line: cut it into pieces, each ending
-			// after the last slash that fits, else at w.
+			// after the last slash that fits, else at w. The first piece
+			// goes on the line so far when it ends at a slash that fits
+			// there. A grapheme wider than the line cannot be drawn, so
+			// it and the rest of the token make one piece, which fit
+			// draws as an ellipsis.
 			k := i
-			for at[j]-at[k] > w {
+			if from >= 0 {
+				for c := j - 1; c > i; c-- {
+					if gs[c-1] == "/" && at[c]-from <= w {
+						to, k = at[c], c
+						break
+					}
+				}
+			}
+			flush()
+			for k < j && at[j]-at[k] > w {
+				if at[k+1]-at[k] > w {
+					out = append(out, [2]int{at[k], at[j]})
+					k = j
+					break
+				}
 				e := k + 1
 				for e < j && at[e+1]-at[k] <= w {
 					e++
@@ -1894,7 +1998,9 @@ func wrapRanges(text string, w int) [][2]int {
 				out = append(out, [2]int{at[k], at[cut]})
 				k = cut
 			}
-			from, to = at[k], end
+			if k < j {
+				from, to = at[k], end
+			}
 		}
 		first = false
 		i = j
