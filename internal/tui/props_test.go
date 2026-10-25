@@ -1891,3 +1891,25 @@ func TestATerminalRowKeepsItsName(t *testing.T) {
 		t.Fatalf("row %q", row)
 	}
 }
+
+// A card is left out only when there is no room for it: when the cards
+// shown leave fewer than minCard lines free. A shortened card fills what
+// is left.
+func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		rows := genCards(t)
+		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
+		_, _, places := layoutCards(rows, w, h, "")
+		total := 0
+		for _, r := range rows {
+			total += len(r)
+		}
+		used := 0
+		for _, p := range places {
+			used = max(used, p.r.y+p.r.h)
+		}
+		if len(places) < total && h-used >= minCard {
+			t.Fatalf("%d of %d cards shown at %dx%d with %d lines free", len(places), total, w, h, h-used)
+		}
+	})
+}

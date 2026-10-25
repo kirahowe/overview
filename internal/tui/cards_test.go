@@ -248,6 +248,21 @@ func TestTasksCard(t *testing.T) {
 	}
 }
 
+// A card shortened to fit keeps the line its at names, such as the issues
+// card's cursor, and says how many lines it leaves out.
+func TestAShortenedCardKeepsItsCursor(t *testing.T) {
+	var others []issues.Issue
+	for i := 1; i <= 6; i++ {
+		others = append(others, issues.Issue{ID: i, Title: fmt.Sprint("issue ", i), Status: issues.Ready})
+	}
+	others = append(others, issues.Issue{ID: 9, Title: "the last", Status: issues.InProgress})
+	lines, _, places := layoutCards([][]card{{issuesCard(others, nil, true, 3, "")}}, 60, 4, issuesPanel)
+	text := ansi.Strip(strings.Join(lines, "\n"))
+	if len(places) != 1 || !strings.Contains(text, "▸ ") || !strings.Contains(text, "more") {
+		t.Fatalf("the shortened issues card:\n%s", text)
+	}
+}
+
 func TestLayoutCardsDropsWhatDoesNotFit(t *testing.T) {
 	box := func(name string, n int) card {
 		return card{title: name, body: func(int) []string { return make([]string, n) }}
@@ -257,7 +272,8 @@ func TestLayoutCardsDropsWhatDoesNotFit(t *testing.T) {
 		{80, 40, 5},
 		{80, 7, 2},  // a 2, b 3, then c and d need 4
 		{80, 10, 4}, // c and d side by side, 4 high; e needs 2 more
-		{60, 10, 3}, // stacked: c 2, then d needs 4
+		{60, 10, 4}, // stacked: c 2, then d needs 4 and is shortened to 3
+		{60, 9, 3},  // stacked: c 2, then 2 lines are too few for d
 		{60, 1, 0},
 	} {
 		lines, rules, places := layoutCards(rows, c.w, c.h, "")

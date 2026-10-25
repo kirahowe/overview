@@ -192,8 +192,11 @@ uncommitted changes under it. A project without `.issues/` gets a card
 in the issues card's place that says what `issues` does and that
 `issues init` in the project's root starts it.
 
-A card the window has no room for is dropped, from the bottom up,
-rather than squeezed. To keep the issues card short enough to show,
+The last card that does not fit whole is shown shortened in the lines
+left, when there are at least three: its rule, what fits of its body and
+a line counting what it leaves out. The issues card keeps its cursor in
+that view. A card is dropped, from the bottom up, only when fewer lines
+than that are left. To keep the issues card short enough to show,
 each of its groups lists a few issues (three in review, four in
 progress, two blocked, three up next) and counts the rest, and the
 issue card shows four lines of the issue's summary. When the issues card is dropped

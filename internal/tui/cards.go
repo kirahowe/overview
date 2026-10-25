@@ -36,6 +36,27 @@ type card struct {
 	title, right string
 	body         func(w int) []string
 	id           panelID
+	// at is the line of the body at width w that a shortened card keeps
+	// in view, such as the issues card's cursor; nil keeps the top.
+	at func(w int) int
+}
+
+// minCard is the fewest lines a card is shown in: its rule, a line of its
+// body and a line that says how much more it has.
+const minCard = 3
+
+// shorten cuts body to k lines when it has more, keeping line at in view
+// and saying in the last line how many it leaves out.
+func shorten(body []string, at, k int) []string {
+	if len(body) <= k || k < 1 {
+		return body
+	}
+	if k == 1 {
+		return []string{dim.Render(fmt.Sprintf("… %d more", len(body)))}
+	}
+	start := window(0, at, at+1, len(body), k-1)
+	out := slices.Clone(body[start : start+k-1])
+	return append(out, dim.Render(fmt.Sprintf("… %d more", len(body)-(k-1))))
 }
 
 // render draws c as h lines w wide, its rule lit when it is selected, and
@@ -82,9 +103,10 @@ type placed struct {
 // cells, and says which lines are the top rules of cards and where each
 // card went. A row of two goes side by side when w has room, with a line
 // between them, and else becomes two rows. A row that does not fit the
-// height left is dropped, with every row after it, so what is dropped is
-// always the last cards, never a squeezed one. The card that is sel is
-// drawn lit.
+// height left is shown shortened in what is left, when that is at least
+// minCard lines, and else dropped; every row after it is dropped. So a
+// card is left out only when there is no room for it, and what is left
+// out is always the last cards. The card that is sel is drawn lit.
 func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []bool, places []placed) {
 	var flat [][]card
 	for _, r := range rows {
@@ -109,7 +131,18 @@ func layoutCards(rows [][]card, w, h int, sel panelID) (lines []string, rules []
 			tall = max(tall, len(bodies[i])+1)
 		}
 		if len(lines)+tall > h {
-			break
+			left := h - len(lines)
+			if left < minCard {
+				break
+			}
+			tall = left
+			for i, c := range r {
+				at := 0
+				if c.at != nil {
+					at = c.at(cardInner(widths[i]))
+				}
+				bodies[i] = shorten(bodies[i], at, tall-1)
+			}
 		}
 		lit := func(c card) bool { return c.id != "" && c.id == sel }
 		var drawn [][]string
@@ -541,14 +574,13 @@ func pickable(others []issues.Issue) []issues.Issue {
 // "" when it worked, and the card then lists what the last good read
 // found.
 func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, failed string) card {
-	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel, body: func(w int) []string {
-		var out []string
+	lines := func(w int) (out []string, at int) {
 		if failed != "" {
 			out = wrap(fg(pal.Asking).Render("issues failed: "+failed), w)
 		}
 		groups, inbox := issueGroups(others)
 		if len(pickable(others)) == 0 && inbox == 0 {
-			return append(out, dim.Render("no other open issues"))
+			return append(out, dim.Render("no other open issues")), 0
 		}
 		const label = 13
 		n := 0
@@ -560,7 +592,7 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 				}
 				mark := "  "
 				if focused && n == pick {
-					mark = heading.Render("▸ ")
+					mark, at = heading.Render("▸ "), len(out)
 				}
 				text := dim.Render("#"+strconv.Itoa(i.ID)+" ") + fg(pal.Text).Render(i.Title)
 				if k := linked[i.ID]; k > 0 && i.Status == issues.InProgress {
@@ -580,8 +612,11 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 		if inbox > 0 {
 			out = append(out, "  "+dim.Render(fmt.Sprintf("inbox %d", inbox)))
 		}
-		return out
-	}}
+		return out, at
+	}
+	return card{title: "Issues", right: dim.Render(strconv.Itoa(len(others)) + " open"), id: issuesPanel,
+		body: func(w int) []string { out, _ := lines(w); return out },
+		at:   func(w int) int { _, at := lines(w); return at }}
 }
 
 // tasksCard takes the issues card's place in a project that does not
