@@ -348,6 +348,41 @@ step stamps what it needs with that: a note, a click, a tracker read.
 `apply` itself runs nothing. The command lines it hands a spawn, such as
 `Home.NewArgs`, are only built, with no lookup on the `PATH`.
 
+## Enforcement
+
+Two tests read the source and fail when code steps around this design.
+They go by names, not types, so they catch the easy slip, such as a view
+reaching for `m.in.Rows`, rather than a determined detour. Each failure
+names the rule, the function and the file and line.
+
+`internal/tui/arch_test.go` holds four rules:
+
+- `world.Derive`, or `deps.derive`, appears only in `model.world`, the
+  memoized derivation, and in `systemDeps`, which wires it in.
+- Nothing but `setInputs` assigns to `m.in` or any of its fields. The
+  change closures passed to `setInputs` write to their own `in`, so they
+  pass.
+- The source stores are `m.in` and the caches it is composed from,
+  `m.trackers`, `m.reading`, `m.rowRoots` and `m.paneRoots`. Only the
+  functions in `sourceReaders` touch them, each with a reason: where a
+  source lands (`landRows`, `setPanes`, `landTracker`), where the inputs
+  are composed and derived (`setInputs`, `world`), and where effects are
+  planned from tmux's panes or the reads in flight (`restage`, `frames`,
+  `readTrackers`, `pane`, `holder` and the like). No presentation
+  function is on the list. An entry that no longer reads a source fails
+  the test until it is dropped.
+- Nothing that `Update`, `View` or `Init` reaches, by a walk over the
+  package's calls, calls `m.deps.*`, `m.mux.*`, `m.home.*` or
+  `m.issues` directly. Inside a func literal that returns a `tea.Msg`,
+  a Cmd, is where they run. `effectAllowed` holds the exceptions: the
+  clock read once at the door in `Update`, and `Home`'s pure helpers
+  (`Name`, `ClaudeEnv`, `ReviewsDir`, `AttachArgs`, `NewArgs`).
+
+`internal/world/arch_test.go` keeps `Derive` pure. The package may not
+import `os`, `os/exec`, `net` or the like, nor read the clock, and it
+calls into `fleet`, `issues`, `tmux` and `review` only through a short
+list of functions known to be pure.
+
 ## Testing
 
 - The transcript fold: property tests that chunked folds equal the whole
