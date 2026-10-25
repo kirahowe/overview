@@ -586,7 +586,7 @@ func (m model) cockpitRows(t target) [][]card {
 	}
 	var sum review.Summary
 	for _, r := range rows {
-		s := m.reviews[r.SessionID]
+		s := r.Review
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{

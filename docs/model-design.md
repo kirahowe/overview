@@ -108,7 +108,8 @@ cannot show any of them as blocked.
 | project roots | `findRoots`, on the Cmd that carries the directories | `dir → root` |
 | pins | `Home.Projects` | `[]root` |
 | issues | `issues list`, per tracked root, when `.issues` changes | `world.Tracker` per root |
-| reviews | `readReviews` | `review.Summary` per session |
+| reviews | `readReviews`, in the refresh | `review.Summary` per session |
+| orchestrator health | `Home.HealthOf`, in the refresh | `fleet.Health` |
 | issue details, changes | the cockpit's reads | caches by target, presentation only |
 
 ## The world
@@ -127,6 +128,8 @@ type Inputs struct {
 	Roots    map[string]string  // dir → project root
 	Pinned   []string
 	Trackers map[string]Tracker // by root
+	Reviews  map[string]review.Summary // by session id
+	Orchestrator fleet.Health   // as the refresh found it
 	User     string             // the user's home, for names
 }
 
@@ -146,6 +149,7 @@ type World struct {
 	Need, Working, Idle int
 	NoHook    bool                // interactive sessions are listed and none reports through the hook
 	Trackers  []string            // the roots whose trackers Derive needs, sorted
+	Orchestrator fleet.Health     // Inputs.Orchestrator, for the footer
 }
 
 type Project struct {
@@ -184,6 +188,7 @@ type Session struct {
 	Host      *Host     // the app it runs inside, nil when it has a terminal
 	TTY       string    // the terminal an interactive session runs in, "" for none
 	Elsewhere bool      // it runs in a pane of another tmux session on the server
+	Review    review.Summary // its review's notes, zero for none
 }
 
 type Terminal struct {
@@ -251,6 +256,12 @@ The rules that used to be spread across the view now live in `Derive`.
   review. `Working` and `Idle` count each session once.
 - `Trackers` names the roots of every project, listed or not, and of
   the directories links name, which are the trackers a refresh reads.
+- A session's `Review` is its entry in `Inputs.Reviews`. The
+  orchestrator's health passes through as it is. Its health reads the
+  heartbeat and state files and compares them with the clock, so it is
+  a source that the refresh reads, not a fact `Derive` could work out
+  from the rows, and the footer reads it from the World like everything
+  else.
 
 `Derive` treats its inputs as sets wherever their order means nothing:
 shuffling the rows, the pins or a tracker's issues gives the same

@@ -59,6 +59,7 @@ type (
 		// written is when each row's transcript was last written, by path.
 		written map[string]time.Time
 		reviews map[string]review.Summary
+		health  fleet.Health // the orchestrator's
 		err     error
 	}
 	digestMsg struct {
@@ -199,10 +200,7 @@ type model struct {
 	issueReads  map[string]issueRead
 	changeReads map[string]changesRead
 
-	// reviews sums up each session's review, by session ID, as the latest
-	// refresh read them. reviewArgs are the flags every review is started
-	// with.
-	reviews    map[string]review.Summary
+	// reviewArgs are the flags every review is started with.
 	reviewArgs []string
 	// opening is the sessions whose review is being opened, so a second
 	// v before the pane lands does not open another.
@@ -419,7 +417,7 @@ func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]worl
 		}
 	}
 	rs := m.deps.roots(dirs...)
-	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), nil}
+	return rowsMsg{rows, ttys, hosts, pinned, m.pinsLanded, rs, written, m.deps.reviews(m.home, rows), m.home.HealthOf(rows), nil}
 }
 
 // turnsKey names a transcript as it was when written at a moment.
@@ -867,10 +865,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.rowRoots, m.written, m.loaded = msg.roots, msg.written, true
-		m.reviews = msg.reviews
 		pins := m.pins == m.pinsLanded && msg.pinGen == m.pinsLanded
 		m = m.setInputs(func(in *world.Inputs) {
 			in.Rows, in.TTYs, in.Hosts = msg.rows, msg.ttys, msg.hosts
+			in.Reviews, in.Orchestrator = msg.reviews, msg.health
 			if pins {
 				in.Pinned = msg.pinned
 			}

@@ -692,7 +692,7 @@ func (m model) entryLine(e entry, selected bool) string {
 	case away:
 		right = []seg{{app, dim}}
 	default:
-		if b := reviewBadge(m.reviews[r.SessionID]); b != "" {
+		if b := reviewBadge(r.Review); b != "" {
 			right = append(right, seg{b + " ", fg(pal.Accent)})
 		}
 		state := word
@@ -1055,7 +1055,7 @@ func hintLine(lead []string, hints []hint, w int) string {
 func (m model) footer() string {
 	var lead []string
 	if m.loaded && m.rowsErr == nil {
-		switch h := m.home.HealthOf(m.in.Rows); {
+		switch h := m.world().Orchestrator; {
 		case !h.Running:
 			lead = append(lead, red.Render("orchestrator off"))
 		case h.Stale:

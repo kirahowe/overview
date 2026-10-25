@@ -11,6 +11,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/review"
+	"overview/internal/world"
 )
 
 // v opens a session's review in a split above its pane, with everything
@@ -80,7 +81,7 @@ func TestReviewBadge(t *testing.T) {
 	}
 	row := fleet.Row{Live: fleet.Live{PID: 7, SessionID: "s-1", Name: "fix-parser", Cwd: "/code/app"}, State: fleet.Idle}
 	m := newTestModel(t, row)
-	m.reviews = map[string]review.Summary{"s-1": {Open: 2, Waiting: 1}}
+	m = m.setInputs(func(in *world.Inputs) { in.Reviews = map[string]review.Summary{"s-1": {Open: 2, Waiting: 1}} })
 	if !strings.Contains(m.View(), "✎2 reply") {
 		t.Fatalf("no badge in\n%s", m.View())
 	}

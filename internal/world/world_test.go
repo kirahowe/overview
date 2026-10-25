@@ -8,6 +8,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/review"
 	"overview/internal/tmux"
 )
 
@@ -630,5 +631,33 @@ func TestTermTitle(t *testing.T) {
 		if got := termTitle(c.panes); got != c.want {
 			t.Errorf("%v: %q, want %q", c.panes, got, c.want)
 		}
+	}
+}
+
+// A session carries its review, and the World the orchestrator's health,
+// as the refresh read them; the orchestrator's review goes with it.
+func TestReviewsAndHealthPassThrough(t *testing.T) {
+	orch := sess("o", "/w/alpha")
+	orch.Name = fleet.OrchestratorName
+	health := fleet.Health{Running: true, Stale: true, LastCheck: time.Unix(100, 0)}
+	w := Derive(Inputs{
+		Rows: []fleet.Row{sess("s", "/w/alpha"), sess("t", "/w/alpha"), orch},
+		Reviews: map[string]review.Summary{
+			"s": {Open: 2, Waiting: 1},
+			"o": {Open: 9},
+		},
+		Orchestrator: health,
+	})
+	if got := w.Sessions["s"].Review; got != (review.Summary{Open: 2, Waiting: 1}) {
+		t.Errorf("s's review %+v", got)
+	}
+	if got := w.Sessions["t"].Review; got != (review.Summary{}) {
+		t.Errorf("t has no review, yet %+v", got)
+	}
+	if _, ok := w.Sessions["o"]; ok {
+		t.Error("the orchestrator is in the world")
+	}
+	if w.Orchestrator != health {
+		t.Errorf("health %+v", w.Orchestrator)
 	}
 }

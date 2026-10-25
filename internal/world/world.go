@@ -14,6 +14,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
+	"overview/internal/review"
 	"overview/internal/tmux"
 )
 
@@ -22,17 +23,21 @@ import (
 // order within a window, since a terminal is named after its window's
 // first pane.
 type Inputs struct {
-	Rows     []fleet.Row        // the live sessions, the orchestrator among them; session ids are unique
-	TTYs     map[int]string     // pid → tty, for sessions in a terminal
-	Hosts    map[int]Host       // pid → the app an interactive session with no terminal runs inside
-	Panes    []tmux.Pane        // every pane on the view's tmux server
-	Session  string             // the view's tmux session
-	Self     string             // the view's own pane
-	Opening  string             // a pane c started whose session is not listed yet
-	Roots    map[string]string  // dir → project root, symlinks resolved
-	Pinned   []string           // the pinned projects' directories
-	Trackers map[string]Tracker // the issues of the projects that track them, by root
-	User     string             // the user's home, for names
+	Rows     []fleet.Row               // the live sessions, the orchestrator among them; session ids are unique
+	TTYs     map[int]string            // pid → tty, for sessions in a terminal
+	Hosts    map[int]Host              // pid → the app an interactive session with no terminal runs inside
+	Panes    []tmux.Pane               // every pane on the view's tmux server
+	Session  string                    // the view's tmux session
+	Self     string                    // the view's own pane
+	Opening  string                    // a pane c started whose session is not listed yet
+	Roots    map[string]string         // dir → project root, symlinks resolved
+	Pinned   []string                  // the pinned projects' directories
+	Trackers map[string]Tracker        // the issues of the projects that track them, by root
+	Reviews  map[string]review.Summary // each session's review, by session id, for those that have one
+	// Orchestrator is how the orchestrator was doing when the rows were
+	// read: its health reads files and the clock, so the refresh reads it.
+	Orchestrator fleet.Health
+	User         string // the user's home, for names
 }
 
 // Tracker is one project's issues as the last read of them found them.
@@ -70,6 +75,8 @@ type World struct {
 	// sessions report that through Claude Code and need no hook.
 	NoHook   bool
 	Trackers []string // the roots whose trackers Derive needs, sorted
+	// Orchestrator is Inputs.Orchestrator as it is, for the footer.
+	Orchestrator fleet.Health
 
 	byName  map[string]*Project // every project, listed or not
 	tracked map[string]Tracker  // the trackers in the world, by root
@@ -174,6 +181,7 @@ type Session struct {
 	// Elsewhere says an interactive session runs in a pane of another
 	// tmux session on the view's server, such as another home's view.
 	Elsewhere bool
+	Review    review.Summary // its review's notes, zero for none
 }
 
 // Primary is the workstream the session was linked to last, nil when it
