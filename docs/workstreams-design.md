@@ -8,9 +8,9 @@ cockpit, and starting a workstream from a ready issue. Phase 4 is open.
 ## What it is for
 
 You run several tasks in one project at once: rework the UI, add a
-feature, fix a bug. Today the list shows a project's sessions and
-terminals in one flat group, so nothing says which task each one is
-for, or how far a task has got.
+feature, fix a bug. A flat group of a project's sessions and terminals
+would not say which task each one is for, or how far a task has got.
+Workstreams give the list that grouping.
 
 A workstream is one task. How many sessions and terminals it takes, and
 whether its agents work in worktrees, is up to the agents. overview does
@@ -32,8 +32,8 @@ sessions and terminals linked to it. Several sessions can work on one
 issue, and one session can work on several.
 
 A project without `.issues/` has no workstreams. Its sessions and
-terminals sit under the project as they do today, and nothing about it
-changes beyond the look. overview never requires `issues`.
+terminals sit under the project, ungrouped. overview never requires
+`issues`.
 
 ### Linking a session to an issue
 
@@ -66,10 +66,9 @@ command gave and the view resolves it to a project. Mentioning an issue
 anywhere else, in a prompt or a command, links nothing, and neither does a
 command that only quotes `issues start`.
 
-The hook no longer takes part. It used to write the links to a file
-beside the session's record, which left every session unlinked wherever
-the hook was not installed. It now records only the blocked state and its
-reason.
+The hook takes no part in linking. It records a session's state and,
+when the session is blocked, its reason. The links come from the
+transcripts alone, so they exist wherever the hook is not installed.
 
 A session linked to several open issues appears under each of them,
 since an orchestrating session can run several tasks at once. Its
@@ -77,7 +76,7 @@ primary entry is under the issue it was linked to last, and the agents
 list names that issue beside it.
 
 A terminal opened with `t` on a workstream belongs to that workstream.
-Any other terminal belongs to its project, as now.
+Any other terminal belongs to its project.
 
 ### When a workstream ends
 
@@ -92,7 +91,7 @@ first in its project and counts as needing you.
 
 ### The review bottleneck
 
-Ending at `done` only works if issues reach `done`. Today they stop at
+Ending at `done` only works if issues reach `done`. They stop at
 `review`, because the issues skill makes human acceptance the normal
 boundary for `done`, and you do not need to review every issue. Until
 that changes, workstreams pile up in review.
@@ -115,14 +114,13 @@ the blocked ones, and by priority within each. A workstream takes one
 line for its issue number, title and priority, and its sessions and
 terminals follow it, one line each. Sessions are marked by state and
 terminals with a `$` and no state. Then come the project's unlinked
-sessions and terminals, as today. A terminal outside any project goes
-under `~`. Pinned projects work as they do now.
+sessions and terminals. A terminal outside any project goes
+under `~`. Pinned projects are listed like any other.
 
 The bottom holds every session in every project, ordered by priority,
 after herdr's agent list. Sessions that need you come first, longest
 wait first, then working sessions, then idle ones. Terminals are never
-in it. This replaces the "needs you" section at the top of today's
-list. A session can appear twice, once in each half, and the cursor
+in it. A session can appear twice, once in each half, and the cursor
 moves through both.
 
 `s` on any entry of a tracked project opens a task picker in the
@@ -140,23 +138,13 @@ details beside the rows. They come from `issues show`, through the
 same cache as the cockpit's issue card, so you can read a task in full
 before starting it.
 
-The look changes along the way:
-
-- A header line above the list: the home's name, the counts that sit in
-  the status bar today, and the digest's age and the orchestrator's
-  health.
-- The selected row gets an accent bar, `▌`, at its left edge, and a
-  faint background that keeps the row's own colours, which today's
-  solid bar cannot.
-- Sections get a rule with the title on the left and a count on the
-  right.
-- The bottom bar lists the keys as `key label • key label`, with the
-  keys in the accent colour, and changes with what is selected.
-
-Since then every part of the window has become a panel, as
-[panels-design.md](panels-design.md) describes: the header line is the
-title in the rule along the list's top, and the cockpit's cards are
-panels too, with the same rule.
+The look is one titled rule per panel, as [panels-design.md](panels-design.md)
+describes: the list has a rule along its top, and the cockpit's cards use the
+same rule. The selected row
+gets an accent bar, `▌`, at its left edge and a faint background that
+keeps the row's own colours. The bottom bar lists the keys as
+`key label • key label`, with the keys in the accent colour, and changes
+with what is selected.
 
 ## The cockpit
 
