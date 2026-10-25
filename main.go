@@ -73,11 +73,15 @@ theme, socket, claude and issues. A flag wins over the file.
 `
 
 func main() {
-	args := os.Args[1:]
-	cmd := ""
-	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
-		cmd, args = args[0], args[1:]
+	c, err := parseCLI(os.Args[1:])
+	if isHelp(err) {
+		fmt.Fprint(os.Stderr, usage)
+		return
+	} else if err != nil {
+		fmt.Fprintf(os.Stderr, "overview: %v\n\n%s", err, usage)
+		os.Exit(2)
 	}
+	cmd, rest, flags := c.cmd, c.rest, c.flags
 	switch cmd {
 	case "hook":
 		fleet.Hook(os.Stdin)
@@ -86,34 +90,13 @@ func main() {
 		tui.Stage()
 		return
 	case "review":
-		if err := reviewCmd(args); err != nil {
+		if err := reviewCmd(rest); err != nil {
 			fail(err)
 		}
 		return
 	}
-
-	fs := flag.NewFlagSet("overview", flag.ExitOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	var flags config.Values
-	fs.StringVar(&flags.Home, "home", "", "")
-	fs.StringVar(&flags.Theme, "theme", "", "")
-	fs.StringVar(&flags.Claude, "claude", "", "")
-	fs.StringVar(&flags.Issues, "issues", "", "")
-	fs.StringVar(&flags.Socket, "socket", "", "")
-	// The view is given the socket's path, the session it runs in and
-	// where overview was started.
-	socketPath := fs.String("socket-path", "", "")
-	session := fs.String("session", "", "")
-	viewCwd := fs.String("cwd", "", "")
-	configDir := fs.String("config", "", "")
-	orchDir := fs.String("orchestrator-dir", "", "")
-	every := fs.Duration("every", time.Hour, "")
-	model := fs.String("model", "sonnet", "")
-	// Flags may come before or after a positional argument such as "start".
-	var rest []string
-	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
-		rest, args = append(rest, fs.Arg(0)), fs.Args()[1:]
-	}
+	socketPath, session, viewCwd := &c.socketPath, &c.session, &c.cwd
+	configDir, orchDir, every, model := &c.configDir, &c.orchDir, &c.every, &c.model
 
 	// The one place the user's home directory and the working directory
 	// are looked up.
@@ -199,8 +182,8 @@ func main() {
 	case "orchestrator":
 		err = orchestrator(home, rest, *every, *model)
 	default:
-		fs.Usage()
-		os.Exit(2)
+		// parseCLI admits only the commands above.
+		err = fmt.Errorf("unhandled command %q", cmd)
 	}
 	if err != nil {
 		fail(err)

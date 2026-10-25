@@ -10,6 +10,12 @@ overview sessions           # print the sessions once
 overview digest             # write a digest now
 ```
 
+The subcommand may come before or after the flags: `overview --home work
+sessions` works like `overview sessions --home work`. overview launches the
+view only when you give no subcommand. A word it does not know, such as a
+mistyped `sesions`, or an extra argument stops it with an error and exit
+status 2.
+
 `--home` takes a path or a short name: `work` means `~/.claude-work`. Without
 the flag, the `home =` line of overview's config file decides. With neither,
 overview stops rather than guess, so pass `--home ~/.claude` for Claude
