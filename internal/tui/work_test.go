@@ -418,8 +418,8 @@ func TestEnterOnAWorkstreamGoesToItsFirstSession(t *testing.T) {
 }
 
 // A workstream no session works on shows its cockpit's cards beside the
-// list, and enter opens the cockpit with the keyboard on them. enter on
-// its header then leaves it open, as there is nothing to attach to.
+// list, and enter opens the cockpit with the keyboard still in the list.
+// enter again leaves it open, as there is nothing to attach to.
 func TestAWorkstreamWithNoSessionsShowsItsCockpit(t *testing.T) {
 	f := newFakeMux()
 	m := taskModel(t, f)
@@ -437,12 +437,12 @@ func TestAWorkstreamWithNoSessionsShowsItsCockpit(t *testing.T) {
 		t.Errorf("holder offers to attach to no session: %q", text)
 	}
 	m = pressSettled(t, m, "enter")
-	if !m.cockpit.open || !slices.Equal(f.zooms, []string{"%0 true"}) || m.navAt() != headerPanel || len(f.selects) != 0 {
-		t.Fatalf("open %v zooms %v nav %+v selects %v", m.cockpit.open, f.zooms, m.nav, f.selects)
+	if !m.cockpit.open || !slices.Equal(f.zooms, []string{"%0 true"}) || !m.listHasKeys() || len(f.selects) != 0 {
+		t.Fatalf("open %v zooms %v list has keys %v selects %v", m.cockpit.open, f.zooms, m.listHasKeys(), f.selects)
 	}
 	m = pressSettled(t, m, "enter")
 	if !m.cockpit.open || len(f.zooms) != 1 || m.note != "No session works on #4. c starts one, t a terminal." {
-		t.Fatalf("after enter on the header: open %v zooms %v note %q", m.cockpit.open, f.zooms, m.note)
+		t.Fatalf("after enter again: open %v zooms %v note %q", m.cockpit.open, f.zooms, m.note)
 	}
 	if !strings.Contains(ansi.Strip(m.View()), "no sessions") {
 		t.Fatal("no 'no sessions' line under #4")

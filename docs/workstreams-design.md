@@ -157,7 +157,7 @@ panels too, with the same rule.
 ## The cockpit
 
 `o` turns the whole window into the cockpit for the selected workstream
-or project, and `o`, or `esc` out on the panels, turns it back. The list zooms its own pane
+or project, and `o` or `esc` turns it back. The list zooms its own pane
 with tmux's `resize-pane -Z`, so the session beside it keeps running and
 comes back exactly as it was. The list stays down the left, and the
 cards take the rest.
@@ -204,7 +204,7 @@ rather than squeezed. To keep the issues card short enough to show,
 each of its groups lists a few issues (three in review, four in
 progress, two blocked, three up next) and counts the rest, and the
 issue card lists six criteria at most. When the issues card is dropped
-anyway, the keyboard comes out to the panels, and `tab` says the window
+anyway, the keyboard goes back to the list, and `tab` says the window
 has no room for the card.
 
 The cards come from running jj, git and `issues`, which the view never

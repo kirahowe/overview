@@ -403,8 +403,8 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 	bg := func(st lipgloss.Style) lipgloss.Style { return st }
 	bar := " "
 	if selected {
-		// Out on the panels the row loses its background, so a lit row
-		// always means the keys move it.
+		// In the panels mode, or in the issues card, the row loses its
+		// background, so a lit row always means the keys move it.
 		if m.blurred || m.listHasKeys() {
 			bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
 		}
@@ -585,7 +585,7 @@ func (m model) column(secs []section, sel string, h int) column {
 	show(plines, powners, c.projTop, c.projH)
 	if c.agentsH > 0 {
 		c.rule = len(c.lines)
-		c.lines, c.owners = append(c.lines, panelRule(m.titleText([]titleSeg{{text: agentsTitle}}, m.lit(agentsPanel)), dim.Render("priority"), m.w, m.lit(agentsPanel))), append(c.owners, "")
+		c.lines, c.owners = append(c.lines, panelRule(m.titleText([]titleSeg{{text: agentsTitle}}, m.agentsLit()), dim.Render("priority"), m.w, m.agentsLit())), append(c.owners, "")
 		show(alines, aowners, c.agentsTop, c.agentsH)
 	}
 	return c
@@ -940,9 +940,9 @@ func panelRule(title, right string, w int, lit bool, cuts ...int) string {
 
 // panelHints are the footer's keys for where the keyboard is: in the
 // cockpit's issues card, in the list, where the keys that act on the
-// cursor's entry and esc to come out are, or on the panels, where hjkl
-// moves and enter does what it does on the selected panel. In the cockpit
-// o closes it first.
+// cursor's entry and esc to go to the panels are, or in the panels mode,
+// where hjkl moves tmux's focus and enter stays where it is. In the
+// cockpit o closes it first.
 func (m model) panelHints() []hint {
 	help := hint{"?", "help"}
 	if m.inIssues() {
@@ -950,30 +950,18 @@ func (m model) panelHints() []hint {
 		if !m.pickStarts() {
 			enter.label = "go to"
 		}
-		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "back"}, help}
+		return []hint{enter, {"j k", "move"}, {"tab", "list"}, {"esc", "close"}, help}
+	}
+	if m.inPanels() {
+		return []hint{{"hjkl", "move"}, {"enter", "act here"}}
 	}
 	e, _, ok := m.selected(m.ordered())
 	hs := m.entryHints(e, ok)
 	hs = hs[:len(hs)-1] // help goes last, after what is added here
-	var out []hint
 	if m.cockpit.open {
-		out = append(out, hint{"o", "close"})
+		return append(append([]hint{{"o", "close"}}, hs...), help)
 	}
-	if m.nav.inside {
-		return append(append(out, hs...), hint{"esc", "back"}, help)
-	}
-	enter := hint{"enter", "type"}
-	if len(hs) > 0 && hs[0].key == "enter" {
-		enter, hs = hs[0], hs[1:]
-	}
-	switch at := m.navAt(); {
-	case at.listPanel() || at == issuesPanel:
-		enter.label = "focus"
-	case at.isPane():
-		enter.label = "type"
-	}
-	// The entry's own keys before hjkl: the footer drops hints from the end.
-	return append(append(append(out, enter), hs...), hint{"hjkl", "move"}, help)
+	return append(append(hs, hint{"esc", "panels"}), help)
 }
 
 // hint is a key and what it does, as the footer shows it.
@@ -1069,6 +1057,9 @@ func (m model) footer() string {
 		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		hints = []hint{{"enter", "open"}, {"↑↓", "move"}, {"esc", "clear"}}
 	case m.note != "":
+		if m.inPanels() {
+			lead = append(lead, heading.Render("panels"))
+		}
 		lead = append(lead, fg(pal.Text).Render(m.note))
 	case m.screen == digestScreen:
 		info := "no digest yet"
@@ -1081,7 +1072,7 @@ func (m model) footer() string {
 		if m.filter != "" {
 			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
 		}
-		if !m.nav.inside && !m.blurred {
+		if m.inPanels() {
 			lead = append(lead, heading.Render("panels"))
 		}
 		hints = m.panelHints()
@@ -1101,9 +1092,9 @@ func (m model) helpBox() []string {
 		return append(out, "")
 	}
 	left := append(section("panels",
-		entry{"h j k l", "move between panels"},
-		entry{"enter", "go into the panel"},
-		entry{"esc", "back out to the panels"},
+		entry{"esc", "from the list, move focus"},
+		entry{"h j k l", "focus the pane that way"},
+		entry{"enter", "act in the focused pane"},
 		entry{"ctrl+[", "back to the list"},
 	), section("in the list",
 		entry{"j k", "move"},

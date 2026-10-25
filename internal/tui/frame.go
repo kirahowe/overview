@@ -15,15 +15,12 @@ import (
 // sets it up, with a title the view gives each pane of its session: the
 // list's own, a session's name and state, a terminal's command. The view
 // draws the same rule for what it shows itself, the agents and the
-// cockpit's cards, so every panel looks alike. The selected panel's rule
-// is lit, in the accent colour.
+// cockpit's cards, so every panel looks alike. The rule of the panel with
+// the keys is lit, in the accent colour: tmux lights its active pane's by
+// itself, and the view lights the ones it draws.
 
-// paneFrame is what a pane's rule shows: its title, in tmux's styles, and
-// whether the pane is the selected panel.
-type paneFrame struct {
-	title string
-	sel   bool
-}
+// paneFrame is what a pane's rule shows: its title, in tmux's styles.
+type paneFrame struct{ title string }
 
 // framedMsg answers reframe's Cmd. When it turned the rules of a window on
 // or off, window names it and on says which, so the model knows before the
@@ -49,7 +46,7 @@ func tmuxColour(c lipgloss.Color) string {
 
 // frameColours are the theme's colours for tmux's rules.
 func frameColours(t Theme) tmux.Colours {
-	return tmux.Colours{Accent: tmuxColour(t.Accent), Border: tmuxColour(t.Border), Text: tmuxColour(t.Text)}
+	return tmux.Colours{Accent: tmuxColour(t.Accent), Border: tmuxColour(t.Border), Text: tmuxColour(t.Text), Muted: tmuxColour(t.Muted)}
 }
 
 // tmuxTitle renders a title for a pane's rule. tmux reads #[...] in it as
@@ -142,8 +139,7 @@ func (m model) paneTitle(p tmux.Pane, byTTY map[string]fleet.Row, byID map[strin
 }
 
 // frames is what the rule of every pane in the view's session should
-// show. The selected panel's pane is lit, while the keyboard is in the
-// view: tmux lights the pane the keys are in by itself.
+// show.
 func (m model) frames() map[string]paneFrame {
 	byTTY, byID := map[string]fleet.Row{}, map[string]fleet.Row{}
 	for _, r := range m.rows {
@@ -152,25 +148,17 @@ func (m model) frames() map[string]paneFrame {
 		}
 		byID[r.SessionID] = r
 	}
-	selected := ""
-	if !m.blurred && !m.cockpit.open {
-		if at := m.navAt(); at == projectsPanel {
-			selected = m.self
-		} else {
-			selected = m.paneOfPanel(at)
-		}
-	}
 	out := map[string]paneFrame{}
 	for _, p := range m.panes {
 		if p.Session == m.session && m.session != "" {
-			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, byTTY, byID)), sel: p.ID == selected}
+			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, byTTY, byID))}
 		}
 	}
 	return out
 }
 
 // reframe brings tmux's rules in line with the model after every update:
-// the titles and the selection that changed, and the list's window
+// the titles that changed, and the list's window
 // drawing its rules unless the cockpit, which draws its own, has it
 // zoomed. One Cmd is out at a time, so an older one cannot land last.
 func (m model) reframe() (model, tea.Cmd) {
@@ -185,13 +173,6 @@ func (m model) reframe() (model, tea.Cmd) {
 		was, ok := m.framed[id]
 		if !ok || was.title != f.title {
 			sets = append(sets, tmux.PaneSet{Pane: id, Name: tmux.TitleOption, Value: f.title})
-		}
-		if !ok || was.sel != f.sel {
-			sel := ""
-			if f.sel {
-				sel = "1"
-			}
-			sets = append(sets, tmux.PaneSet{Pane: id, Name: tmux.SelectOption, Value: sel})
 		}
 	}
 	self, ok := m.pane(m.self)

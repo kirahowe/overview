@@ -217,7 +217,7 @@ func streamHeader(ref, status, priority, title, started string, ms []member) car
 			right = append(right, s)
 		}
 	}
-	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), id: headerPanel, body: func(w int) []string {
+	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), body: func(w int) []string {
 		when := ""
 		if started != "" {
 			when = dim.Render("started " + agoPhrase(started))
@@ -241,7 +241,7 @@ func projectHeader(name, root, kind string, open int, ms []member) card {
 	if open >= 0 {
 		right = strconv.Itoa(open) + " open"
 	}
-	return card{title: name, right: dim.Render(right), id: headerPanel, body: func(w int) []string {
+	return card{title: name, right: dim.Render(right), body: func(w int) []string {
 		return []string{
 			spread(fg(pal.Text).Render(root), dim.Render(kind), w),
 			membersLine(ms),

@@ -59,6 +59,7 @@ type multiplexer interface {
 	SetPaneOptions(sets []tmux.PaneSet) error
 	SetFrame(pane string, on bool) error
 	SetZoom(pane string, on bool) error
+	EnterPanels() error
 }
 
 type spawnKind int
@@ -127,6 +128,8 @@ type (
 		gen   int
 		err   error
 	}
+	// panelsMsg answers the Cmd that puts the client in the panels mode.
+	panelsMsg  struct{ err error }
 	spawnedMsg struct {
 		spawn
 		pane tmux.Pane
@@ -480,9 +483,11 @@ func (m model) besideTerminal(want string) bool {
 	return ok && e.kind == terminalEntry && want != m.opened.ID
 }
 
-// setPanes takes a fresh listing of tmux's panes and their roots.
+// setPanes takes a fresh listing of tmux's panes and their roots, which
+// also say whether a client of the session is in the panels mode.
 func (m model) setPanes(panes []tmux.Pane, rs roots) model {
 	m.panes, m.paneRoots = panes, rs
+	m.panels = slices.ContainsFunc(panes, func(p tmux.Pane) bool { return p.Panels && p.Session == m.session })
 	return m
 }
 
@@ -571,6 +576,12 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m, cmd = m.keepWidth()
 		}
 		return m, tea.Batch(zoom, cmd)
+	case panelsMsg:
+		m.landed++
+		if msg.err != nil {
+			m.panels = false
+			return m.say("could not enter the panels: " + msg.err.Error()), nil
+		}
 	case stagedMsg:
 		m.staging = false
 		if m.cockpitSoon {

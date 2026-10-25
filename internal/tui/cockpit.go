@@ -30,10 +30,11 @@ const (
 )
 
 // cockpit is the cockpit's state. pick is the issues card's cursor, which
-// moves while the card has the keyboard.
+// moves while the keys are in the card, which tab moves them to.
 type cockpit struct {
-	open bool
-	pick int
+	open   bool
+	pick   int
+	issues bool // the keys are in the issues card, not the list
 }
 
 // zoomedMsg answers zoomCmd.
@@ -200,7 +201,7 @@ func (m model) cockpitBody() []string {
 	h := m.listHeight()
 	lw := cockpitListWidth(m.width.want, m.w)
 	cw, _ := m.cardsSize()
-	cards, rules, _ := layoutCards(m.cockpitRows(m.target()), cw, h, m.navAt())
+	cards, rules, _ := layoutCards(m.cockpitRows(m.target()), cw, h, m.issuesLit())
 	if lw == 0 {
 		return cards
 	}
@@ -209,7 +210,7 @@ func (m model) cockpitBody() []string {
 	secs := m.sections()
 	e, _, _ := m.selected(flatten(secs))
 	col := lm.column(secs, e.key(), h-1)
-	left := append([]string{panelRule(m.titleText(m.listTitle(), m.lit(projectsPanel)), "", lw, m.lit(projectsPanel))}, col.lines...)
+	left := append([]string{panelRule(m.titleText(m.listTitle(), m.listHasKeys()), "", lw, m.listHasKeys())}, col.lines...)
 	out := make([]string, h)
 	for i := range out {
 		leftRule := i == 0 || i == col.rule+1
@@ -659,7 +660,7 @@ func (m model) startPicked() (model, tea.Cmd) {
 		m = m.moveTo(es, j)
 	}
 	m.cockpit.pick = 0
-	m.nav = nav{panel: m.cursorPanel(), prev: issuesPanel, inside: true}
+	m.cockpit.issues = false
 	return m, nil
 }
 
@@ -689,9 +690,14 @@ func (m model) picked() (target, issues.Issue, bool) {
 	return t, ps[max(0, min(m.cockpit.pick, len(ps)-1))], true
 }
 
-// keepCockpit keeps the issues card's cursor on an issue it lists.
+// keepCockpit keeps the issues card's cursor on an issue it lists, and
+// gives the keys back to the list when the card has gone.
 func (m model) keepCockpit() model {
 	if !m.inIssues() {
+		return m
+	}
+	if _, tracked := m.trackers[m.target().root]; !tracked || !m.issuesShown() {
+		m.cockpit.issues = false
 		return m
 	}
 	others, _ := m.others(m.target())

@@ -45,12 +45,19 @@ func genStateRows(t *rapid.T) ([]fleet.Row, map[int]string) {
 }
 
 func checkInvariants(t *rapid.T, m model) {
-	// The keys are always on a panel that is there.
-	if !m.hasPanel(m.navAt()) {
-		t.Fatalf("the keys are on %q, which is not there (cockpit %v)", m.navAt(), m.cockpit.open)
+	// The panels mode is tmux's, so it is never on without tmux, and the
+	// keys are in the issues card only inside the cockpit.
+	if m.panels && m.mux == nil {
+		t.Fatal("the panels mode is on, with no tmux")
 	}
-	if m.nav.inside && m.navAt().listPanel() && m.navAt() != m.cursorPanel() {
-		t.Fatalf("the keys are in %s, the cursor in %s", m.navAt(), m.cursorPanel())
+	if m.cockpit.issues && !m.cockpit.open {
+		t.Fatal("the keys are in the issues card, with no cockpit")
+	}
+	// The keys are in the issues card only while it is there.
+	if m.inIssues() {
+		if _, tracked := m.trackers[m.target().root]; !tracked || !m.issuesShown() {
+			t.Fatalf("the keys are in the issues card, which is not shown (tracked %v)", tracked)
+		}
 	}
 	rows := m.ordered()
 	if len(rows) > 0 {
@@ -123,7 +130,6 @@ func TestStateMachine(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
-		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys := genStateRows(t)
@@ -192,7 +198,7 @@ func TestStateMachine(t *testing.T) {
 							ref = ref.moveTo(rows, j)
 						}
 					}
-					ref.nav = nav{panel: ref.cursorPanel(), prev: before.navAt(), inside: true}
+					ref.cockpit.issues = false
 					ref = update(ref, rowsMsg{rows: ref.rows, ttys: ref.ttys, pinned: ref.pinned, err: ref.rowsErr}) // settles listTop
 					if m.sel != id {
 						t.Fatalf("click on %s left the cursor on %s", id, m.sel)
@@ -232,9 +238,9 @@ func TestStateMachine(t *testing.T) {
 				default:
 					// The wheel moves the cursor as the arrows do inside the
 					// list, and leaves the keys where they were.
-					ref.nav.inside = true
+					ref.cockpit.issues = false
 					ref, _ = press(ref, step)
-					ref.nav = before.nav
+					ref.cockpit.issues = before.cockpit.issues
 				}
 				sameAs(t, fmt.Sprintf("wheel at %d,%d", x, y), m, ref)
 			},

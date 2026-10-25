@@ -57,8 +57,9 @@ The window is made of panels, and each has a rule along its top with its
 title in it: the list, the agents, the session beside them and any split
 of its window, and the cockpit's cards. tmux draws the rules of its panes,
 and the view draws the same rule for the panels it draws itself. The
-panel that is selected, or that has the keyboard, has its rule and the
-whole border beside it in the accent colour.
+panel that has the keyboard has its rule in the accent colour. For a tmux
+pane that is its active pane, whose whole border tmux lights. In the list
+it is the agents' rule while the cursor is in the agents.
 
 The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list
@@ -119,8 +120,8 @@ zooms to fill its window, so the session beside it keeps running out of
 sight and comes back as it was. The list stays down the left at its
 usual width, and cards about the workstream or project take the rest.
 When the window is too narrow for both, only the cards show. `o` closes
-the cockpit, and so does `esc` out on the panels, once it has cleared any
-filter on the list. So does going to another pane, since tmux ends
+the cockpit, and so does `esc`, once it has cleared any filter on the
+list. So does going to another pane, since tmux ends
 the zoom then. A pane of the window closing also ends tmux's zoom, but
 the cockpit stays open and zooms again; a list left alone in its window
 fills it without a zoom. While the cockpit is open the list stays in its window,
@@ -147,10 +148,9 @@ the window has no room for is left out, from the bottom up. Each group
 of the issues card lists a few issues and says how many more it has,
 and the issue's card lists six of its criteria at most.
 
-The cockpit's header and its issues card are panels the keyboard can
-go to, and the other cards only show. `enter` on the header does what it
-does on the entry in the list. The header offers `enter` and `v` only when the workstream has a session. `enter` on the issues card, or `tab` from
-anywhere in the cockpit, moves the keyboard into it while the window has
+The cockpit's issues card can take the keyboard, and the other cards only
+show. The header offers `enter` and `v` only when the workstream has a
+session. `tab` moves the keyboard into the issues card while the window has
 room to show the card, and `tab` again moves it into the list. There,
 `j` and `k` move between the issues. On an issue that a session already
 works on, `enter` moves the list's cursor to that workstream, and the
@@ -206,17 +206,21 @@ mouse or a key there, the cursor's own rules apply again.
 Keys. The keyboard starts out in the list, and comes back to it from a
 pane on the right however it comes back: by `ctrl+[`, by a tmux key that
 selects the list's pane, or by a click. In a pane `esc` belongs to the
-program, which is why `ctrl+[` is the way back. `esc` in the list goes
-out to the panels, once it has cleared any search
-filter, and the footer then says `panels`. There `h`, `j`, `k` and `l`,
-or the arrows, select the nearest panel that way, and `enter` goes into
-the selected one: into the list or the agents, where the keys move the
-cursor, or into a pane, where they go to what runs there. On the pane
-that shows the cursor's entry, `enter` does what it does on the entry
-in the list. The cursor's row has a background only while the keys move
-it. The keys that act on the cursor's entry, such as `c`, `t`, `v` or
-`o`, work out on the panels too, and `n` there also selects the pane of
-the entry it goes to, so `enter` goes straight into it.
+program, which is why `ctrl+[` is the way back. The pane with the keyboard
+is tmux's active pane, and tmux lights its rule and border.
+
+`esc` in the list, once it has cleared any search filter, puts the client
+in the panels mode, which is a key table of tmux's own. The footer says
+`panels`, the cursor's row loses its background, and the focused pane's
+rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
+`l`, or the arrows, move the focus to the pane that way, and the mode
+stays on. `enter` or `esc` leaves it, and the keys then go to what the
+focused pane runs: the list, where they move the cursor, or a session.
+`ctrl+[` goes to the list and leaves the mode. A move off the edge of the
+window wraps around to the other side. Any other key leaves the mode: a
+click or a tmux key does what it always does, and a letter is dropped, so
+nothing typed by mistake reaches a session. The
+cockpit has no panels mode, since it fills the window.
 
 In the list, `j`/`k` move, and walk on from the projects into the agents.
 `n` jumps to the next session that needs you or workstream in review,
@@ -235,7 +239,7 @@ workstream, `enter` does what it does on the entry shown beside it: the
 first session or terminal under it with a pane, or else its first
 session. A workstream that no session works on, such as one in review
 whose sessions have ended, shows its cockpit's cards beside the list,
-and `enter` opens the cockpit with the keyboard on its header.
+and `enter` opens the cockpit, with the keyboard still in the list.
 While you are searching, `enter` acts on the selected match and clears the
 search. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a
@@ -307,8 +311,9 @@ From then on the file is yours to change, and overview never writes it
 again. tmux reads it when the server starts. To apply an edit to the
 running server, press `ctrl+b :` inside overview and run `source-file`
 with the file's path. The `ctrl+[` binding and the splits live there. The
-rules along the panes' tops are not in the file: the view sets them up
-each time it starts, in its theme's colours. A `tmux.conf` written before
+rules along the panes' tops and the keys of the panels mode are not in the
+file: the view sets them up each time it starts, the rules in its theme's
+colours. A `tmux.conf` written before
 the panels sends `ctrl+[` in the list to the session beside it. To make
 it come out to the panels instead, change the binding to:
 
@@ -434,7 +439,7 @@ base   = revdiff
 accent = #c678dd
 ```
 
-The keys are `accent` (headings, the rule of the selected panel, keys in
+The keys are `accent` (headings, the rule of the panel with the keys, keys in
 the footer and the help), `border` (rules, and the cursor's bar while the
 keyboard is elsewhere), `text` (and the titles in rules), `muted`,
 `cursor-bg` (the cursor's bar while the keyboard is in the list), `cursor-dim-bg` (the background of the selected row),

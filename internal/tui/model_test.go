@@ -25,7 +25,6 @@ func row(id, name, title string, pid int) fleet.Row {
 func newTestModel(t *testing.T, rows ...fleet.Row) model {
 	t.Helper()
 	m := newModel(fleet.Home{Dir: t.TempDir()}, "")
-	m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 	m.deps = fakeDeps(nil)
 	ttys := map[int]string{}
 	for _, r := range rows {

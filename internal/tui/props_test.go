@@ -960,7 +960,6 @@ func TestPropViewFitsAnySize(t *testing.T) {
 	keys := []string{"?", "/", "a", "x", "j", "k", "g", "G", "esc", "tab", "enter", "s"}
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
-		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		rows, ttys, ts := workRows(t)
@@ -1457,7 +1456,6 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
 		m := newModel(caseHome(t, root), "")
-		m.nav.inside = true // these tests drive the list; nav_test.go drives the panels
 		m.deps = fakeDeps(nil)
 		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(3, 40).Draw(t, "h")})
 		rows, ttys, ts := workRows(t)
@@ -1576,7 +1574,7 @@ func TestPropCockpitCardsFitAndDropTheLast(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows := genCards(t)
 		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
-		sel := rapid.SampledFrom([]panelID{"", headerPanel, issuesPanel}).Draw(t, "sel")
+		sel := rapid.SampledFrom([]panelID{"", issuesPanel}).Draw(t, "sel")
 		lines, rules, places := layoutCards(rows, w, h, sel)
 		shown := len(places)
 		if len(lines) != h || len(rules) != h {
@@ -1633,7 +1631,7 @@ func TestPropCockpitFitsAnySize(t *testing.T) {
 		es := m.ordered()
 		m = m.moveTo(es, rapid.IntRange(0, len(es)-1).Draw(t, "sel"))
 		if rapid.Bool().Draw(t, "issues") {
-			m.nav = nav{panel: issuesPanel, inside: true}
+			m.cockpit.issues = true
 		}
 		m.width.want = rapid.IntRange(0, 80).Draw(t, "listw")
 		w, h := rapid.IntRange(1, 220).Draw(t, "w"), rapid.IntRange(1, 70).Draw(t, "h")
@@ -1802,52 +1800,6 @@ func TestPropTaskRows(t *testing.T) {
 		for _, i := range list {
 			if issues.Open(i.Status) && taskMatches(terms, "app", i) && !seen[i.ID] {
 				t.Fatalf("#%d %q matches %q but is not offered", i.ID, i.Title, query)
-			}
-		}
-	})
-}
-
-// A move between panels lands on a panel wholly that way, never on the one
-// it left, and finds one whenever there is one. Of those, it never passes
-// over one that faces it for one that does not.
-func TestPropNavStepGoesThatWay(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		n := rapid.IntRange(1, 6).Draw(t, "n")
-		ps := make([]panel, n)
-		for i := range ps {
-			ps[i] = panel{panelID(fmt.Sprintf("%%%d", i)), rect{
-				rapid.IntRange(0, 100).Draw(t, "x"), rapid.IntRange(0, 50).Draw(t, "y"),
-				rapid.IntRange(1, 60).Draw(t, "w"), rapid.IntRange(1, 30).Draw(t, "h")}}
-		}
-		from := ps[rapid.IntRange(0, n-1).Draw(t, "from")]
-		d := direction(rapid.IntRange(0, 3).Draw(t, "d"))
-		prev := ps[rapid.IntRange(0, n-1).Draw(t, "prev")].id
-		got, ok := navStep(ps, from.id, d, prev)
-		var any, facing bool
-		for _, p := range ps {
-			if p.id == from.id {
-				continue
-			}
-			if _, overlap, way := beyond(from.r, p.r, d); way {
-				any, facing = true, facing || overlap > 0
-			}
-		}
-		if ok != any {
-			t.Fatalf("ok %v, but a panel lies that way: %v", ok, any)
-		}
-		if !ok {
-			return
-		}
-		for _, p := range ps {
-			if p.id != got {
-				continue
-			}
-			_, overlap, way := beyond(from.r, p.r, d)
-			if !way || p.id == from.id {
-				t.Fatalf("moved %d from %+v to %+v", d, from.r, p.r)
-			}
-			if facing && overlap <= 0 {
-				t.Fatalf("moved %d from %+v to %+v, which does not face it, past one that does", d, from.r, p.r)
 			}
 		}
 	})

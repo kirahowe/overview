@@ -382,6 +382,14 @@ func (r *rig) screen() string {
 	return out
 }
 
+// inPanels says whether the list's footer shows the panels mode. The
+// list's own hints include "esc panels", which says nothing of the mode,
+// so it is taken out first.
+func (r *rig) inPanels() bool {
+	lines := strings.Split(strings.TrimRight(r.screen(), "\n"), "\n")
+	return strings.Contains(strings.ReplaceAll(lines[len(lines)-1], "esc panels", ""), "panels")
+}
+
 // press sends keys to the list, one tmux key name each.
 func (r *rig) press(keys ...string) {
 	r.ov.t.Helper()
@@ -842,9 +850,8 @@ func (r *rig) hook(t *testing.T, payload map[string]any) {
 }
 
 // The cockpit, end to end: o zooms the list's pane to fill its window and
-// draws the cards beside the list, and esc, once it has taken the keys out
-// of the list to the panels, ends the zoom, leaving the list beside the
-// session as it was.
+// draws the cards beside the list, and esc ends the zoom, leaving the list
+// beside the session as it was.
 func TestCockpit(t *testing.T) {
 	r := launch(t, "o")
 	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
@@ -872,12 +879,166 @@ func TestCockpit(t *testing.T) {
 		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
 	}
 
-	r.press("Escape", "Escape")
+	r.press("Escape")
 	waitFor(t, "the list beside the session again", func() (bool, string) {
 		ok, say := beside(r.ov.panes(), session.id, width)
 		f := strings.Fields(zoomed())
 		return ok && len(f) == 3 && f[0] == "0" && !strings.Contains(r.screen(), "Uncommitted"), zoomed() + " " + say
 	})
+}
+
+// typed sends keys to the terminal the view is attached in, as a user's
+// are: through the attached client and its key tables, which send-keys at
+// a pane would skip.
+func (r *rig) typed(keys ...string) {
+	r.term.t.Helper()
+	for _, k := range keys {
+		r.term.must("send-keys", "-t", r.termPane, k)
+	}
+}
+
+// table is the key table of the view's client.
+func (r *rig) table() string {
+	return strings.TrimSpace(r.ov.must("list-clients", "-F", "#{client_key_table}"))
+}
+
+// window is what the terminal shows: the whole window with its rules.
+func (r *rig) window() string {
+	out, _ := r.term.run("capture-pane", "-p", "-t", r.termPane)
+	return out
+}
+
+// cursor is the list's row under the cursor, whichever panel it is in.
+func (r *rig) cursor() string {
+	for _, l := range strings.Split(r.screen(), "\n") {
+		if strings.Contains(l, "▌") {
+			return strings.TrimSpace(l)
+		}
+	}
+	return ""
+}
+
+// The panels mode, end to end, typed at the terminal the view is attached
+// in, so the keys take the path a user's do. esc in the list puts the
+// client in the mode: the focused pane's rule says so and the footer says
+// panels. l moves tmux's focus to the session beside the list, and enter
+// leaves the mode with the keys in the session. ctrl+[ and a tmux prefix
+// key bring them back to the list, where j and k move the cursor, and so
+// does leaving the mode with enter on the list.
+func TestPanelsMode(t *testing.T) {
+	r := launch(t, "p")
+	r.ov.must("bind-key", "h", "select-pane", "-L")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	before := r.ov.panes()
+	r.press("c")
+	one := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, one)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the first session in the list", func() (bool, string) {
+		return strings.Contains(r.screen(), "e2e-0"), r.screen()
+	})
+	before = r.ov.panes()
+	r.press("c")
+	two := r.fresh(t, "a second session window", before, isSleep)
+	r.lists(t, r.work, one, two)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "both sessions in the list", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "e2e-0") && strings.Contains(s, "e2e-1"), s
+	})
+	session := func() string { // the pane beside the list
+		for _, p := range r.ov.panes() {
+			if !p.list && !p.holder && p.window == r.windowOf(r.list.id) {
+				return p.id
+			}
+		}
+		return ""
+	}
+	waitFor(t, "a session beside the list", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session(), 0)
+		return ok && session() != "", say
+	})
+
+	// moves checks that j and k move the list's cursor now, on the screen.
+	moves := func(what string) {
+		t.Helper()
+		if got := r.active(); got != r.list.id {
+			t.Fatalf("%s: the keys are in %s, not the list", what, got)
+		}
+		was := r.cursor()
+		r.typed("j")
+		waitFor(t, what+": j to move the cursor", func() (bool, string) { return r.cursor() != was, was + " -> " + r.cursor() })
+		now := r.cursor()
+		r.typed("k")
+		waitFor(t, what+": k to move it back", func() (bool, string) { return r.cursor() != now, now + " -> " + r.cursor() })
+	}
+	// toSession enters the mode, moves the focus to the session beside the
+	// list, and leaves the mode with the keys there.
+	toSession := func() {
+		t.Helper()
+		r.typed("Escape")
+		waitFor(t, "the mode", func() (bool, string) { return r.table() == "overview-panels", r.table() })
+		r.typed("l")
+		waitFor(t, "the focus in the session", func() (bool, string) { return r.active() == session(), r.active() })
+		r.typed("Enter")
+		waitFor(t, "the mode left", func() (bool, string) { return r.table() == "root", r.table() })
+	}
+	focused := func() bool { return r.active() == r.list.id }
+	waitFor(t, "the keys in the list", func() (bool, string) { return focused(), r.active() })
+	moves("at the start")
+
+	// esc in the list: the mode, shown in the rule and the footer.
+	r.typed("Escape")
+	waitFor(t, "the panels mode", func() (bool, string) {
+		return r.table() == "overview-panels" && strings.Contains(r.window(), "enter to act") && r.inPanels(), r.table() + "\n" + r.window()
+	})
+	// l moves the focus to the session, and the marker with it.
+	listW := r.list.w
+	r.typed("l")
+	waitFor(t, "the focus in the session, still in the mode", func() (bool, string) {
+		w := r.window()
+		first := strings.Index(strings.Split(w, "\n")[0], "enter to act")
+		return r.active() == session() && r.table() == "overview-panels" && first > listW, r.active() + " " + r.table() + "\n" + w
+	})
+	// enter leaves the mode, and what is typed reaches the session.
+	r.typed("Enter")
+	waitFor(t, "the mode left", func() (bool, string) {
+		return r.table() == "root" && !strings.Contains(r.window(), "enter to act"), r.table() + "\n" + r.window()
+	})
+	r.typed("x", "y")
+	waitFor(t, "the keys in the session", func() (bool, string) {
+		out, _ := r.ov.run("capture-pane", "-p", "-t", session())
+		return strings.Contains(out, "xy"), out
+	})
+
+	// Back to the list by ctrl+[, which the terminal sends the view's tmux
+	// as extended keys: -K sends it as the client's own.
+	client := r.ov.must("list-clients", "-F", "#{client_name}")
+	r.ov.must("send-keys", "-K", "-c", client, "C-[")
+	waitFor(t, "ctrl+[ to bring the keys to the list", func() (bool, string) { return focused(), r.active() })
+	moves("after ctrl+[")
+
+	// And by a tmux key, the prefix and h.
+	toSession()
+	r.typed("C-b", "h")
+	waitFor(t, "prefix h to bring the keys to the list", func() (bool, string) { return focused(), r.active() })
+	moves("after prefix h")
+
+	// esc and then enter on the list leaves the mode with the keys there.
+	r.typed("Escape")
+	waitFor(t, "the mode again", func() (bool, string) { return r.table() == "overview-panels", r.table() })
+	r.typed("Enter")
+	waitFor(t, "the mode left", func() (bool, string) { return r.table() == "root", r.table() })
+	moves("after enter on the list")
+
+	// Moving out and back with the mode on: h returns to the list.
+	r.typed("Escape")
+	waitFor(t, "the mode once more", func() (bool, string) { return r.table() == "overview-panels", r.table() })
+	r.typed("l")
+	waitFor(t, "the focus in the session", func() (bool, string) { return r.active() == session(), r.active() })
+	r.typed("h", "Enter")
+	waitFor(t, "the mode left in the list", func() (bool, string) { return r.table() == "root" && focused(), r.table() + r.active() })
+	moves("after l h enter")
 }
 
 // atoi reads a number tmux printed, 0 when it is none.

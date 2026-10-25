@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,22 @@ import (
 
 	"overview/internal/tmuxtest"
 )
+
+// A session is in the panels mode when the client last used on it is:
+// another left in the mode in a terminal elsewhere does not count.
+func TestPanelsSessionsFollowsTheLatestClient(t *testing.T) {
+	out := "%0\tttys1\tov\n" +
+		"client\tov\troot\t200\n" +
+		"client\tov\toverview-panels\t100\n" +
+		"client\tother\toverview-panels\t50\n" +
+		"client\tthird\troot\t70\n" +
+		"client\tbroken\n"
+	got := panelsSessions(out)
+	want := map[string]bool{"ov": false, "other": true, "third": false}
+	if !maps.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
 
 func TestParsePanes(t *testing.T) {
 	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t/w\n" +
@@ -321,7 +338,15 @@ func TestSelfIsThePaneTmuxStartedTheCommandIn(t *testing.T) {
 	if err := s.Respawn(p.ID, nil, "sleep", "302"); err != nil {
 		t.Fatal(err)
 	}
-	out, _ = s.run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
+	// tmux reports its own name as the command until the new process has
+	// exec'd, so give it a moment.
+	for range 100 {
+		out, _ = s.run("display-message", "-p", "-t", p.ID, "#{pane_pid} #{pane_current_command}")
+		if f := strings.Fields(out); len(f) == 2 && f[1] == "sleep" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if f := strings.Fields(out); len(f) != 2 || f[1] != "sleep" || f[0] == strconv.Itoa(pid) {
 		t.Fatalf("after respawn: %q", out)
 	}
@@ -735,81 +760,32 @@ func TestSetZoomIsIdempotent(t *testing.T) {
 	}
 }
 
-// Frame draws each pane's borders in the border colour, and in the accent
-// colour for the pane the view selected and for a pane other than the
-// view's that has the keyboard. The view's own pane lights only when it
-// is selected, since it has the keyboard while the user moves between
-// panes, or when another is, for the border they share.
-func TestFrameLightsTheSelectedPane(t *testing.T) {
-	s := testServer(t)
-	list, err := s.Spawn("ov", "/", nil, "sleep", "300")
-	if err != nil {
-		t.Fatal(err)
-	}
-	beside, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MarkList(list.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
-		t.Fatal(err)
-	}
-	style := func(id string) string {
-		return strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", id, "#{E:pane-border-style}")))
-	}
-	const accent, border = "fg=#ff0000", "fg=#111111"
-	if err := s.Select(list.ID); err != nil {
-		t.Fatal(err)
-	}
-	if a, b := style(list.ID), style(beside.ID); a != border || b != border {
-		t.Fatalf("nothing selected, the list active: list %q, beside %q", a, b)
-	}
-	if err := s.SetPaneOptions([]PaneSet{{beside.ID, SelectOption, "1"}, {beside.ID, TitleOption, "claude"}}); err != nil {
-		t.Fatal(err)
-	}
-	// The list has the keyboard, so tmux styles the border the two share
-	// from it, and it draws that border lit for the pane beside.
-	if a, b := style(list.ID), style(beside.ID); a != accent || b != accent {
-		t.Fatalf("beside selected: list %q, beside %q", a, b)
-	}
-	if got := strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", beside.ID, "#{"+TitleOption+"}"))); got != "claude" {
-		t.Fatalf("title %q", got)
-	}
-	if err := s.SetPaneOptions([]PaneSet{{beside.ID, SelectOption, ""}, {list.ID, SelectOption, "1"}}); err != nil {
-		t.Fatal(err)
-	}
-	if a, b := style(list.ID), style(beside.ID); a != accent || b != border {
-		t.Fatalf("the list selected: list %q, beside %q", a, b)
-	}
-	if err := s.SetPaneOptions([]PaneSet{{list.ID, SelectOption, ""}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Select(beside.ID); err != nil {
-		t.Fatal(err)
-	}
-	if a, b := style(list.ID), style(beside.ID); a != border || b != accent {
-		t.Fatalf("the keyboard beside: list %q, beside %q", a, b)
-	}
-	if err := s.SetPaneOptions([]PaneSet{{"%999", SelectOption, "1"}}); err == nil {
-		t.Fatal("setting an option on a pane that is not there did not fail")
-	}
+// framed starts a server with a session "ov" of two panes side by side,
+// the list on the left and one beside it, both running cat so that what is
+// typed in the focused one shows on its screen. A client of a second
+// server is attached at 60 by 12 cells, and its screen is what the test
+// reads: the colours and text tmux draws.
+type framed struct {
+	t            *testing.T
+	s            Server
+	client       tmuxtest.Socket
+	list, beside string
+	col          int // the column of the border between the two
 }
 
-// What a client of a framed window shows: the border between the list and
-// the pane beside it is lit whole, top to bottom, whenever either is lit.
-// tmux's own indicator would light only half of it. A second server's
-// pane is the client, so the test reads the colours tmux draws.
-func TestFrameLightsTheWholeBorder(t *testing.T) {
+func newFramed(t *testing.T) framed {
+	t.Helper()
 	sock := tmuxtest.New(t, "")
 	s := At(sock.Path, "/dev/null")
-	list := strings.TrimSpace(must(t)(s.run("new-session", "-d", "-s", "ov", "-x", "40", "-y", "12", "-P", "-F", "#{pane_id}", "sleep", "300")))
-	beside := strings.TrimSpace(must(t)(s.run("split-window", "-h", "-d", "-t", list, "-P", "-F", "#{pane_id}", "sleep", "300")))
+	list := strings.TrimSpace(must(t)(s.run("new-session", "-d", "-s", "ov", "-x", "60", "-y", "12", "-P", "-F", "#{pane_id}", "cat")))
+	beside := strings.TrimSpace(must(t)(s.run("split-window", "-h", "-d", "-t", list, "-P", "-F", "#{pane_id}", "cat")))
 	if err := s.MarkList(list); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee", Muted: "#777777"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPaneOptions([]PaneSet{{list, TitleOption, "one"}, {beside, TitleOption, "two"}}); err != nil {
 		t.Fatal(err)
 	}
 	col, err := strconv.Atoi(strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", list, "#{pane_width}"))))
@@ -818,56 +794,181 @@ func TestFrameLightsTheWholeBorder(t *testing.T) {
 	}
 	must(t)(s.run("set-option", "-g", "status", "off"))
 	client := tmuxtest.New(t, "")
-	client.Must("new-session", "-d", "-x", "40", "-y", "12", "tmux", "-S", sock.Path, "-f", "/dev/null", "attach", "-t", "ov")
+	client.Must("new-session", "-d", "-x", "60", "-y", "12", "tmux", "-S", sock.Path, "-f", "/dev/null", "attach", "-t", "ov")
 	client.Must("set-option", "-g", "status", "off")
+	return framed{t, s, client, list, beside, col}
+}
 
-	const accent, border = "255;0;0", "17;17;17"
-	// screen waits for the client to draw what the step set up: the
-	// border's top cell in want.
-	screen := func(step, want string) [][]drawn {
-		t.Helper()
-		var rows [][]drawn
-		for range 100 {
-			rows = cells(client.Must("capture-pane", "-e", "-p"))
-			if len(rows) > 1 && len(rows[0]) > col && rows[0][col].fg == want {
-				return rows
-			}
-			time.Sleep(20 * time.Millisecond)
+// active is the id of the active pane.
+func (f framed) active() string {
+	f.t.Helper()
+	return strings.TrimSpace(must(f.t)(f.s.run("display-message", "-p", "-t", "ov:", "#{pane_id}")))
+}
+
+// table is the key table of the attached client.
+func (f framed) table() string {
+	f.t.Helper()
+	return strings.TrimSpace(must(f.t)(f.s.run("list-clients", "-F", "#{client_key_table}")))
+}
+
+// until polls for cond, which the client takes a moment to meet.
+func (f framed) until(what string, cond func() bool) {
+	f.t.Helper()
+	for range 100 {
+		if cond() {
+			return
 		}
-		t.Fatalf("%s: the border's top is not %s:\n%v", step, want, rows)
-		return nil
+		time.Sleep(20 * time.Millisecond)
 	}
-	check := func(step, edge, listRule, besideRule string) {
+	f.t.Fatalf("%s", what)
+}
+
+// rows is the client's screen, once it shows want in the border's top
+// cell.
+func (f framed) rows(step, want string) [][]drawn {
+	f.t.Helper()
+	var rows [][]drawn
+	for range 100 {
+		rows = cells(f.client.Must("capture-pane", "-e", "-p"))
+		if len(rows) > 1 && len(rows[0]) > f.col && rows[0][f.col].fg == want {
+			return rows
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	f.t.Fatalf("%s: the border's top is not %s:\n%v", step, want, rows)
+	return nil
+}
+
+// top is the text of the client's top row.
+func (f framed) top() string {
+	f.t.Helper()
+	return strings.SplitN(f.client.Must("capture-pane", "-p"), "\n", 2)[0]
+}
+
+// send types keys at the client, as a user at its terminal would.
+func (f framed) send(keys ...string) {
+	f.t.Helper()
+	f.client.Must(append([]string{"send-keys"}, keys...)...)
+}
+
+// The active pane's whole border is drawn in the accent colour, and the
+// rule along the top of the other pane stays in the border colour. The
+// pane that is active is tmux's to say, so moving the focus either way
+// moves the highlight. A second server's pane is the client, so the test
+// reads the colours tmux draws.
+func TestFrameLightsTheActivePane(t *testing.T) {
+	f := newFramed(t)
+	const accent, border = "255;0;0", "17;17;17"
+	check := func(step, listRule, besideRule string) {
 		t.Helper()
-		rows := screen(step, edge)
-		for y := 1; y < len(rows) && len(rows[y]) > col; y++ {
-			if c := rows[y][col]; c.r != "│" || c.fg != edge {
-				t.Fatalf("%s: row %d of the border is %q in %s, want %s", step, y, c.r, c.fg, edge)
+		rows := f.rows(step, accent)
+		for y := 1; y < len(rows) && len(rows[y]) > f.col; y++ {
+			if c := rows[y][f.col]; c.r != "│" || c.fg != accent {
+				t.Fatalf("%s: row %d of the border is %q in %s, want %s", step, y, c.r, c.fg, accent)
 			}
 		}
-		if c := rows[0][col-1]; c.r != "─" || c.fg != listRule {
+		if c := rows[0][f.col-1]; c.r != "─" || c.fg != listRule {
 			t.Fatalf("%s: the end of the list's rule is %q in %s, want %s", step, c.r, c.fg, listRule)
 		}
 		if last := rows[0][len(rows[0])-1]; last.r != "─" || last.fg != besideRule {
 			t.Fatalf("%s: the end of the rule beside is %q in %s, want %s", step, last.r, last.fg, besideRule)
 		}
 	}
-	set := func(sets ...PaneSet) {
+	must(t)(f.s.run("select-pane", "-t", f.list))
+	check("the list active", accent, border)
+	must(t)(f.s.run("select-pane", "-t", f.beside))
+	check("the pane beside active", border, accent)
+	must(t)(f.s.run("select-pane", "-t", f.list))
+	check("the list active again", accent, border)
+}
+
+// The panels mode is a key table: in it h j k l and the arrows move the
+// focus and stay in the mode, enter and esc leave it, and any other key
+// leaves it and is dropped. Each key is typed at the client, so it takes
+// the path a user's does. While a client is in the mode, the active
+// pane's rule says that enter acts there, and no other rule does.
+func TestPanelsModeMovesFocus(t *testing.T) {
+	f := newFramed(t)
+	if err := f.s.BindPanels(); err != nil {
+		t.Fatal(err)
+	}
+	must(t)(f.s.run("select-pane", "-t", f.list))
+	if f.table() != "root" || strings.Contains(f.top(), "enter to act") {
+		t.Fatalf("before the mode: table %q, top %q", f.table(), f.top())
+	}
+	enter := func() {
 		t.Helper()
-		if err := s.SetPaneOptions(sets); err != nil {
+		if err := f.s.EnterPanels(); err != nil {
 			t.Fatal(err)
 		}
+		f.until("the client did not enter the mode", func() bool { return f.table() == PanelsTable })
 	}
-	must(t)(s.run("select-pane", "-t", list))
-	check("nothing selected", border, border, border)
-	set(PaneSet{list, SelectOption, "1"})
-	check("the list selected", accent, accent, border)
-	set(PaneSet{list, SelectOption, ""}, PaneSet{beside, SelectOption, "1"})
-	check("beside selected", accent, border, accent)
-	set(PaneSet{beside, SelectOption, ""})
-	check("nothing selected again", border, border, border)
-	must(t)(s.run("select-pane", "-t", beside))
-	check("the keyboard beside", accent, border, accent)
+	// at says which pane the marker is in, by its column, -1 for none.
+	at := func() int { return strings.Index(f.top(), "enter to act") }
+	// moved waits for the focus to reach pane id with the mode still on.
+	moved := func(step, id string) {
+		t.Helper()
+		f.until(step+": the focus did not reach "+id, func() bool { return f.active() == id })
+		if f.table() != PanelsTable {
+			t.Fatalf("%s: the key table is %q, not the mode's", step, f.table())
+		}
+	}
+
+	enter()
+	f.until("the marker does not show on the list's rule", func() bool { return at() >= 0 && at() < f.col })
+	panes, err := f.s.Panes()
+	if err != nil || len(panes) != 2 || !panes[0].Panels || !panes[1].Panels {
+		t.Fatalf("the listing should say a client is in the mode: %+v, %v", panes, err)
+	}
+	f.send("l")
+	moved("l", f.beside)
+	f.until("the marker does not move to the rule beside", func() bool { return at() > f.col })
+	f.send("h")
+	moved("h", f.list)
+	f.send("Right")
+	moved("right", f.beside)
+	f.send("Left")
+	moved("left", f.list)
+
+	// enter leaves the mode, and the next keys reach the pane.
+	f.send("Enter")
+	f.until("enter did not leave the mode", func() bool { return f.table() == "root" })
+	f.until("the marker stayed after the mode", func() bool { return at() < 0 })
+	f.send("a")
+	f.until("a key did not reach the pane after enter", func() bool {
+		return strings.Contains(must(t)(f.s.run("capture-pane", "-p", "-t", f.list)), "a")
+	})
+	if panes, err := f.s.Panes(); err != nil || panes[0].Panels {
+		t.Fatalf("the listing should say no client is in the mode: %+v, %v", panes, err)
+	}
+
+	// esc leaves it too.
+	enter()
+	f.send("Escape")
+	f.until("esc did not leave the mode", func() bool { return f.table() == "root" })
+
+	// A key the table does not bind leaves the mode and goes nowhere.
+	enter()
+	f.send("z")
+	f.until("an unbound key did not leave the mode", func() bool { return f.table() == "root" })
+	f.send("y")
+	f.until("a key did not reach the pane after the mode", func() bool {
+		return strings.Contains(must(t)(f.s.run("capture-pane", "-p", "-t", f.list)), "ay")
+	})
+	if got := must(t)(f.s.run("capture-pane", "-p", "-t", f.list)); strings.Contains(got, "z") || f.active() != f.list {
+		t.Fatalf("the unbound key reached the pane, or the focus moved: %q", got)
+	}
+
+	// ctrl+[ is bound to the list. A terminal without extended keys sends
+	// it as esc, so the key is not typed at the client here.
+	keys := must(t)(f.s.run("list-keys", "-T", PanelsTable))
+	if !strings.Contains(keys, "C-[") || !strings.Contains(keys, "{top-left}") {
+		t.Fatalf("ctrl+[ is not bound to the list:\n%s", keys)
+	}
+	must(t)(f.s.run("select-pane", "-t", f.beside))
+	enter()
+	must(t)(f.s.run("send-keys", "-K", "-c", strings.TrimSpace(must(t)(f.s.run("list-clients", "-F", "#{client_name}"))), "C-["))
+	f.until("ctrl+[ did not go to the list and leave the mode", func() bool { return f.active() == f.list && f.table() == "root" })
 }
 
 // drawn is one cell of a captured screen: its character and its

@@ -9,7 +9,7 @@ import (
 // Input works in two steps. Every key, mouse and focus event arrives
 // through Update, one at a time, and is first translated into actions:
 // what the user asked for, whichever device asked. Translation reads the
-// model's mode (searching, an overlay, the screen, the panel the keys are
+// model's mode (searching, an overlay, the screen, the card the keys are
 // in) and changes nothing. apply then carries out each action, and is the
 // only place behaviour lives, so enter and a double click, or j and the
 // wheel, do exactly the same thing. It runs nothing itself: what reaches
@@ -70,9 +70,7 @@ const (
 	cockpitTab  // move the keyboard between the list and the cockpit's issues card
 	cockpitMove // n issues down the issues card, negative for up
 	cockpitPick // start a workstream on the issue under the issues card's cursor
-	navMove     // select the nearest panel in direction n
-	navIn       // go into the selected panel
-	navOut      // come out of the panel the keys are in, to choose another
+	enterPanels // put the client in tmux's panels mode, where the keys move the focus
 )
 
 type action struct {
@@ -222,20 +220,6 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return as
 		}
 	}
-	if !m.nav.inside {
-		switch k {
-		case "h", "left":
-			return doN(navMove, int(leftward))
-		case "l", "right":
-			return doN(navMove, int(rightward))
-		case "k", "up":
-			return doN(navMove, int(upward))
-		case "j", "down":
-			return doN(navMove, int(downward))
-		case "enter":
-			return do(navIn)
-		}
-	}
 	switch k {
 	case "j", "down":
 		return doN(move, 1)
@@ -246,8 +230,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 	case "G", "end":
 		return doN(moveTo, end)
 	case "esc":
-		if m.filter == "" && m.nav.inside {
-			return do(navOut)
+		if m.filter == "" {
+			return do(enterPanels)
 		}
 		return do(clearFilter)
 	case "n":
@@ -280,17 +264,15 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 
 // cockpitKeys translates the keys that mean something else while the
 // cockpit is open, nil for the others: o closes it, and so does esc once
-// no filter is applied to the list and the keyboard is out on the panels,
-// tab moves the keyboard between the list and the issues card, and in
-// that card the arrows move its cursor and enter acts on its issue.
+// no filter is applied to the list, tab moves the keyboard between the
+// list and the issues card, and in that card the arrows move its cursor
+// and enter acts on its issue. The cockpit has no panels mode: it fills
+// the window, so there is no panel to move to.
 func (m model) cockpitKeys(k string) []action {
 	switch k {
 	case "esc":
-		switch {
-		case m.filter != "":
+		if m.filter != "" {
 			return do(clearFilter)
-		case m.nav.inside:
-			return do(navOut)
 		}
 		return do(outCockpit)
 	case "o":

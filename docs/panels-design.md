@@ -30,58 +30,68 @@ top, `── title ───── note ──`, with single lines between panel
 - A project's section in the list keeps its own lighter rule, inset by a
   space, so a section never looks like a panel.
 
-The selected panel's rule is in the accent colour. For a tmux pane that is
-the pane option `@overview-select`, which the style formats read; tmux
-lights the pane with the keyboard by itself, except the view's own,
-which has the keyboard whenever the user is choosing a panel.
+The panel with the keyboard has its rule in the accent colour. For a tmux
+pane that is its active pane, and tmux lights it: `pane-active-border-style`
+is the accent and `pane-border-style` the border colour, and
+`pane-border-format` sets the title in the accent, bold, while the pane is
+active (`pane_active`) and in the text colour otherwise. The view sets
+nothing per pane to light one.
 
 The border between two panes is lit along its whole length. tmux's
 `pane-border-indicators` would light only half of it in a window of two
 panes, so `tmux.Frame` turns them off. tmux then styles a shared border
-from the active pane. While the user chooses a panel, that is the view's
-pane, so the view's pane draws its borders lit whenever any pane in its
-window is selected. Each rule's fill comes from `pane-border-format`,
-not the border style, so the view's rule stays unlit. The two cells
-before its title are the exception: tmux styles them from the view's
-pane as well, and they light with the border.
+from the active pane, and the active pane's rule fill is lit too. Inside the
+view's own pane the view lights what it draws: the agents' rule while the
+cursor is in the agents and the keyboard is in the view, and in the cockpit
+the list's rule or the issues card's, whichever has the keys. Focus and its
+reasons are in focus-design.md.
 
-`frames` works out every pane's title and selection from the model, and
-`reframe` sends tmux only what changed, one Cmd at a time, as `restage`
-does for the panes themselves.
+`frames` works out every pane's title from the model, and `reframe` sends
+tmux only what changed, one Cmd at a time, as `restage` does for the
+panes themselves.
 
 ## Moving between panels
 
-The keyboard starts out in the list, and `esc` takes it out to the
-panels. There `h j k l` select the nearest panel that way, and `enter`
-goes into the selected one. In a tmux pane `esc` belongs to the program,
+Focus is tmux's active pane, and there is one. The keyboard starts out in
+the list, where `j` and `k` move the cursor, crossing from the projects
+into the agents, and `l`, `enter` and `tab` open the cursor's entry, which
+moves the keys into its pane. In a tmux pane `esc` belongs to the program,
 so `ctrl+[` comes back from there. However the keyboard comes back to the
 view's pane, by `ctrl+[`, a tmux key or a click, it lands in the list on
-the cursor, so `j` and `k` move it at once. The pane it left is the
-panel a move back to the right returns to. Out on the panels the footer
-says `panels` and the cursor's row loses its background, so a row with a
-background always means the keys move it.
+the cursor, so `j` and `k` move it at once. Nothing is selected apart from
+focus, so this holds without any bookkeeping.
 
-The panels were first the place the keyboard came back to, with the pane
-it left selected. That made `j` and `k` look for a panel above or below
-the session, find none, and do nothing, which left the keyboard stuck
-with no sign of why.
+To move between panes without typing into one, `esc` in the list puts the
+client in the panels mode. It is the tmux key table `overview-panels`,
+which `tmux.BindPanels` binds as the view starts: `h j k l` and the arrows
+run `select-pane` and re-enter the table (a key of a table other than the
+root drops back to it once it has run), `enter` and `esc` return to the
+root, and `ctrl+[` selects the list's pane and returns to the root. A key
+the table does not bind leaves the mode and tmux looks it up again in the
+root table, so the mouse and the prefix work as ever, and a key bound
+nowhere is dropped. A move off the window's edge wraps around, as
+`select-pane` does. In the mode the focused pane's rule gets a note after its title,
+`enter to act`, from `pane-border-format` reading `client_key_table`. The
+cursor's row has no background and the footer starts with `panels`, so a
+row with a background always means the keys move it.
 
-The panels are the projects and the agents, the tmux panes of the list's
-window, and in the cockpit the cards that take keys: the header and the
-issues. The pane showing the cursor's entry is one panel, the stage,
-whichever pane that is, so selecting it survives the cursor moving.
+The view puts the client there with `switch-client -T overview-panels`
+through the mux seam (`EnterPanels`), and sets its `panels` flag at once.
+It learns the mode otherwise from `list-clients`, which `tmux.Panes` folds
+into the pane listing, and a key that reaches the view clears the flag,
+since the mode keeps every key for tmux. The Cmd bumps `spawns` like a
+spawn does, so a listing taken before the mode cannot undo it.
 
-- `navStep` is pure: from the panels' rectangles it picks the nearest
-  panel wholly in the direction, those facing the one left before those
-  off to the side, and on a tie the one the selection came from, so a move
-  back returns.
-- `keepNav` keeps the selection on a panel that is there, after every
-  update, as `keepCursor` does for the cursor.
-- Inside the list the cursor walks from the projects into the agents as
-  before, and the selection follows it.
-- The keys that act on the cursor's entry work out on the panels too.
-  `n` there selects the stage, so `n` then `enter` goes straight to what
-  needs you.
+The cockpit has no panels mode, since it zooms the list's pane and there is
+nothing to move to. `esc` there clears a filter, then closes the cockpit.
+`tab` moves the keys between the list and the issues card, which is a
+plain flag, `cockpit.issues`. The rest of the cards only show.
+
+The earlier design kept a selected panel apart from the active pane, moved
+it with `h j k l` in the view and lit it through the pane option
+`@overview-select`. tmux styles a border cell from one pane, so the
+workarounds lit cells in the wrong places and could not light the agents.
+focus-design.md says why that went.
 
 ## One way in
 

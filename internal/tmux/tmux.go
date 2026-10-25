@@ -42,13 +42,13 @@ const ReviewOption = "@overview-review"
 const ViewOption = "@overview-view"
 
 // TitleOption is the pane option holding the title set into the rule along
-// a pane's top, tmux styles and all, and SelectOption marks the pane the
-// view has selected, whose rule is drawn in the accent colour. Frame says
-// how they are drawn.
-const (
-	TitleOption  = "@overview-title"
-	SelectOption = "@overview-select"
-)
+// a pane's top, tmux styles and all. Frame says how it is drawn.
+const TitleOption = "@overview-title"
+
+// PanelsTable is the key table of the panels mode: while a client is in
+// it, its keys move the focus between panes and do not reach the program
+// in the focused pane. BindPanels sets it up.
+const PanelsTable = "overview-panels"
 
 // paneFormat is how Panes asks for each pane: one tab-separated line each.
 // The path comes last, so a tab in it cannot shift the other fields.
@@ -56,6 +56,10 @@ const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pa
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
 	"\t#{pane-border-status}\t#{pane_current_path}"
+
+// clientFormat is how Panes asks for each client: its session, key table
+// and when it was last used, after a word that no pane line starts with.
+const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
 const paneFields = 21
@@ -81,6 +85,7 @@ type Pane struct {
 	X, Y    int    // where the pane is in its window, its top-left cell
 	Active  bool   // the pane is its window's active one
 	Framed  bool   // the window draws a rule along the top of each pane
+	Panels  bool   // a client of the pane's session is in the panels mode
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -206,14 +211,46 @@ func (s Server) Self(pid int) (id string, ok bool, err error) {
 
 // Panes lists every pane on the server. No server means no panes.
 func (s Server) Panes() ([]Pane, error) {
-	out, err := s.run("list-panes", "-a", "-F", paneFormat)
+	out, err := s.run("list-panes", "-a", "-F", paneFormat, ";", "list-clients", "-F", clientFormat)
 	if err != nil {
 		if noServer(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return ParsePanes(out), nil
+	panes := ParsePanes(out)
+	in := panelsSessions(out)
+	for i := range panes {
+		panes[i].Panels = in[panes[i].Session]
+	}
+	return panes, nil
+}
+
+// panelsSessions reads the client lines of Panes' output, and names the
+// sessions whose most recently used client is in the panels mode. That
+// is the client the user is at: another left in the mode in a terminal
+// elsewhere does not count.
+func panelsSessions(out string) map[string]bool {
+	type last struct {
+		at    int64
+		table string
+	}
+	latest := map[string]last{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 || f[0] != "client" {
+			continue
+		}
+		at, _ := strconv.ParseInt(f[3], 10, 64)
+		if l, ok := latest[f[1]]; !ok || at >= l.at {
+			latest[f[1]] = last{at, f[2]}
+		}
+	}
+	in := map[string]bool{}
+	for session, l := range latest {
+		in[session] = l.table == PanelsTable
+	}
+	return in
 }
 
 func noServer(err error) bool {
@@ -320,52 +357,77 @@ func frameArgs(pane string, on bool) []string {
 
 // Colours are the colours Frame draws the rules in, as tmux takes them:
 // "#rrggbb" or "colour123".
-type Colours struct{ Accent, Border, Text string }
+type Colours struct{ Accent, Border, Text, Muted string }
 
-// lit is a format that is true for a pane whose rule is drawn in the
-// accent colour: the pane the view selected, and the pane with the
-// keyboard when that is not the view's own, which lights only when it is
-// the one selected.
-const lit = "#{?#{" + SelectOption + "},1,#{?pane_active,#{?#{" + ListOption + "},0,1},0}}"
-
-// edge is a format that is true for a pane whose borders are drawn in the
-// accent colour. tmux styles a border between two panes from the active
-// one, so while the view has the keyboard and has selected the pane
-// beside it, the view's pane draws the border they share lit. That lights
-// the two cells of the view's own rule before its title too, which
-// FrameFormat cannot reach: tmux styles them from the same pane.
-const edge = "#{?" + lit + ",1,#{?pane_active,#{P:#{?#{" + SelectOption + "},1,}},}}"
-
-// FrameFormat and FrameStyle are what Frame sets pane-border-format and
-// both pane border styles to. The title is the pane's TitleOption, or
-// what runs in it while it has none. The format draws the rest of the
-// rule itself, so a pane's rule follows lit while its borders follow edge.
-const (
-	FrameFormat = "#{?" + lit + ",#[fg=#{@overview-accent} bold],#[fg=#{@overview-text}]} " +
-		"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} " +
-		"#[fg=#{?" + lit + ",#{@overview-accent},#{@overview-border}} nobold]#{R:─,#{pane_width}}"
-	FrameStyle = "#{?" + edge + ",fg=#{@overview-accent},fg=#{@overview-border}}"
-)
+// FrameFormat is what Frame sets pane-border-format to: the pane's title,
+// which is its TitleOption, or what runs in it while it has none. The
+// active pane's title is in the accent colour and bold, the others' in the
+// text colour. While a client is in the panels mode, the active pane's
+// title is followed by a note that enter acts there. tmux draws the rest
+// of the rule itself, in the border style.
+const FrameFormat = "#{?pane_active,#[fg=#{@overview-accent} bold],#[fg=#{@overview-text}]} " +
+	"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} " +
+	"#{?#{&&:#{pane_active},#{==:#{client_key_table}," + PanelsTable + "}},#[fg=#{@overview-muted} nobold]· enter to act ,}"
 
 // Frame gives every pane on the server a rule along its top, the pane's
-// title set into it, and single lines between panes, lit whole: tmux
-// would otherwise light only half the border of a window of two panes.
-// The colours are
-// session's, so views of two config directories on one server can each
-// draw in their own theme.
+// title set into it, and single lines between panes. tmux lights the
+// active pane's whole border in the accent colour, and the others' in the
+// border colour: the indicators are off, since they would light only half
+// of the border between two panes. The colours are the session's, so views
+// of two config directories on one server can each draw in their own
+// theme.
 func (s Server) Frame(session string, c Colours) error {
 	var args []string
-	for _, o := range [][2]string{{"@overview-accent", c.Accent}, {"@overview-border", c.Border}, {"@overview-text", c.Text}} {
+	for _, o := range [][2]string{{"@overview-accent", c.Accent}, {"@overview-border", c.Border}, {"@overview-text", c.Text}, {"@overview-muted", c.Muted}} {
 		args = append(args, "set-option", "-t", "="+session+":", o[0], o[1], ";")
 	}
 	for _, o := range [][2]string{
 		{"pane-border-status", "top"}, {"pane-border-lines", "single"}, {"pane-border-format", FrameFormat},
-		{"pane-border-style", FrameStyle}, {"pane-active-border-style", FrameStyle},
+		{"pane-border-style", "fg=#{@overview-border}"}, {"pane-active-border-style", "fg=#{@overview-accent}"},
 		{"pane-border-indicators", "off"},
 	} {
 		args = append(args, "set-option", "-g", "-w", o[0], o[1], ";")
 	}
 	_, err := s.run(args[:len(args)-1]...)
+	return err
+}
+
+// BindPanels binds the keys of the panels mode, in the table PanelsTable.
+// A client enters it with EnterPanels. In it, h j k l and the arrows move
+// the focus to the pane that way and stay in the mode, since a key of a
+// table that is not the root leaves it once it has run. enter and esc
+// leave the mode, and the keys then reach the focused pane. ctrl+[ goes to
+// the list, the top-left pane, and leaves it. A key the table does not
+// bind leaves the mode and tmux looks it up in the root table, so the
+// mouse and the prefix still work, and a key bound nowhere is dropped.
+func (s Server) BindPanels() error {
+	var args []string
+	bind := func(key string, cmds ...string) {
+		args = append(args, "bind-key", "-T", PanelsTable, key)
+		for i, c := range cmds {
+			if i > 0 {
+				args = append(args, `\;`) // inside the binding, not between commands
+			}
+			args = append(args, strings.Fields(c)...)
+		}
+		args = append(args, ";")
+	}
+	for _, m := range [][2]string{{"h", "-L"}, {"j", "-D"}, {"k", "-U"}, {"l", "-R"}, {"Left", "-L"}, {"Down", "-D"}, {"Up", "-U"}, {"Right", "-R"}} {
+		bind(m[0], "select-pane "+m[1], "switch-client -T "+PanelsTable)
+	}
+	bind("Enter", "switch-client -T root")
+	bind("Escape", "switch-client -T root")
+	bind("C-[", "select-pane -t {top-left}", "switch-client -T root")
+	_, err := s.run(args[:len(args)-1]...)
+	return err
+}
+
+// EnterPanels puts the client that typed last into the panels mode. With
+// no client named, tmux takes the most recently active client of the
+// caller's session. tmux redraws the rules for a key that changes the
+// table, but not for this, so it redraws the client too.
+func (s Server) EnterPanels() error {
+	_, err := s.run("switch-client", "-T", PanelsTable, ";", "refresh-client")
 	return err
 }
 

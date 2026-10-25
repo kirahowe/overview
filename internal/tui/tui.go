@@ -95,7 +95,6 @@ type model struct {
 	sel       string // the key of the entry under the cursor, kept across refreshes
 	listTop   int    // first line of the projects shown, kept so clicks do not shift it
 	agentsTop int    // and of the agents
-	nav       nav    // the panel selected, and whether the keys are in it, as nav.go describes
 	filter    string
 	filtering bool
 	confirm   string // the key of a session to stop or a terminal to close, waiting on a yes
@@ -163,6 +162,10 @@ type model struct {
 	// blurred is set while the focus is in another pane. The list then
 	// stays where it is, and the cursor follows its window.
 	blurred bool
+	// panels is set while a client of the session is in the panels mode,
+	// as nav.go describes: from the latest listing, and at once when the
+	// view puts the client there. A key that reaches the view clears it.
+	panels bool
 	// framed is what the rules of the session's panes were last asked to
 	// show, by pane, as frame.go describes. framing is set while that Cmd
 	// is out, and frameStale after one failed, until a listing shows the
@@ -254,6 +257,9 @@ func Run(v View) error {
 	if err := srv.Frame(session, frameColours(v.Theme)); err != nil {
 		return err
 	}
+	if err := srv.BindPanels(); err != nil {
+		return err
+	}
 	focused, err := srv.Focused(self)
 	if err != nil {
 		return err
@@ -269,7 +275,7 @@ func Run(v View) error {
 }
 
 func newModel(home fleet.Home, llm string) model {
-	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps(), nav: nav{inside: true}}
+	return model{home: home, llm: llm, cache: &detailCache{}, deps: systemDeps()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -789,7 +795,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, stage := m.restage()
 	m, turns := m.askTurns()
-	m = m.keepNav().keepCockpit()
+	m = m.keepCockpit()
 	m, reads := m.cockpitReads()
 	m, taskRead := m.taskReads()
 	m, frame := m.reframe()
@@ -804,13 +810,19 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handle(do(keysBack))
 	case tea.BlurMsg:
 		return m.handle(do(keysLeft))
-	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg, framedMsg:
+	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg, framedMsg, panelsMsg:
 		return m.stageUpdate(msg)
 	case tea.KeyMsg:
 		// A key that reaches the list proves the keyboard is back, whether
-		// or not tmux said so, since a focus event can go missing.
+		// or not tmux said so, since a focus event can go missing. It also
+		// proves the client is out of the panels mode, which keeps every
+		// key for itself.
+		m.panels = false
 		return m.input(keysBack, func(m model) []action { return m.keyActions(msg) })
 	case tea.MouseMsg:
+		// tmux's panels mode does not bind the mouse, so a mouse event
+		// that reaches the view has taken the client out of it.
+		m.panels = false
 		// The input's time is read here, at the door, so apply stays pure.
 		// The mouse proves the user is at the list, but a wheel over it
 		// leaves the keyboard where it was.
@@ -929,7 +941,7 @@ func (m model) handle(actions []action) (tea.Model, tea.Cmd) {
 func (m model) apply(a action) (model, tea.Cmd) {
 	// An o waiting for the list's move is cancelled by what would close
 	// an open cockpit, by esc, and by another o.
-	if m.cockpitSoon && (closesCockpit(a.do) || a.do == clearFilter || a.do == toCockpit || a.do == outCockpit || a.do == navOut) {
+	if m.cockpitSoon && (closesCockpit(a.do) || a.do == clearFilter || a.do == toCockpit || a.do == outCockpit || a.do == enterPanels) {
 		m.cockpitSoon = false
 		if a.do == toCockpit {
 			return m, nil
@@ -946,7 +958,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	row, isSession := e.session()
 	switch a.do {
 	case keysBack:
-		return m.backFrom().unblur(), nil
+		return m.unblur(), nil
 	case keysLeft:
 		m.blurred = true
 	case pointerHere:
@@ -1013,12 +1025,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		for d := 1; d <= len(es); d++ {
 			j := ((i+a.n*d)%len(es) + len(es)) % len(es)
 			if needy(es[j]) {
-				m = m.moveTo(es, j)
-				if !m.nav.inside && !m.cockpit.open {
-					// So enter goes straight to it.
-					m.nav = nav{panel: stagePanel, prev: m.navAt()}
-				}
-				return m, nil
+				return m.moveTo(es, j), nil
 			}
 		}
 		return m.say("nothing needs you"), nil
@@ -1067,8 +1074,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 				m = m.moveTo(es, j)
 			}
 		}
-		// A click puts the keys in the list, on the panel clicked.
-		m.nav = nav{panel: m.cursorPanel(), prev: m.navAt(), inside: true}
+		// A click puts the keys in the list.
+		m.cockpit.issues = false
 		if double {
 			m.clickID = ""
 			return m.apply(action{do: open})
@@ -1179,7 +1186,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m.closeCockpit()
 	case cockpitTab:
 		if m.inIssues() {
-			m.nav = nav{panel: m.cursorPanel(), prev: issuesPanel, inside: true}
+			m.cockpit.issues = false
 			return m, nil
 		}
 		if _, tracked := m.trackers[m.target().root]; !tracked {
@@ -1188,13 +1195,15 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if !m.issuesShown() {
 			return m.say("the window has no room for the issues card"), nil
 		}
-		m.nav = nav{panel: issuesPanel, prev: m.navAt(), inside: true}
-	case navMove:
-		return m.navMove(direction(a.n)), nil
-	case navIn:
-		return m.navEnter()
-	case navOut:
-		m.nav.inside = false
+		m.cockpit.issues = true
+	case enterPanels:
+		if m.mux == nil {
+			return m, nil
+		}
+		m.panels = true
+		m.spawns++ // listings wait for it, as they do for a spawn: see model.spawns
+		mux := m.mux
+		return m, func() tea.Msg { return panelsMsg{mux.EnterPanels()} }
 	case cockpitMove:
 		others, _ := m.others(m.target())
 		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(others))-1))
@@ -1327,7 +1336,7 @@ func copied(text string, err error) tea.Msg {
 // act does what enter means for an entry: it moves the focus beside the
 // list. On a workstream it acts on the workstream's lead, the entry the
 // stage shows beside it, and with no session under it, it opens the
-// cockpit with the keyboard on its cards. A background session gets an
+// cockpit, the keyboard staying in the list. A background session gets an
 // attach pane first. One that runs inside another app brings that app
 // forward, since that is where it is used. A pinned project with nothing in it only says how to start one.
 func (m model) act(e entry) (model, tea.Cmd) {
@@ -1340,9 +1349,7 @@ func (m model) act(e entry) (model, tea.Cmd) {
 		if m.cockpit.open {
 			return m.say("No session works on #" + strconv.Itoa(e.issue.ID) + ". c starts one, t a terminal."), nil
 		}
-		m, cmd := m.openCockpit()
-		m.nav = nav{panel: headerPanel, prev: m.navAt()}
-		return m, cmd
+		return m.openCockpit()
 	case projectEntry:
 		if _, tracked := m.trackers[e.project]; tracked {
 			return m.say("Nothing runs in " + m.name(e.project) + " yet. s starts a task, c Claude, t a terminal."), nil
