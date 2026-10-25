@@ -16,8 +16,15 @@ import (
 
 // impure are imports the package may not use.
 var impure = map[string]bool{
-	"os": true, "os/exec": true, "io/ioutil": true, "net": true, "net/http": true,
+	"os": true, "os/exec": true, "os/user": true, "io/ioutil": true, "net": true, "net/http": true,
 	"syscall": true, "math/rand": true, "math/rand/v2": true,
+}
+
+// touchDisk are the functions of packages the world does import that
+// read the filesystem: path/filepath is there for Clean and Base.
+var touchDisk = map[string]bool{
+	"filepath.EvalSymlinks": true, "filepath.Glob": true, "filepath.Abs": true,
+	"filepath.Walk": true, "filepath.WalkDir": true,
 }
 
 // clock are the time functions that read the clock or wait on it.
@@ -58,6 +65,9 @@ func TestArchDeriveIsPure(t *testing.T) {
 			case *ast.SelectorExpr:
 				if id, ok := n.X.(*ast.Ident); ok && id.Name == "time" && clock[n.Sel.Name] {
 					fail(n.Pos(), "time."+n.Sel.Name+", which reads the clock")
+				}
+				if id, ok := n.X.(*ast.Ident); ok && touchDisk[id.Name+"."+n.Sel.Name] {
+					fail(n.Pos(), id.Name+"."+n.Sel.Name+", which reads the filesystem")
 				}
 				if id, ok := n.X.(*ast.Ident); ok && id.Name == "fleet" && n.Sel.Name == "Home" {
 					fail(n.Pos(), "fleet.Home, whose methods read the config directory")

@@ -71,12 +71,13 @@ var effectfulDeps = map[string]bool{"deps": true, "mux": true, "home": true, "is
 // effectAllowed are calls to those fields that may run outside a Cmd, by
 // the function and the call.
 var effectAllowed = map[string]string{
-	"model.Update deps.now": "reads the clock once, at the door, into m.now",
-	"* home.Name":           "pure: the config directory's name",
-	"* home.ClaudeEnv":      "pure: the environment a pane's claude joins this home with",
-	"* home.ReviewsDir":     "pure: a path under the config directory",
-	"* home.AttachArgs":     "pure: builds a command line, looks nothing up",
-	"* home.NewArgs":        "pure: builds a command line, looks nothing up",
+	"model.Update deps.now":   "reads the clock once, at the door, into m.now",
+	"* home.Name":             "pure: the config directory's name",
+	"* home.ClaudeEnv":        "pure: the environment a pane's claude joins this home with",
+	"* home.ReviewsDir":       "pure: a path under the config directory",
+	"* home.AttachArgs":       "pure: builds a command line, looks nothing up",
+	"* home.NewArgs":          "pure: builds a command line, looks nothing up",
+	"model.world deps.derive": "world.Derive, which is pure",
 }
 
 const archDoc = "see docs/model-design.md, \"Enforcement\""
@@ -254,7 +255,11 @@ func TestArchSourcesAreReadOnlyWhereTheyLand(t *testing.T) {
 }
 
 // Nothing Update, View or Init reaches calls out to the system outside a
-// Cmd: apply plans, and the runtime runs what it planned.
+// Cmd: apply plans, and the runtime runs what it planned. A call out is a
+// call to one of the model's effectful fields, directly (m.mux.Panes())
+// or through a local taken from one (mux := m.mux; mux.Panes()), or to a
+// function of the standard library that reads the clock, the disk or
+// runs a program.
 func TestArchEffectsRunOnlyInCmds(t *testing.T) {
 	fset, fns := archSource(t)
 	byName := map[string][]*ast.FuncDecl{}
@@ -275,55 +280,126 @@ func TestArchEffectsRunOnlyInCmds(t *testing.T) {
 		}
 		seen[name] = true
 		for _, d := range byName[name] {
+			aliases := depAliases(d.Body)
 			walkNow(d.Body, func(call *ast.CallExpr) {
 				var fun ast.Expr = call.Fun
 				if ix, ok := fun.(*ast.IndexExpr); ok {
 					fun = ix.X // a generic call
 				}
+				what := ""
 				switch fn := fun.(type) {
 				case *ast.Ident:
+					if dep, ok := aliases[fn.Name]; ok {
+						what = "m." + dep // run := m.issues; run(…)
+						break
+					}
 					queue = append(queue, fn.Name)
 				case *ast.SelectorExpr:
-					// m.issues(…), or m.deps.now(), m.mux.Panes(), m.home.Rows(…).
-					dep := ""
-					if id, ok := fn.X.(*ast.Ident); ok && effectfulDeps[fn.Sel.Name] && !imports[id.Name] {
-						dep = fn.Sel.Name
-					} else if in, ok := fn.X.(*ast.SelectorExpr); ok && effectfulDeps[in.Sel.Name] {
-						if _, ok := in.X.(*ast.Ident); ok {
-							dep = in.Sel.Name + "." + fn.Sel.Name
-						}
+					if dep, ok := depOf(fn.X, aliases); ok {
+						what = "m." + dep + "." + fn.Sel.Name // m.mux.Panes(), mux.Panes()
+						break
 					}
-					if dep != "" {
-						_, any := effectAllowed["* "+dep]
-						_, here := effectAllowed[name+" "+dep]
-						if !any && !here {
-							archFail(t, fset, "Update, View and Init call out to the system only inside a Cmd", name, call.Pos(), "a call to m."+dep)
-						}
-						return
+					if dep, ok := depOf(fn, aliases); ok {
+						what = "m." + dep // m.issues(…), m.deps.now()
+						break
 					}
 					if id, ok := fn.X.(*ast.Ident); ok && imports[id.Name] {
-						return // another package's function
+						if system[id.Name+"."+fn.Sel.Name] || system[id.Name+".*"] {
+							what = id.Name + "." + fn.Sel.Name
+						}
+						break // another package's function
 					}
 					// A method: any of the package's with the name, as
 					// the test knows no types.
 					queue = append(queue, methods[fn.Sel.Name]...)
 				}
+				if what == "" {
+					return
+				}
+				key := strings.TrimPrefix(what, "m.")
+				_, any := effectAllowed["* "+key]
+				_, here := effectAllowed[name+" "+key]
+				if !any && !here {
+					archFail(t, fset, "Update, View and Init call out to the system only inside a Cmd", name, call.Pos(), "a call to "+what)
+				}
 			})
 		}
 	}
-	if !seen["model.apply"] {
-		t.Fatal("the walk from Update never reached apply: the test has lost the model's shape")
+	if !seen["model.apply"] || !seen["model.footer"] || !seen["model.settle"] || !seen["model.keyActions"] || !seen["model.effects"] {
+		t.Fatal("the walk from Update and View never reached apply, footer, settle, keyActions or effects: the test has lost the model's shape")
 	}
 }
 
+// system are the standard library's functions that read the clock or
+// the disk or run a program, by package and name; ".*" is the whole
+// package.
+var system = map[string]bool{
+	"time.Now": true, "time.Since": true, "time.Until": true, "time.Sleep": true,
+	"os.*": true, "exec.*": true, "ioutil.*": true, "user.*": true,
+	"filepath.Glob": true, "filepath.EvalSymlinks": true, "filepath.Abs": true,
+	"filepath.Walk": true, "filepath.WalkDir": true,
+}
+
+// depOf says which effectful field x is: m.mux gives "mux", m.deps.now
+// gives "deps.now", and a local in aliases gives what it was taken from.
+func depOf(x ast.Expr, aliases map[string]string) (string, bool) {
+	switch x := x.(type) {
+	case *ast.Ident:
+		dep, ok := aliases[x.Name]
+		return dep, ok
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok && effectfulDeps[x.Sel.Name] && !imports[id.Name] {
+			return x.Sel.Name, true
+		}
+		if in, ok := depOf(x.X, aliases); ok && !strings.Contains(in, ".") {
+			return in + "." + x.Sel.Name, true
+		}
+	}
+	return "", false
+}
+
+// depAliases are the locals of body taken from an effectful field, as
+// mux := m.mux or read := m.deps.recentTurns, by name.
+func depAliases(body ast.Node) map[string]string {
+	out := map[string]string{}
+	bind := func(lhs ast.Expr, rhs ast.Expr) {
+		id, ok := lhs.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if dep, ok := depOf(rhs, out); ok {
+			out[id.Name] = dep
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if len(n.Lhs) == len(n.Rhs) {
+				for i := range n.Lhs {
+					bind(n.Lhs[i], n.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			if len(n.Names) == len(n.Values) {
+				for i := range n.Names {
+					bind(n.Names[i], n.Values[i])
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
 // walkNow calls visit for every call body runs now: it leaves out the
-// bodies of Cmds, func literals that return a tea.Msg, which run later in
-// the runtime, and follows every other literal, as those run in place.
+// bodies of func literals that return a tea.Msg, which are Cmds or
+// callbacks such as tea.Tick's that the runtime runs later, and follows
+// every other literal, as those run in place.
 func walkNow(body ast.Node, visit func(*ast.CallExpr)) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncLit:
-			return !isCmd(n.Type)
+			return !returnsMsg(n.Type)
 		case *ast.CallExpr:
 			visit(n)
 		}
@@ -331,10 +407,9 @@ func walkNow(body ast.Node, visit func(*ast.CallExpr)) {
 	})
 }
 
-// isCmd says whether a func type is a tea.Cmd's: no parameters, one
-// tea.Msg result.
-func isCmd(ft *ast.FuncType) bool {
-	if ft.Params != nil && len(ft.Params.List) > 0 || ft.Results == nil || len(ft.Results.List) != 1 {
+// returnsMsg says whether a func type's one result is a tea.Msg.
+func returnsMsg(ft *ast.FuncType) bool {
+	if ft.Results == nil || len(ft.Results.List) != 1 {
 		return false
 	}
 	s, ok := ft.Results.List[0].Type.(*ast.SelectorExpr)

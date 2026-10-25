@@ -390,14 +390,23 @@ names the rule, the function and the file and line.
   function is on the list. An entry that no longer reads a source fails
   the test until it is dropped.
 - Nothing that `Update`, `View` or `Init` reaches, by a walk over the
-  package's calls, calls `m.deps.*`, `m.mux.*`, `m.home.*` or
-  `m.issues` directly. Inside a func literal that returns a `tea.Msg`,
-  a Cmd, is where they run. `effectAllowed` holds the exceptions: the
-  clock read once at the door in `Update`, and `Home`'s pure helpers
-  (`Name`, `ClaudeEnv`, `ReviewsDir`, `AttachArgs`, `NewArgs`).
+  package's calls, calls out to the system. A call out is a call to
+  `m.deps`, `m.mux`, `m.home` or `m.issues`, made directly or through a
+  local taken from one (`mux, self := m.mux, m.self` and then
+  `mux.Panes()`). Calls to the standard library's `time.Now`,
+  `time.Since`, `os`, `os/exec` and the `filepath` functions that read
+  the disk count too. They may run only inside a func literal that
+  returns a `tea.Msg`: a Cmd, or a callback such as `tea.Tick`'s, which
+  the runtime runs later. `effectAllowed` holds the exceptions: the
+  clock read once at the door in `Update`, `world.Derive` through
+  `deps.derive`, and `Home`'s pure helpers (`Name`, `ClaudeEnv`,
+  `ReviewsDir`, `AttachArgs`, `NewArgs`). The view measures ages with
+  `m.ago`, from the time `Update` read.
 
 `internal/world/arch_test.go` keeps `Derive` pure. The package may not
-import `os`, `os/exec`, `net` or the like, nor read the clock, and it
+import `os`, `os/exec`, `os/user`, `net` or the like, nor read the
+clock. Of `path/filepath`, which it imports for `Clean` and `Base`, it
+may not call `Glob`, `EvalSymlinks`, `Abs`, `Walk` or `WalkDir`. It
 calls into `fleet`, `issues`, `tmux` and `review` only through a short
 list of functions known to be pure.
 
@@ -413,8 +422,18 @@ list of functions known to be pure.
   pinned ones, that the `Members` lists partition the sessions, that
   counts match a recount, that a workstream's Started is the minimum of
   its links, and that every pointer leads back into the World.
+- The orders: property tests that `IssueLess` and `StartLess` are
+  strict orders, total on issues that differ in status, priority or
+  number, that `StartLess` puts ready and inbox first and otherwise
+  agrees with `IssueLess`, and that `StreamLess` is `IssueLess` with the
+  root last. `LeadOf` over any part of a workstream picks as `Lead`
+  does over the whole. A table test names a two-root project's
+  workstreams by each root's own id.
 - `present`: an empty query shows the whole World, and a query never
   adds an entry.
+- The architecture tests above, which read the source rather than run
+  it. Each rule was checked by putting a bypass back and watching it
+  fail.
 - The e2e fake claude writes a transcript with its first prompt, so the
   workstream test links a session the way a real one is linked, with no
   hook.
