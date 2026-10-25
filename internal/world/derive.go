@@ -179,6 +179,7 @@ func Derive(in Inputs) World {
 	}
 	for _, s := range streams {
 		s.Project = w.byName[nameOf(in.User, s.Root)]
+		s.IssuesID = w.IssuesID(s.Root)
 		s.Project.Streams = append(s.Project.Streams, s)
 	}
 

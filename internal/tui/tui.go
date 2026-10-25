@@ -1443,9 +1443,10 @@ func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	ref := "#" + strconv.Itoa(i.ID)
-	prompt := opening(m.projectID(root), i)
+	id := m.world().IssuesID(root)
+	prompt := opening(id, i)
 	note := "starting a session on " + ref + "…"
-	if !opens(prompt, m.projectID(root), i) {
+	if !opens(prompt, id, i) {
 		note = "starting a session on " + ref + ", which won't link by itself: the project id has a space or a #"
 	}
 	return m.say(note).startPane(spawn{kind: spawnSession, name: "a session on " + ref,

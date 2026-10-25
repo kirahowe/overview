@@ -817,7 +817,7 @@ func (m model) holderText(w, h int) string {
 // sessions have no pane to show: its issue, and where enter goes.
 func (m model) workstreamLines(e entry, w int) []string {
 	st := e.stream
-	ref := issueRef(st.Project.ID, st.Issue)
+	ref := st.Ref()
 	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(st.Issue.Title), w)
 	out = append(out, wrap(dim.Render(st.Issue.Status+" · "+st.Issue.Priority+" · "+st.Project.Name), w)...)
 	out = append(out, "")

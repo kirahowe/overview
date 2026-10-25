@@ -141,14 +141,27 @@ func ParseKey(s string) (Key, bool) {
 // blocked, or that a live session is linked to.
 type Stream struct {
 	Key
-	Project   *Project
-	Issue     issues.Issue
+	Project *Project
+	Issue   issues.Issue
+	// IssuesID is the issues project id of its own root, as IssuesID has
+	// it, which its ref and a session's opening prompt name. A project
+	// whose roots track under different ids has a different one per root.
+	IssuesID  string
 	Sessions  []*Session  // the sessions linked to it, working first, then newest activity
 	Terminals []*Terminal // the terminals opened for it, by window
 	// Started is when the work on it began: the earliest time any of its
 	// sessions linked to it, or for a session whose links to it carry no
 	// time, when that session started. Zero when none says.
 	Started time.Time
+}
+
+// Ref is how the workstream's issue is named: its ref as the issues tool
+// gives it, or else IssuesID and the number.
+func (s *Stream) Ref() string {
+	if s.Issue.Ref != "" {
+		return s.Issue.Ref
+	}
+	return s.IssuesID + "#" + strconv.Itoa(s.ID)
 }
 
 // Lead is what stands for the workstream when it is entered, as LeadOf
@@ -243,6 +256,16 @@ func (w World) Short(dir string) string { return fleet.ShortDir(dir, w.user) }
 func (w World) Tracker(root string) (t Tracker, ok bool) {
 	t, ok = w.tracked[root]
 	return t, ok
+}
+
+// IssuesID is the issues project id of root: its tracker's id, else the
+// root's base name. It is the id of that root alone, which a prompt that
+// opens work on one of its issues must name, not the project's ID.
+func (w World) IssuesID(root string) string {
+	if t, ok := w.tracked[root]; ok && t.ID != "" {
+		return t.ID
+	}
+	return baseName(root)
 }
 
 // ProjectOf is the project dir belongs to, listed or not, nil when the

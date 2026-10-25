@@ -175,6 +175,7 @@ type Stream struct {
 	Key
 	Project   *Project
 	Issue     issues.Issue
+	IssuesID  string      // its own root's issues id; Ref() is its issue's ref
 	Sessions  []*Session  // working first, then newest activity
 	Terminals []*Terminal // by window
 	Started   time.Time   // the earliest link of any of its sessions, zero for none
@@ -220,10 +221,15 @@ from what it shows; `Lead` is `LeadOf` over the whole workstream. `World.Root(di
 - `StartLess`: ready, then inbox, which are what there is to start, then
   the rest as `IssueLess` has them. The task picker offers its rows in
   this order.
+
 `World.Tracker(root)` is a root's tracker as the World holds it, with
 its id, its open issues and why its last read failed: the task picker
-and the cockpit's issues card read it there, and a workstream's ref
-uses `Project.ID`. The model's own tracker cache, with the `.issues`
+and the cockpit's issues card read it there. `World.IssuesID(root)` is
+that tracker's id, or else the root's base name. A workstream's
+`IssuesID` is its own root's, so `Stream.Ref()` and the opening prompt
+of a session started on it name the id that links back to that root.
+`Project.ID`, the first tracked root's, would name another root's
+tracker when a project's roots track under different ids. The model's own tracker cache, with the `.issues`
 stamps and the reads in flight, is effect bookkeeping. No view reads
 it, except to ask `trackerReading` whether a read is out, which the task
 picker shows as "reading…".

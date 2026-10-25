@@ -661,3 +661,34 @@ func TestReviewsAndHealthPassThrough(t *testing.T) {
 		t.Errorf("health %+v", w.Orchestrator)
 	}
 }
+
+// Two roots that share a name are one project, with one ID, but each
+// root's workstreams are named by that root's own tracker id, which is
+// what a session's opening prompt must name to link back to it.
+func TestAStreamIsNamedByItsOwnRootsID(t *testing.T) {
+	w := Derive(Inputs{
+		Pinned: []string{"/u/code/projects/alpha", "alpha"},
+		Trackers: map[string]Tracker{
+			"/u/code/projects/alpha": {ID: "a1", Open: []issues.Issue{issue(3, issues.InProgress)}},
+			"alpha":                  {ID: "a2", Open: []issues.Issue{issue(3, issues.InProgress)}},
+		},
+		User: "/u",
+	})
+	if len(w.Projects) != 1 || w.Projects[0].ID != "a1" {
+		t.Fatalf("projects %+v", w.Projects)
+	}
+	for root, want := range map[string]string{"/u/code/projects/alpha": "a1#3", "alpha": "a2#3"} {
+		st := w.Streams[Key{root, 3}]
+		if st == nil || st.Ref() != want || w.IssuesID(root) != want[:2] {
+			t.Errorf("%s: stream %+v, IssuesID %q, want %s", root, st, w.IssuesID(root), want)
+		}
+	}
+	if got := w.IssuesID("/w/untracked"); got != "untracked" {
+		t.Errorf("an untracked root's id %q", got)
+	}
+	st := w.Streams[Key{"alpha", 3}]
+	st.Issue.Ref = "alpha#3"
+	if st.Ref() != "alpha#3" {
+		t.Errorf("the tool's own ref is not kept: %q", st.Ref())
+	}
+}

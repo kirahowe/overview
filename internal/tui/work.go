@@ -179,15 +179,6 @@ func fallbackID(readFile func(string) ([]byte, error), root string) string {
 // reads in flight.
 func (m model) trackerReading(root string) bool { return m.reading[root] }
 
-// projectID is the issues project id of the project at root, as the World
-// has it.
-func (m model) projectID(root string) string {
-	if p := m.world().ProjectOf(root); p != nil {
-		return p.ID
-	}
-	return filepath.Base(root)
-}
-
 // opening is the first prompt of a session started on a workstream, which
 // its transcript links it by: "Work on overview#6: <title>".
 func opening(projectID string, i issues.Issue) string {

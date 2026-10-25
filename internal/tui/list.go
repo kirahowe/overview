@@ -196,7 +196,7 @@ func present(w *world.World, query string) []section {
 			continue
 		}
 		for _, st := range p.Streams {
-			whole := matchFields(words, issueRef(p.ID, st.Issue), "#"+strconv.Itoa(st.ID), st.Issue.Title, p.Name)
+			whole := matchFields(words, st.Ref(), "#"+strconv.Itoa(st.ID), st.Issue.Title, p.Name)
 			var under []entry
 			for _, s := range st.Sessions {
 				if whole || session(s) {
