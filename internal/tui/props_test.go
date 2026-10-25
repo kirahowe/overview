@@ -1627,3 +1627,62 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 		}
 	})
 }
+
+// The footer fits its width while the mode's fixed parts and the first
+// hints do. They always show, and a part cut from the left keeps its
+// end, so a search keeps its cursor and a path its last directory.
+func TestPropTheFooterKeepsItsModeAndHints(t *testing.T) {
+	word := rapid.StringMatching(`([a-z/][a-z/ ]{0,38}[a-z/])?`)
+	rapid.Check(t, func(t *rapid.T) {
+		var f footerSpec
+		for _, s := range rapid.SliceOfN(word, 0, 3).Draw(t, "status") {
+			f.status = append(f.status, part{text: s})
+		}
+		mode := rapid.SliceOfN(word, 0, 3).Draw(t, "mode")
+		f.cut = -1
+		if len(mode) > 0 {
+			f.cut = rapid.IntRange(-1, len(mode)-1).Draw(t, "cut")
+		}
+		fixed := 0
+		for i, s := range mode {
+			f.mode = append(f.mode, part{text: s})
+			if i != f.cut {
+				fixed += ansi.StringWidth(s)
+			}
+		}
+		f.note = word.Draw(t, "note")
+		for _, k := range rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,5}`), 0, 5).Draw(t, "hints") {
+			f.hints = append(f.hints, hint{k, rapid.StringMatching(`[a-z]{1,10}`).Draw(t, "label")})
+		}
+		w := rapid.IntRange(10, 160).Draw(t, "w")
+		keep := f.hints[:min(minHints, len(f.hints))]
+		need := fixed + 1 + 2
+		for _, h := range keep {
+			need += len(h.key) + 1 + len(h.label) + 3
+		}
+		if need+2 > w {
+			return // too narrow for what must show
+		}
+		cutText := ""
+		if f.cut >= 0 {
+			cutText = f.mode[f.cut].text
+		}
+		out := ansi.Strip(layFooter(f, w))
+		if ansi.StringWidth(out) > w {
+			t.Fatalf("%q is %d wide, more than %d", out, ansi.StringWidth(out), w)
+		}
+		for i, p := range mode {
+			if i != f.cut && !strings.Contains(out, p) {
+				t.Fatalf("%q lacks the mode's %q", out, p)
+			}
+		}
+		if n := len(cutText); n > 0 && !strings.Contains(out, cutText[n-1:]) {
+			t.Fatalf("%q lacks the end of %q", out, cutText)
+		}
+		for _, h := range keep {
+			if !strings.Contains(out, h.key+" "+h.label) {
+				t.Fatalf("%q lacks the hint %s %s", out, h.key, h.label)
+			}
+		}
+	})
+}

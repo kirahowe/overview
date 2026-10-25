@@ -1054,66 +1054,159 @@ func hintLine(lead []string, hints []hint, w int) string {
 	return render(n)
 }
 
-// footer is the last line: what the orchestrator is up to when it is in
-// trouble or writing, then the note when there is one, and otherwise the
+// part is a piece of the footer's text and how it is drawn.
+type part struct {
+	text  string
+	style lipgloss.Style
+}
+
+// footerSpec is what the footer has to say, before it is fitted to a
+// width.
+type footerSpec struct {
+	status []part // what runs in the background, most important first
+	mode   []part // where the keyboard is: a search, a picker, the panels mode
+	cut    int    // the mode part cut from its left when the line is short, -1 for none
+	note   string // what the view has to say, in place of the hints
+	hints  []hint
+}
+
+// minHints is how many hints the footer keeps however long the rest is.
+const minHints = 2
+
+// layFooter fits a footer into w cells. The mode always shows, cut from
+// the left of its cut part when it must be, so a search keeps its input
+// and a long path its last directories. The first minHints hints keep
+// their room. Status goes first when the line is short, the least
+// important first, and then the note is cut at its end.
+func layFooter(f footerSpec, w int) string {
+	hintsW := func(hs []hint) int {
+		n := 0
+		for i, h := range hs {
+			if i > 0 {
+				n += 3 // " • "
+			}
+			n += ansi.StringWidth(h.key) + 1 + ansi.StringWidth(h.label)
+		}
+		return n
+	}
+	modeText := func() string {
+		var b strings.Builder
+		for _, p := range f.mode {
+			b.WriteString(p.text)
+		}
+		return b.String()
+	}
+	plain := func(status []part, note string) []string {
+		var out []string
+		for _, p := range status {
+			out = append(out, p.text)
+		}
+		if mt := modeText(); mt != "" {
+			out = append(out, mt)
+		}
+		if note != "" {
+			out = append(out, note)
+		}
+		return out
+	}
+	width := func(items []string) int { return ansi.StringWidth(strings.Join(items, "  ")) }
+	room := w
+	if keep := f.hints[:min(minHints, len(f.hints))]; len(keep) > 0 {
+		room -= hintsW(keep) + 2
+	}
+	status, note := f.status, f.note
+	for len(status) > 0 && width(plain(status, note)) > room {
+		status = status[:len(status)-1]
+	}
+	if over := width(plain(status, note)) - room; over > 0 && note != "" {
+		keep := max(ansi.StringWidth(note)-over, 2)
+		note = ansi.Truncate(note, keep, "…")
+	}
+	if over := width(plain(status, note)) - room; over > 0 && f.cut >= 0 && f.cut < len(f.mode) && f.mode[f.cut].text != "" {
+		c := f.mode[f.cut].text
+		keep := max(ansi.StringWidth(c)-over-1, 0)
+		f.mode[f.cut].text = "…" + ansi.TruncateLeft(c, ansi.StringWidth(c)-keep, "")
+	}
+	var lead []string
+	for _, p := range status {
+		lead = append(lead, p.style.Render(p.text))
+	}
+	if modeText() != "" {
+		var b strings.Builder
+		for _, p := range f.mode {
+			b.WriteString(p.style.Render(p.text))
+		}
+		lead = append(lead, b.String())
+	}
+	if note != "" {
+		lead = append(lead, fg(pal.Text).Render(note))
+	}
+	return hintLine(lead, f.hints, w)
+}
+
+// footer is the last line: what runs in the background, where the
+// keyboard is, and then the note when there is one, and otherwise the
 // keys for what is selected.
 func (m model) footer() string {
-	var lead []string
+	f := footerSpec{cut: -1, note: m.note}
 	if w := m.world(); w.Loaded && w.RefreshErr == nil {
 		switch h := m.world().Orchestrator; {
 		case !h.Running:
-			lead = append(lead, red.Render("orchestrator off"))
+			f.status = append(f.status, part{"orchestrator off", red})
 		case h.Stale:
-			lead = append(lead, red.Render("orchestrator silent "+m.ago(h.LastCheck)))
+			f.status = append(f.status, part{"orchestrator silent " + m.ago(h.LastCheck), red})
 		}
 	}
-	if m.digesting && m.note != "writing a digest…" {
-		lead = append(lead, dim.Render("writing a digest…"))
+	if m.digesting {
+		f.status = append(f.status, part{"writing a digest…", dim})
 	}
-	var hints []hint
+	count := func() part { return part{fmt.Sprintf(" · %d", len(m.ordered())), dim} }
 	switch {
 	case m.pick.open:
-		lead = append(lead, heading.Render("add project"))
-		hints = []hint{{"enter", "pin"}, {"tab", "complete"}, {"esc", "cancel"}}
+		f.mode = []part{{"add project", heading}}
+		f.hints = []hint{{"enter", "pin"}, {"tab", "complete"}, {"esc", "cancel"}}
 	case m.taskPick.open:
-		lead = append(lead, heading.Render("start a task in "+m.name(m.taskPick.root)))
+		f.mode, f.cut = []part{{"start a task in ", heading}, {m.name(m.taskPick.root), heading}}, 1
 		enter := hint{"enter", "start"}
 		if l := m.taskList(); m.taskSel(l) >= 0 && taskGoes(l.rows[m.taskSel(l)]) {
 			enter.label = "go to"
 		}
-		hints = []hint{enter, {"↑↓", "move"}}
+		f.hints = []hint{enter, {"↑↓", "move"}}
 		if m.taskSplit() > 0 {
-			hints = append(hints, hint{"pgup/pgdn", "details"})
+			f.hints = append(f.hints, hint{"pgup/pgdn", "details"})
 		}
-		hints = append(hints, hint{"esc", "cancel"})
+		f.hints = append(f.hints, hint{"esc", "cancel"})
 	case m.filtering:
-		lead = append(lead, heading.Render("/"+m.filter+"▏")+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
+		f.mode, f.cut = []part{{"/", heading}, {m.filter, heading}, {"▏", heading}, count()}, 1
 		if e, _, ok := m.selected(m.ordered()); ok {
-			hints = m.enterHint(e)
+			f.hints = m.enterHint(e)
 		}
-		hints = append(hints, hint{"↑↓", "move"}, hint{"esc", "clear"})
-	case m.note != "":
-		if m.inPanels() {
-			lead = append(lead, heading.Render("panels"))
-		}
-		lead = append(lead, fg(pal.Text).Render(m.note))
-	case m.screen == digestScreen:
+		f.hints = append(f.hints, hint{"↑↓", "move"}, hint{"esc", "clear"})
+	case m.screen == digestScreen && m.note == "":
 		info := "no digest yet"
 		if len(m.digests) > 0 {
 			info = fmt.Sprintf("%s · %d of %d", m.digestAt.Format("Mon 15:04"), m.digestIdx+1, len(m.digests))
 		}
-		lead = append(lead, dim.Render(info))
-		hints = []hint{{"[ ]", "older/newer"}, {"D", "write"}, {"d", "sessions"}, {"?", "help"}}
+		f.mode = []part{{info, dim}}
+		f.hints = []hint{{"[ ]", "older/newer"}, {"D", "write"}, {"d", "sessions"}, {"?", "help"}}
 	default:
 		if m.filter != "" {
-			lead = append(lead, heading.Render("/"+m.filter)+dim.Render(fmt.Sprintf(" · %d", len(m.ordered()))))
+			f.mode, f.cut = []part{{"/", heading}, {m.filter, heading}, count()}, 1
 		}
 		if m.inPanels() {
-			lead = append(lead, heading.Render("panels"))
+			f.mode = append(f.mode, part{"panels", heading})
+			if len(f.mode) > 1 {
+				f.mode[len(f.mode)-1].text = "  panels"
+			}
 		}
-		hints = m.panelHints()
+		if m.note == "" {
+			f.hints = m.panelHints()
+		}
 	}
-	return m.plain(hintLine(lead, hints, m.contentWidth()))
+	if m.pick.open || m.taskPick.open || m.filtering {
+		f.note = "" // a picker or a search has the line, and says what it needs
+	}
+	return m.plain(layFooter(f, m.contentWidth()))
 }
 
 // Overlays.

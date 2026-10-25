@@ -253,3 +253,45 @@ func TestTheTitleSaysWhenTheHookIsMissing(t *testing.T) {
 		t.Errorf("with only a background session: %q", got)
 	}
 }
+
+// A note or a status that runs long gives way in the footer: the search
+// keeps its input, the keys their room, and the task picker's long path
+// is cut from the left. A note shows alone, not after an older one.
+func TestTheFooterSharesItsLine(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m = update(m, tea.WindowSizeMsg{Width: 60, Height: 20})
+	m.digesting = true
+	for _, c := range []struct {
+		name string
+		set  func(model) model
+		want []string
+		not  []string
+	}{
+		{"a note beside the digest", func(m model) model {
+			return m.say("only background sessions can be stopped here, not this one")
+		}, []string{"only background sess"}, []string{"writing a digest…  writing"}},
+		{"a search", func(m model) model {
+			m.filtering, m.filter = true, "a long query that goes on and on"
+			return m
+		}, []string{"on and on▏", "↑↓ move", "esc clear"}, []string{"writing a digest"}},
+		{"the task picker", func(m model) model {
+			m.taskPick.open, m.taskPick.root = true, "/private/tmp/somewhere/deep/below/project"
+			return m
+		}, []string{"start a task in …", "below/project", "enter start", "↑↓ move"}, nil},
+	} {
+		foot := ansi.Strip(c.set(m).footer())
+		if ansi.StringWidth(foot) > 60 {
+			t.Errorf("%s: %q is wider than the view", c.name, foot)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(foot, w) {
+				t.Errorf("%s: %q lacks %q", c.name, foot, w)
+			}
+		}
+		for _, w := range c.not {
+			if strings.Contains(foot, w) {
+				t.Errorf("%s: %q has %q", c.name, foot, w)
+			}
+		}
+	}
+}

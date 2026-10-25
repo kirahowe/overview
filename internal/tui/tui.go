@@ -972,7 +972,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // results, in order.
 func (m model) input(arrival verb, translate func(model) []action) (tea.Model, tea.Cmd) {
 	m, first := m.apply(action{do: arrival})
-	next, rest := m.handle(translate(m))
+	as := translate(m)
+	if len(as) > 0 {
+		as = append([]action{{do: heard}}, as...)
+	}
+	next, rest := m.handle(as)
 	return next, tea.Batch(first, rest)
 }
 
@@ -1009,6 +1013,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	e, i, ok := m.selected(es)
 	row, isSession := e.session()
 	switch a.do {
+	case heard:
+		m.note = ""
 	case keysBack:
 		return m.unblur(), nil
 	case keysLeft:
@@ -1068,7 +1074,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m, nil
 		}
 		m.digesting = true
-		return m.say("writing a digest…"), m.runDigest
+		return m, m.runDigest // the footer says so while it runs
 	case refresh:
 		return m, m.refresh
 	case move:

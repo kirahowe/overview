@@ -23,6 +23,7 @@ const (
 	keysBack    verb = iota // the keyboard is back in the view, from the pane it was in
 	keysLeft                // the keyboard has gone to another pane
 	pointerHere             // the mouse is over the view, wherever the keyboard is
+	heard                   // a key or click that means something: the note it follows has been read
 	quit
 	detach // leave the view running in tmux and close this terminal's view of it
 	openHelp

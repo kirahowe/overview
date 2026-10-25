@@ -100,7 +100,12 @@ its project, or the task it works on as `#6`. When both fit, the agents
 sit at the bottom of the list's pane. Otherwise they take up to two
 fifths of it, and the projects and the agents each scroll on their own.
 The footer shows the keys for where the keyboard is, or a note when
-overview has something to say.
+overview has something to say. A note stays until the next key or click
+that does something, or for six seconds. A newer note replaces it. While
+a digest is being written the footer says so before the rest. When the
+line is short, that goes first, then the end of a note. The first two
+keys always keep their room, a search keeps its input, and a long path
+is cut from the left.
 
 A project that tracks its work with the `issues` tool, in a `.issues`
 directory, groups its sessions by task. A task, or workstream, is an open

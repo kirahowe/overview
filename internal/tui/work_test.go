@@ -686,3 +686,24 @@ func TestTheEnterHintSaysWhatEnterDoes(t *testing.T) {
 		}
 	}
 }
+
+// A note answers the last thing the user did, so the next key that means
+// something clears it: l into the issues card shows the card's keys, not
+// the note enter left.
+func TestTheNextKeyClearsANote(t *testing.T) {
+	f := newFakeMux()
+	m := pressSettled(t, taskModel(t, f), "g", "enter", "enter")
+	if !m.cockpit.open || !strings.HasPrefix(m.note, "No session works on #4") {
+		t.Fatalf("open %v, note %q", m.cockpit.open, m.note)
+	}
+	m = pressSettled(t, m, "l")
+	foot := ansi.Strip(m.footer())
+	if m.note != "" || !m.inIssues() || !strings.Contains(foot, "j k move") {
+		t.Fatalf("note %q, in the issues %v, footer %q", m.note, m.inIssues(), foot)
+	}
+	// A key that means nothing leaves a note be.
+	m = m.say("kept")
+	if m = pressSettled(t, m, "%"); m.note != "kept" {
+		t.Fatalf("note %q after a key bound to nothing", m.note)
+	}
+}
