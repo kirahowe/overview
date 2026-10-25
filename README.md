@@ -191,7 +191,7 @@ of the issues card lists a few issues and says how many more it has.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` only when the footer does, with the same
-word, and `v` only when the workstream has a session. `l` or the right arrow moves the keyboard from the list into the
+word, and none while the issues card has the keyboard, and `v` only when the workstream has a session. `l` or the right arrow moves the keyboard from the list into the
 issues card while the window has room to show the card, and `h` or the
 left arrow moves it back. `tab` does either. There,
 `j` and `k` move between the issues. On an issue that a session already

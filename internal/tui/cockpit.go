@@ -541,9 +541,11 @@ func (m model) cockpitRows(t target) [][]card {
 	rows := t.sessions()
 	ms := m.members(rows, t.terminals())
 	// The header offers enter only as the footer does, from enterOn on
-	// the selected entry, which the target is of.
+	// the selected entry, which the target is of. While the issues card
+	// has the keys, enter acts on its issue, and the footer says so, so
+	// the header offers none.
 	var enter []hint
-	if e, _, ok := m.selected(m.ordered()); ok {
+	if e, _, ok := m.selected(m.ordered()); ok && !m.inIssues() {
 		enter = m.enterHint(e)
 	}
 	ch := m.changeReads[cockpitKey(t)]

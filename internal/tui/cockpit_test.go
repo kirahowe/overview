@@ -508,7 +508,7 @@ func TestTheCockpitHeaderMarksStatesAsTheListDoes(t *testing.T) {
 // The cockpit's header offers enter exactly when the footer does, with
 // the same label, on every kind of entry: a session in a pane, one with
 // no pane, a background one, a workstream whose only session has no
-// pane, and a project.
+// pane, and a project, and while the issues card has the keys.
 func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	s1, s3 := row("s1", "red", "", 11), row("s3", "green", "", 0)
 	s1.Cwd, s3.Cwd = "/code/app", "/code/app"
@@ -519,11 +519,12 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	m.trackers = trackers{"/code/app": tracked("app",
 		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
 		issues.Issue{ID: 7, Ref: "app#7", Title: "no pane", Status: issues.InProgress, Priority: "p1"},
+		issues.Issue{ID: 8, Ref: "app#8", Title: "not started", Status: issues.Ready, Priority: "p2"},
 	)}
 	m = m.setInputs(func(in *world.Inputs) { in.Pinned = []string{"/code/empty"} })
 	m = resized(t, m, 120, 40)
 	kinds := map[entryKind]bool{}
-	says := false
+	says, keyed := false, 0
 	for _, e := range m.ordered() {
 		m := selectKey(t, m, e.key())
 		m.cockpit.open = true
@@ -552,6 +553,19 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 		}
 		kinds[e.kind] = true
 		says = says || (e.kind == workstreamEntry && len(foot) == 0)
+		// With the issues card's keys, enter acts on its issue: the
+		// footer says so, and the header offers no enter of its own.
+		if k := update(m, keyMsg("tab")); k.inIssues() {
+			keyed++
+			header := strings.Join(drawn(k.cockpitRows(k.target())[0][0], 100), "\n")
+			hs := k.panelHints()
+			if strings.Contains(header, " enter ") || len(hs) == 0 || hs[0].key != "enter" {
+				t.Errorf("on %s with the issues card's keys, the header reads\n%s\nand the footer %v", e.key(), header, hs)
+			}
+		}
+	}
+	if keyed == 0 {
+		t.Fatal("the issues card never took the keys")
 	}
 	if !kinds[sessionEntry] || !kinds[workstreamEntry] || !kinds[projectEntry] || !says {
 		t.Fatalf("the cases did not cover the kinds: %v, a workstream with a silent enter %v", kinds, says)
