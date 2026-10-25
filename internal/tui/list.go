@@ -26,7 +26,11 @@ type section struct {
 	Tracked bool // the project tracks its work with issues
 	Failed  bool // and the last read of its issues failed
 	Open    int  // and how many of its issues are open
-	Entries []entry
+	// Tasks, Sessions and Terminals count what the World has in the
+	// section, before any search: its workstreams, and the sessions and
+	// terminals under none of them.
+	Tasks, Sessions, Terminals int
+	Entries                    []entry
 }
 
 type entryKind int
@@ -207,7 +211,8 @@ func present(w *world.World, query string) []section {
 	}
 	var out []section
 	for _, p := range w.Projects {
-		sec := section{Title: p.Name, Tracked: p.Tracked, Failed: p.Failed, Open: len(p.Open)}
+		sec := section{Title: p.Name, Tracked: p.Tracked, Failed: p.Failed, Open: len(p.Open),
+			Tasks: len(p.Streams), Sessions: len(p.Sessions), Terminals: len(p.Terminals)}
 		if p.Empty() {
 			if matchFields(words, p.Name) {
 				sec.Entries = []entry{{kind: projectEntry, proj: p}}
@@ -252,7 +257,7 @@ func present(w *world.World, query string) []section {
 			out = append(out, sec)
 		}
 	}
-	away := section{Title: awayTitle, Away: true}
+	away := section{Title: awayTitle, Away: true, Sessions: len(w.Away)}
 	for _, s := range w.Away {
 		if session(s) {
 			away.Entries = append(away.Entries, entry{kind: sessionEntry, sess: s})
@@ -298,6 +303,26 @@ func matchFields(terms []string, fields ...string) bool {
 		}
 	}
 	return true
+}
+
+// matches counts what a search shows, each session once, though it may
+// be listed under several workstreams and in the agents list too. A
+// workstream's row counts only when nothing is shown under it, since
+// otherwise it heads what was found.
+func matches(secs []section) int {
+	seen := map[string]bool{}
+	es := flatten(secs)
+	for i, e := range es {
+		k := e.key()
+		switch {
+		case e.kind == workstreamEntry && i+1 < len(es) && es[i+1].stream == e.stream:
+			continue
+		case e.sess != nil:
+			k = e.sess.SessionID
+		}
+		seen[k] = true
+	}
+	return len(seen)
 }
 
 // flatten is the list as the cursor walks it.

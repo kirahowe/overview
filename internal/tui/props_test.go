@@ -1749,3 +1749,48 @@ func TestPropKeepEnd(t *testing.T) {
 		}
 	})
 }
+
+// unitOf is a heading note without its numbers: "1 of 3 tasks" and
+// "3 tasks" are both "tasks".
+func unitOf(note string) string {
+	var out []string
+	for _, f := range strings.Fields(note) {
+		if _, err := strconv.Atoi(f); err == nil || f == "of" || f == "no" {
+			continue
+		}
+		out = append(out, strings.TrimSuffix(f, "s"))
+	}
+	return strings.Join(out, " ")
+}
+
+// Every heading's note names a unit, and a search never changes it, only
+// how many of them it shows. The search's count is the same with the
+// agents list or without it, so a session it shows twice counts once.
+func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		w := genListWorld(t)
+		q := genQuery(t)
+		whole := map[string]string{}
+		for _, sec := range present(w, "") {
+			whole[sec.Title] = sectionNote(sec)
+		}
+		secs := present(w, q)
+		var rest []section
+		for _, sec := range secs {
+			if sec.Agents {
+				continue
+			}
+			rest = append(rest, sec)
+			note := sectionNote(sec)
+			if unitOf(note) == "" {
+				t.Fatalf("%q's note %q names no unit", sec.Title, note)
+			}
+			if unitOf(note) != unitOf(whole[sec.Title]) {
+				t.Fatalf("%q under %q says %q, %q without it", sec.Title, q, note, whole[sec.Title])
+			}
+		}
+		if matches(secs) != matches(rest) {
+			t.Fatalf("%q counts %d with the agents list, %d without", q, matches(secs), matches(rest))
+		}
+	})
+}

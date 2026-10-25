@@ -97,7 +97,7 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 		l("   ? reply on view.go note", "asking 2m"),
 		l("○ digest prompt tweaks", "idle 1h"),
 		l("", ""),
-		rule("website", "3"),
+		rule("website", "2 sessions · 1 terminal"),
 		l("! deploy blog post", "blocked 5m"),
 		l("○ rss feed", "idle 20m"),
 		l("$ npm", "website"),
@@ -216,12 +216,45 @@ func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
 
 func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 	idle := section{Title: "backlog", Tracked: true, Open: 4, Entries: []entry{{kind: projectEntry}}}
-	if got := sectionNote(idle); got != "4 open" {
-		t.Errorf("idle tracked project: %q, want 4 open", got)
+	if got := sectionNote(idle); got != "4 open issues" {
+		t.Errorf("idle tracked project: %q, want 4 open issues", got)
 	}
-	busy := section{Title: "app", Tracked: true, Open: 4, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry}}}
+	busy := section{Title: "app", Tracked: true, Open: 4, Tasks: 1, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry}}}
 	if got := sectionNote(busy); got != "1 task" {
 		t.Errorf("project with a workstream: %q, want 1 task", got)
+	}
+}
+
+// Every heading names what it counts, a pinned project with nothing in it
+// included, and a search keeps the unit: it says how many of the
+// project's tasks it shows. The search's own count names each session
+// once, though the agents list shows it again.
+func TestHeadingCountsKeepTheirUnit(t *testing.T) {
+	cases := []struct {
+		sec  section
+		want string
+	}{
+		{section{Title: "pinned", Entries: []entry{{kind: projectEntry}}}, "no sessions"},
+		{section{Title: "web", Sessions: 1, Terminals: 2, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}, {kind: terminalEntry}}}, "1 session · 2 terminals"},
+		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions · 0 of 1 terminal"},
+		{section{Title: "away", Away: true, Sessions: 2, Entries: []entry{{kind: sessionEntry}, {kind: sessionEntry}}}, "2 sessions"},
+		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks"},
+		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3}, "0 of 3 tasks"},
+		{section{Title: "app", Tracked: true}, "no open issues"},
+	}
+	for _, c := range cases {
+		if got := sectionNote(c.sec); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.sec, got, c.want)
+		}
+	}
+	m := workModel(t, 120, 40)
+	m = update(m, keyMsg("/"))
+	for _, k := range typed("squeeze e2e") {
+		m = update(m, keyMsg(k))
+	}
+	text := strings.Join(screenText(m), "\n")
+	if !strings.Contains(text, "1 of 3 tasks") || !strings.Contains(text, "· 1 match ") {
+		t.Errorf("a search for one session:\n%s", text)
 	}
 }
 

@@ -465,35 +465,69 @@ func (m model) rule(title string, style lipgloss.Style, note string) string {
 	return m.plain(s)
 }
 
-// sectionNote is what a project's rule says on the right: how many tasks
-// a tracked project has under way, or how many issues are open when none
-// is, or that reading them failed; and how many entries an untracked one
-// has.
+// sectionNote is what a project's rule says on the right, always with
+// its unit: how many tasks a tracked project has, or how many issues are
+// open when it has none, or that reading them failed; and how many
+// sessions and terminals an untracked one has. The counts are the
+// World's, so a search does not change their unit: one that hides some
+// shows "1 of 3 tasks".
 func sectionNote(sec section) string {
 	if sec.Failed {
 		return "issues failed"
 	}
-	n, tasks := 0, 0
+	tasks, sessions, terms := 0, 0, 0
 	for _, e := range sec.Entries {
-		switch e.kind {
-		case workstreamEntry:
+		switch {
+		case e.kind == workstreamEntry:
 			tasks++
-		case projectEntry:
-		default:
-			n++
+		case e.stream != nil:
+		case e.kind == sessionEntry:
+			sessions++
+		case e.kind == terminalEntry:
+			terms++
 		}
 	}
-	switch {
-	case !sec.Tracked && n == 0:
-		return ""
-	case !sec.Tracked:
-		return strconv.Itoa(n)
-	case tasks == 0:
-		return strconv.Itoa(sec.Open) + " open"
-	case tasks == 1:
-		return "1 task"
+	if sec.Tracked {
+		if sec.Tasks > 0 {
+			return countOf(tasks, sec.Tasks, "task")
+		}
+		return countOf(sec.Open, sec.Open, "open issue")
 	}
-	return strconv.Itoa(tasks) + " tasks"
+	var parts []string
+	if sec.Sessions > 0 {
+		parts = append(parts, countOf(sessions, sec.Sessions, "session"))
+	}
+	if sec.Terminals > 0 {
+		parts = append(parts, countOf(terms, sec.Terminals, "terminal"))
+	}
+	if len(parts) == 0 {
+		return countOf(0, 0, "session")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// searchCount is how many things a search shows, each once.
+func searchCount(secs []section) string {
+	if n := matches(secs); n != 1 {
+		return strconv.Itoa(n) + " matches"
+	}
+	return "1 match"
+}
+
+// countOf is "n units", "no units" or, when a search shows only k of
+// them, "k of n units".
+func countOf(k, n int, unit string) string {
+	if n == 0 {
+		return "no " + unit + "s"
+	}
+	s := strconv.Itoa(n) + " " + unit
+	if n != 1 {
+		s += "s"
+	}
+	if k < n {
+		s = strconv.Itoa(k) + " of " + s
+	}
+	return s
 }
 
 // projectLines renders the projects, unscrolled, with the key of the
@@ -1175,7 +1209,7 @@ func (m model) footer() string {
 	if m.digesting {
 		f.status = append(f.status, part{"writing a digest…", dim})
 	}
-	count := func() part { return part{fmt.Sprintf(" · %d", len(m.ordered())), dim} }
+	count := func() part { return part{" · " + searchCount(m.sections()), dim} }
 	switch {
 	case m.pick.open:
 		f.mode = []part{{"add project", heading}}
