@@ -111,7 +111,7 @@ func wrap(segs []Seg, w int, fill Style) [][]Seg {
 		}
 		*r = append(*r, Seg{text, st})
 	}
-	for _, s := range segs {
+	for _, s := range join(segs) {
 		g := uniseg.NewGraphemes(s.Text)
 		for g.Next() {
 			text, gw := g.Str(), g.Width()
@@ -130,6 +130,25 @@ func wrap(segs []Seg, w int, fill Style) [][]Seg {
 		}
 	}
 	return rows
+}
+
+// join merges neighbours in one style, as a row draws them, so they are
+// measured joined: a zero-width joiner or combining mark at the start of
+// one fuses with the grapheme that ends the other. An empty segment draws
+// nothing, so it does not keep them apart.
+func join(segs []Seg) []Seg {
+	var out []Seg
+	for _, s := range segs {
+		if s.Text == "" {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].St == s.St {
+			out[n-1].Text += s.Text
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // pad fills segs out to exactly w cells with spaces in fill, cutting it

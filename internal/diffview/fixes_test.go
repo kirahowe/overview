@@ -172,3 +172,16 @@ func TestJumpsPutTheHeaderOnTop(t *testing.T) {
 		}
 	}
 }
+
+// Neighbours in one style are drawn as one run, so a joiner that ends one
+// fuses its emoji with the next one's: the pair takes two cells, not four,
+// and the row is filled to the width around it. An empty segment between
+// them in another style draws nothing and does not keep them apart.
+func TestAJoinerAcrossSegmentsIsMeasuredJoined(t *testing.T) {
+	bold := Style{Fg: "2", Bold: true}
+	segs := []Seg{{"😀‍", bold}, {"", Style{Fg: "1"}}, {"😀a", bold}}
+	rows := wrap(segs, 4, fill)
+	if len(rows) != 1 || width(rows[0]) != 3 {
+		t.Fatalf("rows %+v, want one row of 3 cells", rows)
+	}
+}

@@ -427,9 +427,10 @@ func TestWrapProperty(t *testing.T) {
 			t.Fatal("no rows")
 		}
 		// The graphemes the rows must hold, in order: each segment's own,
-		// one too wide for any row drawn as "?".
+		// one too wide for any row drawn as "?". Neighbours in one style
+		// are drawn joined, so their graphemes are read joined.
 		var want []string
-		for _, s := range segs {
+		for _, s := range join(segs) {
 			g := uniseg.NewGraphemes(s.Text)
 			for g.Next() {
 				if g.Width() > w {
