@@ -526,3 +526,22 @@ func TestRealGitColorAlways(t *testing.T) {
 		t.Errorf("Diff = %+v, %v", files, err)
 	}
 }
+
+// A failed read says why in a few words, never with git's whole message.
+func TestShort(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("git rev-parse --verify: exit status 128: fatal: not a git repository (or any of the parent directories): .git"), "not a git repository"},
+		{errors.New("jj --no-pager --ignore-working-copy: exit status 1: Error: There is no jj repo in \".\""), "not a jj repository"},
+		{errors.New("git rev-parse --verify: exit status 128: fatal: Needed a single revision"), "no commits yet"},
+		{fmt.Errorf("git: %w", exec.ErrNotFound), "git or jj is not installed"},
+		{errors.New("first line\nsecond"), "first line"},
+		{nil, ""},
+	} {
+		if got := Short(c.err); got != c.want {
+			t.Errorf("Short(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -430,7 +431,8 @@ func changesCmd(key, sig, root string, start int64, base string, stream bool, d 
 		}
 		msg.kind = repo.Kind.String()
 		fail := func(err error) tea.Msg {
-			msg.info.err = err
+			// The card has room for why, not for git's whole message.
+			msg.info.err = errors.New(vcs.Short(err))
 			return msg
 		}
 		parent, err := repo.Uncommitted(d.vcs)

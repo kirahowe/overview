@@ -474,3 +474,18 @@ func TestAgesReadAsPhrases(t *testing.T) {
 		t.Errorf("changes card right = %q", got)
 	}
 }
+
+// A project whose .git is no repository says so in a few words, without
+// git's message, under Uncommitted.
+func TestTheChangesCardSaysShortlyWhyGitFailed(t *testing.T) {
+	d := fakeDeps(nil)
+	d.exists = func(p string) bool { return p == "/code/app/.git" }
+	d.vcs = func(dir string, args ...string) ([]byte, error) {
+		return nil, errors.New("git rev-parse --verify: exit status 128: fatal: not a git repository (or any of the parent directories): .git")
+	}
+	msg := changesCmd("k", "", "/code/app", 0, "", false, d)().(changesReadMsg)
+	got := strings.TrimSpace(ansi.Strip(strings.Join(drawn(changesCard("Uncommitted", "", msg.info), 40), "\n")))
+	if !strings.Contains(got, "not a git repository") || strings.Contains(got, "rev-parse") || strings.Contains(got, "fatal") {
+		t.Fatalf("the card reads:\n%s", got)
+	}
+}

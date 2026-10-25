@@ -326,3 +326,32 @@ func gitReflogArgs() []string {
 // gitEmptyTreeArgs print the empty tree's id, which depends on the
 // repository's hash.
 func gitEmptyTreeArgs() []string { return []string{"git", "hash-object", "-t", "tree", "/dev/null"} }
+
+// Short says in a few words why reading a repository failed, for a card
+// with no room for git's or jj's own message: the known failures by name,
+// and anything else by the first line of its error.
+func Short(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return "git or jj is not installed"
+	}
+	msg := err.Error()
+	for _, k := range []struct{ in, say string }{
+		{"not a git repository", "not a git repository"},
+		{"There is no jj repo", "not a jj repository"},
+		{"unknown revision", "no commits yet"},
+		{"ambiguous argument 'HEAD'", "no commits yet"},
+		{"Needed a single revision", "no commits yet"},
+		{"does not have any commits yet", "no commits yet"},
+		{"dubious ownership", "git does not trust this repository's owner"},
+		{"names no commit", "no commits yet"},
+	} {
+		if strings.Contains(msg, k.in) {
+			return k.say
+		}
+	}
+	line, _, _ := strings.Cut(msg, "\n")
+	return line
+}
