@@ -2,7 +2,9 @@
 
 Written 2026-10-24. This is the design for drawing every part of the
 window the same way, as a panel, and for moving the keyboard between
-panels with h, j, k and l, as relay's chat client does.
+panels with h, j, k and l, as relay's chat client does. The look
+stands; focus-design.md replaced the way the keyboard moves, with
+tmux's active pane as the only focus and the panels as a mode.
 
 ## One look
 

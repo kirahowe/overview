@@ -230,15 +230,16 @@ nothing typed by mistake reaches a session. The
 cockpit has no panels mode, since it fills the window.
 
 In the list, `j`/`k` move, and walk on from the projects into the agents.
-`n` jumps to the next session that needs you or workstream in review,
-and `/` searches. Search looks at the project,
+`g` and `G` go to the first and last entry. `n` jumps to the next session
+that needs you or workstream in review, `N` to the previous one, and `/`
+searches. Search looks at the project,
 title, last prompt and name, and the app's name for a session in another
 app, ignoring case. A workstream matches on its reference, such as
 `overview#6` or `#6`, its title and its project, and when it matches,
 everything under it shows. Each space-separated word has to match one of
 those fields, and a word never matches across two of them. The cursor
 moves to the first match, `up` and `down` step through the matches, and
-`esc` clears the search. `enter` (or `tab`) moves the keyboard into the
+`esc` clears the search. `enter` (or `tab`, `l` or the right arrow) moves the keyboard into the
 selected session. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
@@ -259,8 +260,10 @@ when the list is empty, shows it on the right and moves the keyboard into
 it. On a workstream, or on anything under one, the new session's first
 prompt is `Work on <project>#<n>: <title>`, so it works on that issue. `t`
 does the same with a terminal, and a terminal opened on a workstream is
-listed under it. `d` shows the digests, where `[` and `]` step through
-older ones and `D` writes a new one. `o` opens the cockpit, as described
+listed under it. `d` shows the digests, and `1` and `2` go to the list and the digests
+directly. There `[` and `]`, or `h` and `l`, step through older ones,
+`j`, `k`, `g` and `G` scroll, `esc` goes back, and `D` writes a new one.
+`r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, as described
 above. `q` detaches, leaving the view and its
 sessions running, and `Q` quits the view. `?` lists every key.
 

@@ -2,8 +2,8 @@
 
 Written 2026-10-23. This is the design for grouping a project's sessions
 by the task they work on, and for a dashboard of one task, called the
-cockpit. Phases 1 and 2 are built: the workstreams in the list, and the
-cockpit.
+cockpit. Phases 1 to 3 are built: the workstreams in the list, the
+cockpit, and starting a workstream from a ready issue. Phase 4 is open.
 
 ## What it is for
 

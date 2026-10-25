@@ -6,7 +6,7 @@ them to the session with one key.
 
 ## What it is for
 
-When a session finishes a change, you press `r` on it in the list. A
+When a session finishes a change, you press `v` on it in the list. A
 diff of its changes opens in a split above the session, side by side or
 inline. You move through the diff, leave notes on lines or ranges, and
 press `s` to send every unsent note to the session as one message. The
