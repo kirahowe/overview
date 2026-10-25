@@ -1195,6 +1195,27 @@ func helpSections() (left, right []helpSection) {
 	return left, right
 }
 
+// helpCol is the width of the help's first column when two sit side by side.
+const helpCol = 40
+
+// helpWide says whether the help has two columns: the pane has room.
+func (m model) helpWide() bool { return m.w-4 >= 2*helpCol+6 }
+
+// helpLen is how many lines helpBody has, counted without drawing them.
+func (m model) helpLen() int {
+	ls, rs := helpSections()
+	n := func(ss []helpSection) (c int) {
+		for _, s := range ss {
+			c += len(s.entries) + 2
+		}
+		return c
+	}
+	if m.helpWide() {
+		return max(n(ls), n(rs)) + 1
+	}
+	return n(ls) + n(rs) + 1
+}
+
 // helpBody is every line of the help, before it is cut to the pane.
 func (m model) helpBody() []string {
 	render := func(ss []helpSection) []string {
@@ -1213,11 +1234,10 @@ func (m model) helpBody() []string {
 	legend := red.Render("!") + dim.Render(" blocked  ") + amber.Render("?") + dim.Render(" asking  ") +
 		green.Render(spinner[m.frame%len(spinner)]) + dim.Render(" working  ") + dim.Render("○ idle  ") + codeFg.Render("$") + dim.Render(" terminal  #6 task")
 
-	const col = 40
 	// Side by side when the pane is wide enough, one column under the other
 	// in the narrow list pane.
 	var body []string
-	if m.w-4 >= 2*col+6 {
+	if m.helpWide() {
 		for i := 0; i < max(len(left), len(right)); i++ {
 			l, r := "", ""
 			if i < len(left) {
@@ -1226,7 +1246,7 @@ func (m model) helpBody() []string {
 			if i < len(right) {
 				r = right[i]
 			}
-			body = append(body, fit(l, col)+r)
+			body = append(body, fit(l, helpCol)+r)
 		}
 	} else {
 		body = append(left, right...)
@@ -1237,7 +1257,7 @@ func (m model) helpBody() []string {
 // helpRows is how many lines of the help the box shows: all of them when
 // the pane has room, else what fits between the box's borders.
 func (m model) helpRows() int {
-	n := len(m.helpBody())
+	n := m.helpLen()
 	if n+2 <= m.listHeight() {
 		return n
 	}
@@ -1245,7 +1265,7 @@ func (m model) helpRows() int {
 }
 
 // helpMax is how far the help can scroll, 0 when it all fits.
-func (m model) helpMax() int { return max(len(m.helpBody())-m.helpRows(), 0) }
+func (m model) helpMax() int { return max(m.helpLen()-m.helpRows(), 0) }
 
 func (m model) helpBox() []string {
 	body := m.helpBody()
@@ -1256,12 +1276,17 @@ func (m model) helpBox() []string {
 	if more {
 		info = "↓ more · esc closes"
 	}
-	w := min(m.w-4, 2*40+6)
+	w := min(m.w-4, 2*helpCol+6)
 	out := box("keys", info, body[top:top+rows], w, rows+2, true)
-	if top > 0 && w >= 20 {
-		marker := " ↑ more "
-		edge := fg(pal.Accent)
-		out[0] = ansi.Truncate(out[0], w-ansi.StringWidth(marker)-2, "") + dim.Render(marker) + edge.Render("─┐")
+	if top > 0 && w >= 12 {
+		// The marker takes the title's place when the box is too narrow
+		// for both.
+		marker, edge := " ↑ more ", fg(pal.Accent)
+		if w >= 24 {
+			out[0] = ansi.Truncate(out[0], w-len(marker)-2, "") + dim.Render(marker) + edge.Render("─┐")
+		} else {
+			out[0] = edge.Render("┌─") + dim.Render(marker) + edge.Render(strings.Repeat("─", w-len(marker)-3)+"┐")
+		}
 	}
 	return out
 }

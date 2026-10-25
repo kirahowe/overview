@@ -1542,6 +1542,9 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 		m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
 		m, _ = press(m, "?")
 		body := m.helpBody()
+		if m.helpLen() != len(body) {
+			t.Fatalf("%dx%d: helpLen %d, body %d lines", w, h, m.helpLen(), len(body))
+		}
 		seen := map[int]bool{}
 		check := func() {
 			box := m.helpBox()
@@ -1555,6 +1558,12 @@ func TestPropHelpScrollsToEveryLine(t *testing.T) {
 			}
 			rows := m.helpRows()
 			top := m.helpTop
+			if top > 0 && !strings.Contains(ansi.Strip(box[0]), "↑ more") {
+				t.Fatalf("%dx%d: scrolled to %d with no up marker: %q", w, h, top, ansi.Strip(box[0]))
+			}
+			if more := top+rows < len(body); more != strings.Contains(ansi.Strip(box[len(box)-1]), "↓ more") {
+				t.Fatalf("%dx%d: down marker wrong at %d: %q", w, h, top, ansi.Strip(box[len(box)-1]))
+			}
 			if top < 0 || top > m.helpMax() {
 				t.Fatalf("%dx%d: top %d outside 0..%d", w, h, top, m.helpMax())
 			}

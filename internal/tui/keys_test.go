@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"overview/internal/fleet"
 )
 
 // ctrl+c in an input cancels that input as esc does. It never quits the
@@ -40,10 +42,30 @@ func TestCtrlCCancelsEachInput(t *testing.T) {
 	if m.filtering {
 		t.Error("ctrl+c left the search open")
 	}
-	m, _ = press(base, "x")
-	if m.confirm != "" {
-		if m, _ = press(m, "ctrl+c"); m.confirm != "" {
-			t.Error("ctrl+c did not cancel the confirm prompt")
+	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background"}, State: fleet.Idle}
+	m, _ = press(newTestModel(t, bg), "x")
+	if m.confirm == "" {
+		t.Fatal("x on a background session did not ask")
+	}
+	if m, _ = press(m, "ctrl+c"); m.confirm != "" {
+		t.Error("ctrl+c did not cancel the confirm prompt")
+	}
+}
+
+// l and the right arrow go from the cockpit's list into its issues card,
+// and do nothing there, as far right as the cockpit goes.
+func TestCockpitRightStopsAtTheIssuesCard(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m.cockpit.open = true
+	for _, k := range []string{"l", "right"} {
+		if as := m.keyActions(keyMsg(k)); len(as) != 1 || as[0].do != cockpitTab {
+			t.Errorf("%s from the cockpit's list: %v, want cockpitTab", k, as)
+		}
+	}
+	m.cockpit.issues = true
+	for _, k := range []string{"l", "right"} {
+		if as := m.keyActions(keyMsg(k)); len(as) != 0 {
+			t.Errorf("%s in the issues card: %v, want nothing", k, as)
 		}
 	}
 }
@@ -52,10 +74,22 @@ func TestCtrlCCancelsEachInput(t *testing.T) {
 // and every key the list answers to is in the help, so neither drifts.
 func TestHelpMatchesTheKeyHandler(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11))
-	setup := map[helpMode]func(model) model{
-		listMode:    func(m model) model { return m },
-		cockpitMode: func(m model) model { m.cockpit.open, m.cockpit.issues = true, true; return m },
-		digestMode:  func(m model) model { m.screen = digestScreen; return m },
+	// The cockpit has two places for the keyboard, and each key works in one.
+	setups := map[helpMode][]func(model) model{
+		listMode: {func(m model) model { return m }},
+		cockpitMode: {
+			func(m model) model { m.cockpit.open = true; return m },
+			func(m model) model { m.cockpit.open, m.cockpit.issues = true, true; return m },
+		},
+		digestMode: {func(m model) model { m.screen = digestScreen; return m }},
+	}
+	handled := func(mode helpMode, k string) bool {
+		for _, set := range setups[mode] {
+			if len(set(m).keyActions(keyMsg(k))) > 0 {
+				return true
+			}
+		}
+		return false
 	}
 	listed := map[string]bool{}
 	ls, rs := helpSections()
@@ -68,27 +102,30 @@ func TestHelpMatchesTheKeyHandler(t *testing.T) {
 				if e.mode == tmuxMode || e.mode == mouseMode {
 					continue
 				}
-				if len(setup[e.mode](m).keyActions(keyMsg(k))) == 0 {
+				if !handled(e.mode, k) {
 					t.Errorf("help lists %q (%s) but the handler ignores it", k, e.keys)
 				}
 			}
 		}
 	}
-	// Keys that do the same as one the help lists.
+	// Keys that do the same as one the help lists, which they must prove.
 	alias := map[string]string{"up": "k", "down": "j", "home": "g", "end": "G", "right": "l", "tab": "l", "ctrl+c": "q"}
 	var probes []string
 	for r := ' ' + 1; r < 127; r++ {
 		probes = append(probes, string(r))
 	}
 	probes = append(probes, "esc", "enter", "tab", "up", "down", "left", "right", "home", "end", "pgup", "pgdown", "ctrl+c", "ctrl+d", "ctrl+u")
-	skip := map[string]bool{"pgup": true, "pgdown": true, "ctrl+d": true, "ctrl+u": true, "left": true}
 	for _, k := range probes {
-		if skip[k] || len(m.keyActions(keyMsg(k))) == 0 {
+		as := m.keyActions(keyMsg(k))
+		if len(as) == 0 {
 			continue
 		}
 		name := k
 		if a, ok := alias[k]; ok {
 			name = a
+			if want := m.keyActions(keyMsg(a)); !reflect.DeepEqual(as, want) {
+				t.Errorf("%q should do what %q does: %v against %v", k, a, as, want)
+			}
 		}
 		if !listed[name] {
 			t.Errorf("the list answers to %q but the help does not list it", k)

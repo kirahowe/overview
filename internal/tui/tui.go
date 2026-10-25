@@ -819,7 +819,9 @@ func (m model) settle(before model) model {
 		col := m.shownColumn()
 		m.listTop, m.agentsTop = col.projTop, col.agentsTop
 	}
-	m.helpTop = max(0, min(m.helpTop, m.helpMax()))
+	if m.help {
+		m.helpTop = max(0, min(m.helpTop, m.helpMax()))
+	}
 	return m.keepCockpit()
 }
 

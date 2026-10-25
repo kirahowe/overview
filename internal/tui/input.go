@@ -304,6 +304,8 @@ func (m model) cockpitKeys(k string) []action {
 		return nil
 	}
 	switch k {
+	case "l", "right":
+		return []action{} // as far right as the cockpit goes
 	case "h", "left":
 		return doN(cockpitTab, -1)
 	case "j", "down":

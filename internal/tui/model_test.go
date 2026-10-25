@@ -82,10 +82,6 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlD}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
-	case "ctrl+n":
-		return tea.KeyMsg{Type: tea.KeyCtrlN}
-	case "ctrl+p":
-		return tea.KeyMsg{Type: tea.KeyCtrlP}
 	case "home":
 		return tea.KeyMsg{Type: tea.KeyHome}
 	case "end":

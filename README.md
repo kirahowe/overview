@@ -217,8 +217,9 @@ program, which is why `ctrl+[` is the way back. The pane with the keyboard
 is tmux's active pane, and tmux lights its rule and border.
 
 `esc` in the list, once it has cleared any search filter, puts the client
-in the panels mode. `ctrl+[` does the same there, since a terminal sends
-one byte for both, which is a key table of tmux's own. The footer says
+in the panels mode, which is a key table of tmux's own. In the list
+`ctrl+[` does the same, since the default binding sends the list an
+Escape there, and so does a terminal that cannot send extended keys. The footer says
 `panels`, the cursor's row loses its background, and the focused pane's
 rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
 `l`, or the arrows, move the focus to the pane that way, and the mode
@@ -242,9 +243,9 @@ everything under it shows. Each space-separated word has to match one of
 those fields, and a word never matches across two of them. The cursor
 moves to the first match, `up` and `down` step through the matches, and
 `esc` clears the search. `enter` (or `tab`, `l` or the right arrow) moves the keyboard into the
-selected session. In the list `l` and the right arrow open the entry; in
-the panels mode they move the focus right, and in the cockpit they go
-into the issues card. On a background session, `enter` first attaches to it in a
+selected session. In the panels mode `l` and the right arrow move the
+focus right instead, and in the cockpit's list they go into the issues
+card, where they do nothing more. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front. On a
 workstream, `enter` does what it does on the entry shown beside it: the
