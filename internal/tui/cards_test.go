@@ -40,12 +40,12 @@ func wantLines(t *testing.T, what string, got, want []string) {
 }
 
 func TestStreamHeaderCard(t *testing.T) {
-	ms := []member{{name: "list squeeze", word: "working", age: "3m", style: green}, {name: "go", term: true}}
+	ms := []member{{name: "list squeeze", word: "working", age: "3m", mark: "⠋", markStyle: green, style: green}, {name: "go", term: true}}
 	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms), 60)
 	wantLines(t, "header", got, []string{
 		"── overview#6 ────────────────────────── in-progress · p1 ──",
 		" keep the list's width                       started 2h ago",
-		" ● list squeeze working 3m   $ go",
+		" ⠋ list squeeze working 3m   $ go",
 		"  enter  attach   v  review   c  claude   t  term",
 	})
 	// No sessions yet, and no start.

@@ -216,8 +216,12 @@ func chips(hs ...hint) string {
 // terminal's title.
 type member struct {
 	name, word, age string
-	style           lipgloss.Style
-	term            bool
+	// mark is the session's state mark as the list shows it, from
+	// stateMark, in markStyle.
+	mark      string
+	markStyle lipgloss.Style
+	style     lipgloss.Style
+	term      bool
 }
 
 func (mb member) String() string {
@@ -228,7 +232,7 @@ func (mb member) String() string {
 	if mb.age != "" {
 		state += " " + mb.age
 	}
-	return mb.style.Render("●") + " " + fg(pal.Text).Render(mb.name) + " " + mb.style.Render(state)
+	return mb.markStyle.Render(mb.mark) + " " + fg(pal.Text).Render(mb.name) + " " + mb.style.Render(state)
 }
 
 // membersLine is the members on one line, or that there are none.

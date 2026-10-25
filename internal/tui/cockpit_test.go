@@ -491,3 +491,15 @@ func TestAPendingOIsCancelled(t *testing.T) {
 		})
 	}
 }
+
+// The cockpit's header marks each session's state as the list does, with
+// the asking mark for a session that asks, not a dot in its colour.
+func TestTheCockpitHeaderMarksStatesAsTheListDoes(t *testing.T) {
+	m := workModel(t, 120, 30)
+	m.sel = "task:" + ovRoot + "#5"
+	m = update(m, keyMsg("o"))
+	text := strings.Join(screenText(m), "\n")
+	if !strings.Contains(text, "? reply on view.go note asking") || strings.Contains(text, "● reply") {
+		t.Fatalf("the header of #5:\n%s", text)
+	}
+}

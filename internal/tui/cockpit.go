@@ -493,11 +493,11 @@ func stale(mp map[string]changesRead) map[string]changesRead {
 func (m model) members(rows []*world.Session, terms []*world.Terminal) []member {
 	var out []member
 	for _, r := range rows {
-		_, _, word, age, style := m.stateMark(r.Row)
+		mark, markStyle, word, age, style := m.stateMark(r.Row)
 		if r.State == fleet.Working {
 			style = green
 		}
-		out = append(out, member{name: r.Name, word: word, age: age, style: style})
+		out = append(out, member{name: r.Name, word: word, age: age, mark: mark, markStyle: markStyle, style: style})
 	}
 	for _, t := range terms {
 		out = append(out, member{name: t.Title, term: true})
