@@ -295,3 +295,30 @@ func TestTheFooterSharesItsLine(t *testing.T) {
 		}
 	}
 }
+
+// In a 46-cell list pane the task picker's footer names the project as
+// the list's headings do, by its World name, so the name and the keys
+// both fit. A name too long for the room, such as the path a root
+// outside the home is named by, there as in the headings, is cut from
+// the left and keeps its last directory.
+func TestTheTaskPickersFooterFitsANarrowPane(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	m = update(m, tea.WindowSizeMsg{Width: 48, Height: 20})
+	m.user = "/Users/k"
+	m = m.setInputs(nil)
+	m.taskPick.open = true
+	for root, want := range map[string]string{
+		"/Users/k/code/projects/gamma":          "start a task in gamma  enter start • ↑↓ move",
+		"/Users/k/src/gamma":                    "start a task in …/gamma  enter start • ↑↓ move",
+		"/private/tmp/ovqa-1234/projects/gamma": "start a task in …/gamma  enter start • ↑↓ move",
+	} {
+		m.taskPick.root = root
+		foot := ansi.Strip(m.footer())
+		if !strings.Contains(foot, want) || ansi.StringWidth(foot) > 48 {
+			t.Errorf("%s: footer %q, want %q", root, foot, want)
+		}
+		if heading := m.world().Name(root); !strings.HasSuffix(heading, "gamma") {
+			t.Errorf("%s: the headings name it %q", root, heading)
+		}
+	}
+}
