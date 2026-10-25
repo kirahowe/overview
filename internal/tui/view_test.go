@@ -227,8 +227,9 @@ func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 }
 
 // Every heading names what it counts, a pinned project with nothing in it
-// included, and a search keeps the unit: it says how many of the
-// project's tasks it shows. The search's own count names each session
+// included, and a search keeps the parts: it says how many of each kind
+// the project has it shows, zero included, and a kind the project has
+// none of is left out. The search's own count names each session
 // once, though the agents list shows it again.
 func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 	cases := []struct {
@@ -237,7 +238,11 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 	}{
 		{section{Title: "pinned", Entries: []entry{{kind: projectEntry}}}, "no sessions"},
 		{section{Title: "web", Sessions: 1, Terminals: 2, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}, {kind: terminalEntry}}}, "1 session · 2 terminals"},
-		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions"},
+		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions · 0 of 1 terminal"},
+		// "/digest" and "/fix" on one project say the same parts.
+		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 1, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks · 0 of 1 session"},
+		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 tasks · 1 session"},
+		{section{Title: "app", Tracked: true, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "1 session"},
 		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 tasks · 1 of 2 sessions"},
 		{section{Title: "away", Away: true, Sessions: 2, Entries: []entry{{kind: sessionEntry}, {kind: sessionEntry}}}, "2 sessions"},
 		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks"},

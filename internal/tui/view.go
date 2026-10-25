@@ -497,10 +497,15 @@ func (p notePart) compact() string {
 
 // noteParts are the counts a project's rule ends with, each naming its
 // unit: a tracked project's tasks, or its open issues when it has no
-// task, and then the sessions and terminals under no task that the
-// section shows. The totals are the World's, so a search never changes a
-// part's unit, only how many it shows: "1 of 3 tasks · 1 of 2 sessions".
-// A section with nothing to count says "no sessions".
+// task, and then its sessions and terminals under no task.
+//
+// Which parts show is the World's, never the search's: a part shows when
+// the project has any of its kind, and a search changes only how many of
+// them it says are shown, so "/digest" and "/fix" on one project both say
+// "k of 3 tasks · k of 1 session", zeros included. A kind the project has
+// none of is left out, so a part never reads "no …" beside another. A
+// project with nothing to count says "no open issues" when it tracks
+// them, else "no sessions".
 func noteParts(sec section) []notePart {
 	tasks, sessions, terms := 0, 0, 0
 	for _, e := range sec.Entries {
@@ -518,16 +523,20 @@ func noteParts(sec section) []notePart {
 	switch {
 	case sec.Tracked && sec.Tasks > 0:
 		out = append(out, notePart{tasks, sec.Tasks, "task"})
-	case sec.Tracked:
+	case sec.Tracked && sec.Open > 0:
 		out = append(out, notePart{sec.Open, sec.Open, "open issue"})
 	}
-	if sessions > 0 {
+	if sec.Sessions > 0 {
 		out = append(out, notePart{sessions, sec.Sessions, "session"})
 	}
-	if terms > 0 {
+	if sec.Terminals > 0 {
 		out = append(out, notePart{terms, sec.Terminals, "terminal"})
 	}
-	if len(out) == 0 {
+	switch {
+	case len(out) > 0:
+	case sec.Tracked:
+		out = append(out, notePart{0, 0, "open issue"})
+	default:
 		out = append(out, notePart{0, 0, "session"})
 	}
 	return out

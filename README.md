@@ -81,8 +81,10 @@ issues counts its tasks, or its open issues when no task is under way,
 and then the sessions and terminals listed under no task, as
 `3 tasks · 1 session`. One that does not track them counts only its
 sessions and terminals, and a pinned project with nothing in it says
-`no sessions`. A search keeps each unit and says how many it shows, as
-`0 of 3 tasks · 1 of 2 sessions`, and the footer counts the matches,
+`no sessions`. A count shows only for a kind the project has, so it
+never reads `no` beside another. A search keeps every count and says how
+many of each it shows, zero included, as `0 of 3 tasks · 1 of 2 sessions`,
+and the footer counts the matches,
 each session once even when it is listed twice. When the pane is narrow
 the counts give way before the name: first all but the first count go,
 then its unit, as `1/3`, then the count itself. A project is

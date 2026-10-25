@@ -1821,8 +1821,9 @@ func TestPropKeepEnd(t *testing.T) {
 }
 
 // Every heading's note names its units, and a search never changes one:
-// each part it shows is a part the whole list shows, with the same
-// total, in the same order, showing no more than all of them. The
+// it shows the parts the whole list shows, with the same totals, in the
+// same order, showing no more than all of them, and a part shows only
+// for a kind the project has. The
 // search's count is the same with the agents list or without it, so a
 // session it shows twice counts once.
 func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
@@ -1840,17 +1841,20 @@ func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 				continue
 			}
 			rest = append(rest, sec)
-			at := 0
-			for _, p := range noteParts(sec) {
+			ps := noteParts(sec)
+			if len(ps) != len(whole[sec.Title]) {
+				t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, ps, whole[sec.Title])
+			}
+			for i, p := range ps {
 				if p.unit == "" || !strings.Contains(p.String(), p.unit) {
 					t.Fatalf("%q's part %+v names no unit", sec.Title, p)
 				}
-				i := slices.IndexFunc(whole[sec.Title], func(o notePart) bool { return o.unit == p.unit })
-				if i < at || p.shown > p.total || (i >= 0 && whole[sec.Title][i].total != p.total) ||
-					(i < 0 && !(p.unit == "session" && p.total == 0)) {
-					t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, noteParts(sec), whole[sec.Title])
+				if o := whole[sec.Title][i]; o.unit != p.unit || o.total != p.total || p.shown > p.total {
+					t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, ps, whole[sec.Title])
 				}
-				at = max(i, at)
+				if p.total == 0 && len(ps) > 1 {
+					t.Fatalf("%q says %+v, a part of none beside others", sec.Title, ps)
+				}
 			}
 		}
 		if matches(secs) != matches(rest) {
