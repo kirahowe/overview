@@ -447,7 +447,7 @@ func (m model) noteRows(i int, it item) [][]Seg {
 	}
 	body := func(prefix string, text string, st Style) {
 		for _, para := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-			for _, r := range wrap([]Seg{plain(para, st)}, max(1, bw-len([]rune(prefix))-2), Style{}) {
+			for _, r := range wrapWords([]Seg{plain(para, st)}, max(1, bw-len([]rune(prefix))-2), Style{}) {
 				line(append([]Seg{{"│ ", edge}, {prefix, Style{}}}, r...)...)
 			}
 		}

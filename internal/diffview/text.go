@@ -132,6 +132,85 @@ func wrap(segs []Seg, w int, fill Style) [][]Seg {
 	return rows
 }
 
+// wrapWords breaks segs into rows at most w cells wide as prose is
+// broken: between words, with a word wider than w broken as wrap breaks
+// it. The spaces where a row breaks are dropped, so no row but the first
+// starts with one, except a reversed space, which is the editor's cursor
+// and must stay drawn. Every row but the last is filled to w with spaces
+// in fill. Empty input gives one empty row.
+func wrapWords(segs []Seg, w int, fill Style) [][]Seg {
+	type gr struct {
+		text  string
+		width int
+		st    Style
+		space bool
+	}
+	var gs []gr
+	for _, s := range join(segs) {
+		g := uniseg.NewGraphemes(s.Text)
+		for g.Next() {
+			text, gw := g.Str(), g.Width()
+			if gw > w {
+				text, gw = "?", 1
+			}
+			gs = append(gs, gr{text, gw, s.St, text == " "})
+		}
+	}
+	rows := [][]Seg{nil}
+	col := 0
+	broke := false // the row was started by a break, so spaces at its start go
+	add := func(g gr) {
+		r := &rows[len(rows)-1]
+		if n := len(*r); n > 0 && (*r)[n-1].St == g.st {
+			(*r)[n-1].Text += g.text
+		} else {
+			*r = append(*r, Seg{g.text, g.st})
+		}
+		col += g.width
+	}
+	newRow := func() {
+		if col < w {
+			rows[len(rows)-1] = append(rows[len(rows)-1], Seg{strings.Repeat(" ", w-col), fill})
+		}
+		rows = append(rows, nil)
+		col, broke = 0, true
+	}
+	for i := 0; i < len(gs); {
+		g := gs[i]
+		if g.space {
+			switch {
+			case col == 0 && broke && !g.st.Reverse:
+				// A space the break already stands for.
+			case col+g.width <= w:
+				add(g)
+			case g.st.Reverse:
+				newRow()
+				add(g)
+			default:
+				newRow()
+			}
+			i++
+			continue
+		}
+		j, ww := i, 0
+		for j < len(gs) && !gs[j].space {
+			ww += gs[j].width
+			j++
+		}
+		if col+ww > w && ww <= w && col > 0 {
+			newRow()
+		}
+		for ; i < j; i++ {
+			if col+gs[i].width > w {
+				newRow()
+			}
+			add(gs[i])
+			broke = false
+		}
+	}
+	return rows
+}
+
 // join merges neighbours in one style, as a row draws them, so they are
 // measured joined: a zero-width joiner or combining mark at the start of
 // one fuses with the grapheme that ends the other. An empty segment draws

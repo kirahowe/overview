@@ -146,7 +146,7 @@ func (e editor) killLine() editor {
 	return e
 }
 
-// rows draws the text wrapped to w cells, the cursor as a reversed cell,
+// rows draws the text wrapped at words to w cells, as the saved note is, the cursor as a reversed cell,
 // and says which row the cursor is on.
 func (e editor) rows(w int, st Style) (rows [][]Seg, cursorRow int) {
 	cur := st
@@ -168,13 +168,21 @@ func (e editor) rows(w int, st Style) (rows [][]Seg, cursorRow int) {
 				}
 			}
 			segs = []Seg{plain(line[:from], st), plain(under, cur), plain(rest, st)}
-			wrapped := wrap(segs, w, st)
-			// The cursor's row is the one where the text before it ends.
-			before := wrap([]Seg{plain(line[:from], st), plain(under, cur)}, w, st)
-			cursorRow = len(rows) + len(before) - 1
+			wrapped := wrapWords(segs, w, st)
+			// The cursor's row is the one that draws it. Where a word
+			// lands depends on the text after the cursor too, so the
+			// row is read off the whole line's wrap.
+			cursorRow = len(rows)
+			for r, row := range wrapped {
+				for _, sg := range row {
+					if sg.St == cur {
+						cursorRow = len(rows) + r
+					}
+				}
+			}
 			rows = append(rows, wrapped...)
 		} else {
-			rows = append(rows, wrap([]Seg{plain(line, st)}, w, st)...)
+			rows = append(rows, wrapWords([]Seg{plain(line, st)}, w, st)...)
 		}
 		offset += len(line) + 1
 	}

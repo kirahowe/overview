@@ -247,3 +247,67 @@ func TestALongNoteLeavesTheCountsAlone(t *testing.T) {
 		t.Fatalf("narrow status line %q", row)
 	}
 }
+
+// The editor wraps a note between words, with no space opening a row, and
+// the cursor stays on the grapheme it is on.
+func TestTheEditorWrapsAtWords(t *testing.T) {
+	e := editor{}.insert("we wrap across words")
+	rows, cur := e.rows(12, Style{})
+	var got []string
+	for _, r := range rows {
+		got = append(got, strings.TrimRight(rowText(r), " "))
+	}
+	if strings.Join(got, "|") != "we wrap|across words|" || cur != 2 {
+		t.Fatalf("rows %q, cursor on %d", got, cur)
+	}
+	// On the a of across, the cursor is on the second row.
+	e.pos = strings.Index(e.text, "across")
+	rows, cur = e.rows(12, Style{})
+	if cur != 1 || len(rows) != 2 {
+		t.Fatalf("cursor on row %d of %d", cur, len(rows))
+	}
+	for _, s := range rows[1] {
+		if s.St.Reverse && s.Text != "a" {
+			t.Fatalf("cursor drawn on %q", s.Text)
+		}
+	}
+	// On the space the row breaks at, it is drawn where the space fits,
+	// at the end of the first row.
+	e.pos = strings.Index(e.text, " across")
+	rows, cur = e.rows(12, Style{})
+	if cur != 0 || !rows[0][1].St.Reverse || rows[0][1].Text != " " {
+		t.Fatalf("cursor on row %d: %+v", cur, rows)
+	}
+	// On a space that does not fit the row, it opens the next one.
+	e = editor{}.insert("we wrap more  words")
+	e.pos = strings.Index(e.text, "  ") + 1
+	rows, cur = e.rows(12, Style{})
+	if cur != 1 || !rows[1][0].St.Reverse || rows[1][0].Text != " " {
+		t.Fatalf("cursor on row %d: %+v", cur, rows)
+	}
+}
+
+// A saved note wraps at words, and its continuation rows start at the
+// text, not a space.
+func TestASavedNoteWrapsAtWords(t *testing.T) {
+	f, cfg := newTest(t, twoFiles)
+	m := open(t, f, cfg, 40, 30)
+	m = press(t, m, "c")
+	const text = "the editor should wrap across words when the note is long"
+	m = typeText(t, m, text)
+	m = press(t, m, "enter")
+	var body []string
+	for _, line := range strings.Split(screen(m), "\n") {
+		if i := strings.Index(line, "│ "); i >= 0 && !strings.Contains(line, "╭") {
+			body = append(body, strings.TrimRight(line[i+len("│ "):], " "))
+		}
+	}
+	if len(body) < 2 || strings.Join(body, " ") != text {
+		t.Fatalf("note body %q", body)
+	}
+	for _, b := range body {
+		if strings.HasPrefix(b, " ") {
+			t.Fatalf("a row starts with a space: %q", body)
+		}
+	}
+}

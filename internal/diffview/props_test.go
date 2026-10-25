@@ -471,6 +471,123 @@ func TestWrapProperty(t *testing.T) {
 	})
 }
 
+// wrapWords breaks prose between words: it keeps every grapheme but the
+// spaces a break stands for, starts no row after the first with one, and
+// splits only a word wider than a row. A reversed space, the editor's
+// cursor, is never dropped.
+func TestWrapWordsProperty(t *testing.T) {
+	styles := append(append([]Style{}, segStyles...), Style{Fg: "4", Reverse: true})
+	rapid.Check(t, func(t *rapid.T) {
+		var segs []Seg
+		for range rapid.IntRange(0, 6).Draw(t, "segs") {
+			text, _ := clean(genPiecesText(t, "seg") + rapid.SampledFrom([]string{"", " ", "  ", " word "}).Draw(t, "space"))
+			segs = append(segs, Seg{text, rapid.SampledFrom(styles).Draw(t, "style")})
+		}
+		w := rapid.IntRange(1, 40).Draw(t, "w")
+		rows := wrapWords(segs, w, fill)
+		if len(rows) == 0 {
+			t.Fatal("no rows")
+		}
+		type gr struct {
+			text string
+			wd   int
+			rev  bool
+		}
+		graphemes := func(segs []Seg) []gr {
+			var out []gr
+			for _, s := range join(segs) {
+				g := uniseg.NewGraphemes(s.Text)
+				for g.Next() {
+					text, gw := g.Str(), g.Width()
+					if gw > w {
+						text, gw = "?", 1
+					}
+					out = append(out, gr{text, gw, s.St.Reverse})
+				}
+			}
+			return out
+		}
+		droppable := func(g gr) bool { return g.text == " " && !g.rev }
+		var want []string
+		for _, g := range graphemes(segs) {
+			if !droppable(g) {
+				want = append(want, g.text)
+			}
+		}
+		var got []string
+		var drawn [][]gr // each row's graphemes, the fill left out
+		for i, r := range rows {
+			if rw := width(r); rw > w || (i < len(rows)-1 && rw != w) {
+				t.Fatalf("row %d of %d is %d cells at w %d: %+v", i, len(rows), rw, w, r)
+			}
+			var content []Seg
+			for k, s := range r {
+				if s.St == fill {
+					if k != len(r)-1 || strings.Trim(s.Text, " ") != "" {
+						t.Fatalf("fill inside row %d: %+v", i, r)
+					}
+					continue
+				}
+				content = append(content, s)
+			}
+			gs := graphemes(content)
+			drawn = append(drawn, gs)
+			if i > 0 && len(gs) > 0 && droppable(gs[0]) {
+				t.Fatalf("row %d starts with a space: %+v", i, rows)
+			}
+			for _, g := range gs {
+				if !droppable(g) {
+					got = append(got, g.text)
+				}
+			}
+		}
+		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("the rows hold %q, want %q", got, want)
+		}
+		// A word no wider than a row is drawn on one row: match each
+		// input grapheme to where it is drawn, if it is.
+		type at struct{ row, k int }
+		var flat []at
+		for r, gs := range drawn {
+			for k := range gs {
+				flat = append(flat, at{r, k})
+			}
+		}
+		in := graphemes(segs)
+		rowOf := make([]int, len(in))
+		next := 0
+		for i, g := range in {
+			rowOf[i] = -1
+			if next < len(flat) {
+				d := drawn[flat[next].row][flat[next].k]
+				if d.text == g.text && d.rev == g.rev {
+					rowOf[i] = flat[next].row
+					next++
+					continue
+				}
+			}
+			if !droppable(g) {
+				t.Fatalf("grapheme %d %q is not drawn in order", i, g.text)
+			}
+		}
+		for i := 0; i < len(in); {
+			if in[i].text == " " {
+				i++
+				continue
+			}
+			j, wd := i, 0
+			for j < len(in) && in[j].text != " " {
+				wd += in[j].wd
+				j++
+			}
+			if wd <= w && rowOf[i] != rowOf[j-1] {
+				t.Fatalf("a word of %d cells is split at w %d: %+v", wd, w, rows)
+			}
+			i = j
+		}
+	})
+}
+
 func TestPadProperty(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		segs := genSegs(t)
@@ -550,6 +667,41 @@ func TestEditorProperty(t *testing.T) {
 		rows, cur := e.rows(w, Style{})
 		if cur < 0 || cur >= len(rows) {
 			t.Fatalf("cursor row %d of %d", cur, len(rows))
+		}
+		// The cursor is drawn once, on its row, over the grapheme at pos,
+		// or a space at the end of a line.
+		// The grapheme the cursor is in, which left and right, moving by
+		// runes, can put it inside of.
+		under := " "
+		start := strings.LastIndexByte(e.text[:e.pos], '\n') + 1
+		line := e.text[start:]
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+		g := uniseg.NewGraphemes(line)
+		for g.Next() {
+			if from, to := g.Positions(); start+from <= e.pos && e.pos < start+to {
+				under = g.Str()
+			}
+		}
+		under, _ = clean(under)
+		if uniseg.StringWidth(under) > w {
+			under = "?"
+		}
+		drawnAt := -1
+		for i, r := range rows {
+			for _, sg := range r {
+				if !sg.St.Reverse {
+					continue
+				}
+				if drawnAt >= 0 || sg.Text != under {
+					t.Fatalf("w %d: cursor drawn as %q on row %d (and row %d), want %q once in %q at %d", w, sg.Text, i, drawnAt, under, e.text, e.pos)
+				}
+				drawnAt = i
+			}
+		}
+		if drawnAt != cur {
+			t.Fatalf("w %d: cursor drawn on row %d, reported on %d", w, drawnAt, cur)
 		}
 		for _, r := range rows {
 			if width(r) > w {
