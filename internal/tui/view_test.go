@@ -30,7 +30,7 @@ func workModel(t *testing.T, w, h int) model {
 	t.Helper()
 	now := time.Now()
 	sess := func(id, name, cwd string, st fleet.State, ago time.Duration, pid int, refs ...int) fleet.Row {
-		r := fleet.Row{Live: fleet.Live{SessionID: id, Name: name, PID: pid, Cwd: cwd, Kind: "interactive"}, State: st, Since: now.Add(-ago)}
+		r := fleet.Row{Live: fleet.Live{SessionID: id, Name: name, PID: pid, Cwd: cwd, Kind: "interactive", StartedAt: now.Add(-ago).UnixMilli()}, State: st, Since: now.Add(-ago)}
 		for _, n := range refs {
 			r.Tasks = append(r.Tasks, fleet.TaskRef{Project: "overview", Dir: cwd, ID: n})
 		}

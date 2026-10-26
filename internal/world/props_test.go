@@ -417,9 +417,44 @@ func TestPropStreamsAndOrder(t *testing.T) {
 	})
 }
 
+// A session's state and activity never move it in its project's list,
+// so the rows stay put while the cursor moves through them.
+func TestPropStateChangesKeepProjectOrder(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := genInputs(t)
+		before := projectOrder(Derive(in))
+		rows := slices.Clone(in.Rows)
+		for i := range rows {
+			rows[i].State = rapid.SampledFrom(states).Draw(t, "newstate")
+			rows[i].Since = t0.Add(time.Duration(rapid.IntRange(0, 4).Draw(t, "newsince")) * time.Minute)
+			rows[i].LastReply = rapid.SampledFrom([]string{"", "done.", "Which one?"}).Draw(t, "newreply")
+		}
+		in.Rows = rows
+		if after := projectOrder(Derive(in)); !slices.Equal(before, after) {
+			t.Fatalf("order moved:\n%v\n%v", before, after)
+		}
+	})
+}
+
+// projectOrder lists the sessions as the projects show them, each list
+// under its own heading.
+func projectOrder(w World) []string {
+	var out []string
+	for _, p := range w.Projects {
+		out = append(out, "project "+p.Name)
+		out = append(out, sessionIDs(p.Sessions)...)
+		for _, st := range p.Streams {
+			out = append(out, "stream "+st.String())
+			out = append(out, sessionIDs(st.Sessions)...)
+		}
+	}
+	out = append(out, "away")
+	return append(out, sessionIDs(w.Away)...)
+}
+
 func checkSessions(t *rapid.T, where string, ss []*Session) {
 	for i := 1; i < len(ss); i++ {
-		if !ActiveLess(ss[i-1].Row, ss[i].Row) {
+		if !StartedLess(ss[i-1].Row, ss[i].Row) {
 			t.Fatalf("sessions out of order in %s: %s then %s", where, ss[i-1].SessionID, ss[i].SessionID)
 		}
 	}

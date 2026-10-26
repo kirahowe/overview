@@ -18,6 +18,16 @@ func NameLess(a, b string) bool {
 	return a < b
 }
 
+// StartedLess orders sessions newest started first, then by session id.
+// A session's start never changes, so the projects' rows keep their places
+// while their states change under the cursor.
+func StartedLess(a, b fleet.Row) bool {
+	if a.StartedAt != b.StartedAt {
+		return a.StartedAt > b.StartedAt
+	}
+	return a.SessionID < b.SessionID
+}
+
 // ActiveLess puts working sessions first, then the newest activity, then
 // orders by session id.
 func ActiveLess(a, b fleet.Row) bool {

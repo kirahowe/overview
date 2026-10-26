@@ -239,7 +239,7 @@ func Derive(in Inputs) World {
 
 	// The order of everything.
 	bySession := func(ss []*Session) {
-		sort.Slice(ss, func(i, j int) bool { return ActiveLess(ss[i].Row, ss[j].Row) })
+		sort.Slice(ss, func(i, j int) bool { return StartedLess(ss[i].Row, ss[j].Row) })
 	}
 	byWindow := func(ts []*Terminal) {
 		sort.Slice(ts, func(i, j int) bool { return WindowLess(ts[i].Window, ts[j].Window) })

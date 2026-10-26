@@ -295,12 +295,16 @@ func TestStreamOrder(t *testing.T) {
 	eq(t, "streams", streamKeys(w.Projects[0].Streams), []string{"/w/app#8", "/w/app#1", "/w/app#9", "/w/app#3", "/w/app#2"})
 }
 
-// Sessions are working first, then newest; the agents list puts those
-// that need you first, longest wait first.
+// A project lists its sessions newest started first, whatever their
+// state; the agents list puts those that need you first, longest wait
+// first.
 func TestSessionOrder(t *testing.T) {
+	started := int64(0)
 	at := func(id string, st fleet.State, min int) fleet.Row {
 		r := sess(id, "/w/a")
 		r.State, r.Since = st, t0.Add(time.Duration(min)*time.Minute)
+		started += 100
+		r.StartedAt = started
 		return r
 	}
 	asking := at("ask", fleet.Idle, 1)
@@ -309,7 +313,7 @@ func TestSessionOrder(t *testing.T) {
 		at("old", fleet.Idle, 1), at("new", fleet.Idle, 5), at("busy", fleet.Working, 0),
 		at("b2", fleet.Blocked, 3), at("b1", fleet.Blocked, 2), asking,
 	}})
-	eq(t, "project", sessionIDs(w.Projects[0].Sessions), []string{"busy", "new", "b2", "b1", "ask", "old"})
+	eq(t, "project", sessionIDs(w.Projects[0].Sessions), []string{"b1", "b2", "busy", "new", "old", "ask"})
 	eq(t, "agents", sessionIDs(w.Agents), []string{"ask", "b1", "b2", "busy", "new", "old"})
 	if w.Need != 3 || w.Working != 1 || w.Idle != 2 {
 		t.Errorf("counts %d %d %d", w.Need, w.Working, w.Idle)
