@@ -568,10 +568,13 @@ The sessions, the list and tmux all run on the machine overview runs on,
 so another machine needs only a terminal and ssh to reach them:
 
 ```
-ssh -t <host> 'zsh -lic overview'
+ssh -t <host> 'zsh -lic "overview --home work"'
 ```
 
-That attaches to the same view, with every session still running.
+That attaches to the same view, with every session still running. Each
+home's view is a tmux session of its own on the one server, so another
+home, from another terminal, attaches to its own view beside it. Leave
+out `--home` only when the config file has a `home =` line.
 Closing the terminal, or the laptop, only detaches it. The login shell
 gives overview the PATH it has on that machine, so it finds the same
 `tmux` and `claude` and keeps the view as it is. The window takes the
