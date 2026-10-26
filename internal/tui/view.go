@@ -89,6 +89,8 @@ func (m model) View() string {
 		screen = centre(screen, m.helpBox(), m.w)
 	case m.confirm != "":
 		screen = centre(screen, m.confirmBox(), m.w)
+	case m.verdict.open():
+		screen = centre(screen, m.verdictBox(), m.w)
 	}
 	screen = append(screen, m.footer())
 	return strings.Join(screen[:min(len(screen), m.h)], "\n")
@@ -1168,7 +1170,7 @@ func (m model) panelHints() []hint {
 		if !m.pickStarts() {
 			enter.label = "go to"
 		}
-		return []hint{enter, {"j k", "move"}, {"h", "list"}, {"esc", "close"}, help}
+		return []hint{enter, {"j k", "move"}, {"m", "mark"}, {"h", "list"}, {"esc", "close"}, help}
 	}
 	if m.inPanels() {
 		return []hint{{"hjkl", "move"}, {"ctrl+[", "list"}, {"enter", "act"}}
@@ -1204,7 +1206,7 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	enter := m.enterHint(e)
 	switch e.kind {
 	case workstreamEntry:
-		return slices.Concat(enter, s, []hint{c, t, {"n", "next"}, help})
+		return slices.Concat(enter, s, []hint{c, t, {"m", "mark"}, {"n", "next"}, help})
 	case terminalEntry:
 		return slices.Concat(enter, s, []hint{c, t, {"x", "close"}, help})
 	case projectEntry:
@@ -1485,6 +1487,7 @@ func helpSections() (left, right []helpSection) {
 			e("enter", "first session, else cockpit"),
 			e("c", "new session on the task"),
 			e("t", "new terminal for it"),
+			e("m", "approve, send back or drop it"),
 		}},
 		{"cockpit", []helpEntry{
 			e("o", "open the cockpit"),
@@ -1492,6 +1495,7 @@ func helpSections() (left, right []helpSection) {
 			in(cockpitMode, "l h", "into / out of the issues"),
 			in(cockpitMode, "tab", "list or issues card"),
 			in(cockpitMode, "enter", "on an issue, start or go to it"),
+			in(cockpitMode, "m", "approve, send back or drop it"),
 		}},
 	}
 	right = []helpSection{

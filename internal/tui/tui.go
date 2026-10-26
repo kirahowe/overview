@@ -104,6 +104,7 @@ type model struct {
 	filter    string
 	filtering bool
 	confirm   string // the key of a session to stop or a terminal to close, waiting on a yes
+	verdict   verdictPrompt
 	help      bool
 	helpTop   int // the first line of the help shown, when it is taller than its pane
 	frame     int
@@ -980,6 +981,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.landRows(msg), nil
 	case trackerMsg:
 		m = m.landTracker(msg)
+	case verdictMsg:
+		return m.landVerdict(msg)
 	case digestMsg:
 		m.digesting = false
 		switch {
@@ -1350,6 +1353,21 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(others))-1))
 	case cockpitPick:
 		return m.startPicked()
+	case markIssue:
+		return m.markIssue(e, ok), nil
+	case verdictPick:
+		m.verdict.kind = a.text
+	case verdictType:
+		m.verdict.note += a.text
+	case verdictBack:
+		if r := []rune(m.verdict.note); len(r) > 0 {
+			m.verdict.note = string(r[:len(r)-1])
+		}
+	case verdictSend:
+		return m.sendVerdict()
+	case verdictCancel:
+		m.verdict = verdictPrompt{}
+		return m.say("left it as it was"), nil
 	case copyID:
 		if ok && e.kind == workstreamEntry {
 			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil
@@ -1633,12 +1651,23 @@ func (m model) start(dir string) (model, tea.Cmd) {
 // prompt names the issue, which links the session to it once its
 // transcript is read.
 func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
+	return m.startWith(root, i, opening(m.world().IssuesID(root), i))
+}
+
+// startChanges runs a new claude at root on the changes asked for in issue
+// i, with note, the verdict that sent it back.
+func (m model) startChanges(root string, i issues.Issue, note string) (model, tea.Cmd) {
+	return m.startWith(root, i, changesPrompt(m.world().IssuesID(root), i, note))
+}
+
+// startWith runs a new claude at root on issue i with prompt, which opens
+// with the line that links it to the issue.
+func (m model) startWith(root string, i issues.Issue, prompt string) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	ref := "#" + strconv.Itoa(i.ID)
 	id := m.world().IssuesID(root)
-	prompt := opening(id, i)
 	note := "starting a session on " + ref + "…"
 	if !opens(prompt, id, i) {
 		note = "starting a session on " + ref + ", which won't link by itself: the project id has a space or a #"

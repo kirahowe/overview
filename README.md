@@ -204,6 +204,18 @@ workstream. That includes an issue in progress, in review or blocked
 whose sessions have all ended, so a paused task picks up again. The cockpit closes, and the new session shows beside the
 list with the keyboard in it.
 
+`m` gives an issue a verdict through the `issues` tool. It acts on the
+selected workstream's issue, or on the issue under the cursor while the
+issues card has the keyboard. A box asks for the verdict first. On an
+issue in review, `a` approves it as done, `c` sends it back to ready and
+`r` rejects it, which drops it. On an issue in any other status, `a`
+marks it done and `r` drops it, and `c` is not offered. Any other key
+cancels. The box then asks for a note for the issue's details log, which
+`enter` sends and `esc` abandons. A note is optional except when sending
+an issue back. In that case the cockpit closes and a new session starts on
+the issue, with the note under its opening prompt. A done or dropped issue
+leaves the list with its workstream once the tracker is next read.
+
 A project that does not track its tasks gets a card in the issues
 card's place. It says what the `issues` tool would add, and that
 `issues init` in the project's root starts it, or that the tool needs
@@ -317,8 +329,8 @@ does the same with a terminal, and a terminal opened on a workstream is
 listed under it. `d` shows the digests, and `1` and `2` go to the list and the digests
 directly. There `[` and `]`, or `h` and `l`, step through older ones,
 `j`, `k`, `g` and `G` scroll, `esc` goes back, and `D` writes a new one.
-`r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, as described
-above. `q` detaches, leaving the view and its
+`r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, and `m`
+gives a workstream's issue a verdict, as described above. `q` detaches, leaving the view and its
 sessions running. No key quits the view, since it is the point of the
 app; running `overview` again restarts it in place when it needs to.
 `ctrl+c` is `q` in the list. In the search, the

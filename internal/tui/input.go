@@ -49,30 +49,36 @@ const (
 	click // a click on the entry keyed id at time at; a second one soon after opens it
 	stop  // stop a background session or close a terminal, after a yes; unpin an empty project
 	copyID
-	newSession  // a claude in the selected entry's project
-	newTerminal // a shell in the selected entry's project
-	addProject  // open the add-project picker
-	pickType    // add text to the picker's query
-	pickBack    // backspace in the picker
-	pickMove    // n matches down the picker, negative for up
-	pickTab     // complete the query to the selected match
-	pickEnter   // pin the selected match
-	pickCancel  // close the picker
-	startTask   // open the task picker for the selected entry's project
-	taskType    // add text to the task picker's query
-	taskBack    // backspace in the task picker
-	taskMove    // n issues down the task picker, negative for up
-	taskScroll  // n lines down the task picker's details, negative for up
-	taskEnter   // start or go to the selected issue
-	taskCancel  // close the task picker
-	taskClick   // a click on the nth issue at time at; a second one soon after acts on it
-	openReview  // review the selected session's changes in a split above it
-	toCockpit   // open the cockpit for the selected entry
-	outCockpit  // close the cockpit
-	cockpitTab  // move the keyboard into the cockpit's issues card (n 1), out of it (-1), or across (0)
-	cockpitMove // n issues down the issues card, negative for up
-	cockpitPick // start a workstream on the issue under the issues card's cursor
-	enterPanels // put the client in tmux's panels mode, where the keys move the focus
+	newSession    // a claude in the selected entry's project
+	newTerminal   // a shell in the selected entry's project
+	addProject    // open the add-project picker
+	pickType      // add text to the picker's query
+	pickBack      // backspace in the picker
+	pickMove      // n matches down the picker, negative for up
+	pickTab       // complete the query to the selected match
+	pickEnter     // pin the selected match
+	pickCancel    // close the picker
+	startTask     // open the task picker for the selected entry's project
+	taskType      // add text to the task picker's query
+	taskBack      // backspace in the task picker
+	taskMove      // n issues down the task picker, negative for up
+	taskScroll    // n lines down the task picker's details, negative for up
+	taskEnter     // start or go to the selected issue
+	taskCancel    // close the task picker
+	taskClick     // a click on the nth issue at time at; a second one soon after acts on it
+	openReview    // review the selected session's changes in a split above it
+	toCockpit     // open the cockpit for the selected entry
+	outCockpit    // close the cockpit
+	cockpitTab    // move the keyboard into the cockpit's issues card (n 1), out of it (-1), or across (0)
+	cockpitMove   // n issues down the issues card, negative for up
+	cockpitPick   // start a workstream on the issue under the issues card's cursor
+	enterPanels   // put the client in tmux's panels mode, where the keys move the focus
+	markIssue     // open the verdict box for the selected task's issue, or the issues card's
+	verdictPick   // choose the verdict, text, in the box
+	verdictType   // add text to the verdict's note
+	verdictBack   // backspace in the note
+	verdictSend   // give the verdict
+	verdictCancel // close the box, giving none
 )
 
 type action struct {
@@ -149,6 +155,9 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 			return []action{{do: typeText, text: printable(string(msg.Runes))}}
 		}
 		return nil
+	}
+	if m.verdict.open() {
+		return m.verdictKeys(msg)
 	}
 	if m.confirm != "" {
 		if k == "y" {
@@ -270,6 +279,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(startTask)
 	case "o":
 		return do(toCockpit)
+	case "m":
+		return do(markIssue)
 	}
 	return nil
 }
@@ -341,8 +352,8 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 		}
 		return do(dismiss)
 	}
-	if m.pick.open {
-		return nil // the picker is keys only
+	if m.pick.open || m.verdict.open() {
+		return nil // the picker and the verdict's box are keys only
 	}
 	if m.taskPick.open {
 		switch {

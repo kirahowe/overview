@@ -46,7 +46,7 @@ func TestStreamHeaderCard(t *testing.T) {
 		"── overview#6 ────────────────────────── in-progress · p1 ──",
 		" keep the list's width                       started 2h ago",
 		" ⠋ list squeeze working 3m   $ go",
-		"  enter  attach   v  review   c  claude   t  term",
+		"  enter  attach   v  review   c  claude   t  term   m  mark",
 	})
 	// No sessions yet, and no start.
 	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil, nil), 40)

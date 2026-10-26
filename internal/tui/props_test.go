@@ -2162,3 +2162,19 @@ func TestPropOverNetworkLooksUpToMaxHops(t *testing.T) {
 		}
 	})
 }
+
+// m's box offers a verdict for a, c and r only, and changes only for an
+// issue in review, since only finished work can be sent back.
+func TestVerdictKindProps(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		k := rapid.SampledFrom([]string{"a", "c", "r", "x", "y", "enter", "esc", "m"}).Draw(t, "key")
+		status := rapid.SampledFrom([]string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked}).Draw(t, "status")
+		kind := verdictKind(k, status)
+		if (kind != "") != (k == "a" || k == "r" || k == "c" && status == issues.Review) {
+			t.Fatalf("%s on %s chose %q", k, status, kind)
+		}
+		if kind != "" && verdictWord(kind, status) == "" {
+			t.Fatalf("%s on %s has no word", kind, status)
+		}
+	})
+}

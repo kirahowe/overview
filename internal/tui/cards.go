@@ -406,7 +406,7 @@ func streamHeader(ref, status, priority, title, started string, ms []member, ent
 		if slices.ContainsFunc(ms, func(mb member) bool { return !mb.term }) {
 			review = []hint{{"v", "review"}}
 		}
-		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}})...)
+		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}, {"m", "mark"}})...)
 		return []string{
 			spread(bold.Foreground(pal.Text).Render(title), when, w),
 			membersLine(ms),

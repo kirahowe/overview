@@ -88,6 +88,29 @@ func TestListAndShowUseTheRunner(t *testing.T) {
 	}
 }
 
+func TestVerdictUsesTheRunner(t *testing.T) {
+	var calls [][]string
+	run := func(args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		return nil, nil
+	}
+	if err := Verdict(run, "/p", 4, Approve, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verdict(run, "/p", 4, Changes, "cover the empty case"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"--dir", "/p", "approve", "4"},
+		{"--dir", "/p", "changes", "4", "--note", "cover the empty case"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("calls %v, want %v", calls, want)
+	}
+	boom := func(...string) ([]byte, error) { return nil, errors.New("boom") }
+	if Verdict(boom, "/p", 4, Reject, "") == nil {
+		t.Error("Verdict swallowed the error")
+	}
+}
+
 func TestProjectID(t *testing.T) {
 	for _, c := range []struct {
 		in, want string

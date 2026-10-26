@@ -1000,8 +1000,8 @@ func atoi(s string) int {
 
 // The cockpit's issues card takes the keyboard: l moves it in from the
 // list, with the card's cursor and the footer saying so, j moves the
-// cursor, h gives the keyboard back to the list, and esc closes the
-// cockpit from there.
+// cursor, m marks the issue under it done, h gives the keyboard back to
+// the list, and esc closes the cockpit from there.
 func TestCockpitIssuesCard(t *testing.T) {
 	r := launchWith(t, "i", func(r *rig) string {
 		for _, d := range []string{".jj", ".issues"} {
@@ -1017,7 +1017,9 @@ func TestCockpitIssuesCard(t *testing.T) {
 		fake := filepath.Join(r.dir, "issues")
 		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "ready", "title": "first thing", "priority": "p1"},` +
 			`{"id": 7, "ref": "work#7", "status": "ready", "title": "second thing", "priority": "p2"}]}`
-		if err := os.WriteFile(fake, []byte(fmt.Sprintf("#!/bin/sh\necho '%s'\n", list)), 0o755); err != nil {
+		// It records what it was asked, so a verdict given with m shows.
+		script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %s\necho '%s'\n", filepath.Join(r.dir, "issues-calls"), list)
+		if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		return "issues = " + fake + "\n"
@@ -1065,6 +1067,22 @@ func TestCockpitIssuesCard(t *testing.T) {
 	waitFor(t, "the cursor on the second issue", func() (bool, string) {
 		m := marked()
 		return strings.Contains(m, "#7 second thing"), m + "\n" + r.screen()
+	})
+	// m gives that issue a verdict: a ready one can be done or dropped.
+	r.press("m")
+	waitFor(t, "the verdict box on #7", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "work#7 second thing") && strings.Contains(s, "a done   r drop"), s
+	})
+	r.press("a")
+	waitFor(t, "the box asking for a note", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(s, "note, optional:"), s
+	})
+	r.press("Enter")
+	waitFor(t, "issues approve run on #7", func() (bool, string) {
+		calls, _ := os.ReadFile(filepath.Join(r.dir, "issues-calls"))
+		return strings.Contains(string(calls), "--dir "+r.work+" approve 7"), string(calls) + "\n" + r.screen()
 	})
 	r.press("h")
 	waitFor(t, "the keyboard back in the list", func() (bool, string) {

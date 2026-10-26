@@ -104,6 +104,16 @@ the workstreams done today, so you can look over what closed without
 anything waiting on you. This has to be worked out before workstreams
 are useful day to day, but it does not block building them.
 
+What overview does is give the verdicts where you look at the work.
+`m` in the list or the cockpit opens a box for the issue, with the
+verdicts `issues tui` gives: approve (done), send back (ready, with a
+note) and reject (dropped). It runs them through `issues approve`,
+`issues changes` and `issues reject`, which record the note in the
+issue's details log the way the tui does. Sending work back starts a
+session on the issue with the note under the opening prompt, since the
+next step is almost always an agent making the change. An issue that is
+not in review can be marked done or dropped, but not sent back.
+
 ## The list
 
 The list keeps its place on the left and is split in two.
@@ -169,9 +179,9 @@ For a workstream, in this order:
 
 - The header: the issue's reference, title, status and priority, how
   long the workstream has run, the state of each of its sessions, and
-  the keys that act on it: `c` claude and `t` terminal, plus `enter`
-  attach and `v` review once the workstream has a session. A workstream
-  with only terminals offers the first two.
+  the keys that act on it: `c` claude, `t` terminal and `m` mark, plus
+  `enter` attach and `v` review once the workstream has a session. A workstream
+  with only terminals offers the first three.
 - The issue: its details from `issues show`, with the acceptance
   criteria, those still to do first, and how many are checked.
 - Changes: the diff since the workstream was taken on, the earliest

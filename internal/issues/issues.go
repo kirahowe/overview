@@ -100,6 +100,26 @@ func Show(run Runner, root string, id int) (Issue, error) {
 	return ParseShow(out)
 }
 
+// The verdicts a person gives an issue, named as the CLI's commands are.
+// Approve closes it as done, Changes sends it back to ready and needs a
+// note, and Reject drops it.
+const (
+	Approve = "approve"
+	Changes = "changes"
+	Reject  = "reject"
+)
+
+// Verdict gives issue id of the project at root a verdict, with note, if
+// any, for the issue's details log.
+func Verdict(run Runner, root string, id int, verdict, note string) error {
+	args := []string{"--dir", root, verdict, strconv.Itoa(id)}
+	if note != "" {
+		args = append(args, "--note", note)
+	}
+	_, err := run(args...)
+	return err
+}
+
 // wire is an issue as the CLI prints it. Fields it prints that overview
 // does not use are ignored.
 type wire struct {
