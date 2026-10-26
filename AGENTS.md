@@ -21,7 +21,9 @@ See README.md for behaviour and docs/ for design notes.
   relaunch restarting the view for new flags, a theme given as a relative
   path and a changed config file, and only attaching otherwise; `t`, a
   terminal's place in the list and the keyboard moving into it; a session
-  that exits beside a split leaving its window as a terminal; `x` closing
+  that exits beside a split leaving its window as a terminal; a claude
+  that exits beside the list alone, the list keeping its width as it
+  moves on; `x` closing
   a terminal with the list in it; pinned projects, `c` in one and `a` with
   a typed path and `tab`; the list staying put while a terminal becomes a
   session under the keyboard; and `q` detaching only the terminal it was

@@ -246,6 +246,12 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
+When Claude, or a terminal's shell, exits and the list was its only
+neighbour, the list takes the keyboard and moves on to the next entry.
+Until it has, tmux keeps the exited pane open beside it, frozen on its last
+screen, so the list keeps its width instead of filling the window for a
+moment. An exited pane with anything else beside it closes at once.
+
 Keys. The keyboard starts out in the list, and comes back to it from a
 pane on the right however it comes back: by `ctrl+[`, by a tmux key that
 selects the list's pane, or by a click. In a pane `esc` belongs to the

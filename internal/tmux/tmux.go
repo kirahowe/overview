@@ -56,14 +56,14 @@ const PanelsTable = "overview-panels"
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
-	"\t#{pane-border-status}\t#{pane_current_path}"
+	"\t#{pane-border-status}\t#{pane_dead}\t#{pane_current_path}"
 
 // clientFormat is how Panes asks for each client: its session, key table
 // and when it was last used, after a word that no pane line starts with.
 const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 21
+const paneFields = 22
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -87,6 +87,7 @@ type Pane struct {
 	Active  bool   // the pane is its window's active one
 	Framed  bool   // the window draws a rule along the top of each pane
 	Panels  bool   // a client of the pane's session is in the panels mode
+	Dead    bool   // its program has exited, and HoldExits keeps it open
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -176,7 +177,7 @@ func ParsePanes(out string) []Pane {
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, List: f[7] == "1",
 			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
-			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Path: f[20],
+			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Path: f[21],
 		})
 	}
 	return panes
@@ -420,6 +421,24 @@ func (s Server) BindPanels() error {
 	bind("Escape", "switch-client -T root")
 	bind("C-[", "select-pane -t {top-left}", "switch-client -T root")
 	_, err := s.run(args[:len(args)-1]...)
+	return err
+}
+
+// DiedHook is what HoldExits runs when a pane's program exits: it closes
+// the pane, unless the pane shares its window with the list alone, which
+// would then fill the window until the view moved it on.
+const DiedHook = `if-shell -F "#{||:#{!=:#{window_panes},2},#{!:#{P:#{?#{` + ListOption + `},1,}}}}" kill-pane`
+
+// HoldExits keeps a pane open, blank, once its program exits, and
+// DiedHook closes it straight away unless it is the last pane beside the
+// list. That one stays until the view has moved the list into another
+// window, so the list keeps its width throughout. The list's own pane
+// closes as before when the view ends.
+func (s Server) HoldExits(list string) error {
+	_, err := s.run("set-option", "-g", "-w", "remain-on-exit", "on", ";",
+		"set-option", "-g", "-w", "remain-on-exit-format", "", ";",
+		"set-option", "-p", "-t", list, "remain-on-exit", "off", ";",
+		"set-hook", "-g", "pane-died", DiedHook)
 	return err
 }
 

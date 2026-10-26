@@ -446,11 +446,48 @@ func (m model) besideTerminal(want string) bool {
 }
 
 // setPanes takes a fresh listing of tmux's panes and their roots, which
-// also say whether a client of the session is in the panels mode.
+// also say whether a client of the session is in the panels mode. A pane
+// whose program has exited is as good as closed, and is kept apart.
 func (m model) setPanes(panes []tmux.Pane, rs roots) model {
 	m.paneRoots = rs
 	m.panels = slices.ContainsFunc(panes, func(p tmux.Pane) bool { return p.Panels && p.Session == m.session })
-	return m.setInputs(func(in *world.Inputs) { in.Panes = panes })
+	m.dead = slices.DeleteFunc(slices.Clone(panes), func(p tmux.Pane) bool { return !p.Dead || p.Session != m.session })
+	live := slices.DeleteFunc(slices.Clone(panes), func(p tmux.Pane) bool { return p.Dead })
+	return m.setInputs(func(in *world.Inputs) { in.Panes = live })
+}
+
+// reap closes the dead panes that tmux.DiedHook kept, or missed, once the
+// list would not be left alone in its window without them. The one it
+// would be left alone with stays, and keeps the list at its width, until
+// restage has moved the list on. Had the keyboard been in that pane, the
+// list takes it, as it would have had the pane closed, so that it moves on
+// at once. A pane that fails to close is tried again at the next listing.
+func (m model) reap() (model, tea.Cmd) {
+	var kill []string
+	take := false
+	for _, d := range m.dead {
+		if d.Window != m.windowOf(m.self) || m.inStage() > 1 {
+			kill = append(kill, d.ID)
+		} else if d.Active && m.blurred {
+			take = true
+		}
+	}
+	if len(kill) == 0 && !take {
+		return m, nil
+	}
+	mux, self := m.mux, m.self
+	if take {
+		m = m.unblur()
+	}
+	return m, func() tea.Msg {
+		for _, id := range kill {
+			mux.KillPane(id) //nolint:errcheck
+		}
+		if take {
+			mux.Select(self) //nolint:errcheck
+		}
+		return nil
+	}
 }
 
 // addPane takes a pane a Cmd has just started, before a listing shows it.
@@ -540,6 +577,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m = m.setPanes(msg.panes, msg.roots)
 		m.failed, m.frameStale = "", false
 		m, zoom := m.zoomLost()
+		m, reap := m.reap()
 		var cmd tea.Cmd
 		if m.holder() == "" && !m.spawningHolder {
 			m.spawningHolder = true
@@ -547,7 +585,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		} else {
 			m, cmd = m.keepWidth()
 		}
-		return m, tea.Batch(zoom, cmd)
+		return m, tea.Batch(zoom, reap, cmd)
 	case panelsMsg:
 		m.landed++
 		if msg.err != nil {

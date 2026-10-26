@@ -34,11 +34,11 @@ func TestPanelsSessionsFollowsTheLatestClient(t *testing.T) {
 }
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t/\n" +
-		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t/\n" +
+		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
@@ -46,7 +46,7 @@ func TestParsePanes(t *testing.T) {
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, List: true, Command: "overview",
 			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80,
-			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Path: "/w/app/odd\tdir"},
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Dead: true, Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -78,6 +78,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Y:       rapid.IntRange(0, 200).Draw(t, "y"),
 				Active:  rapid.Bool().Draw(t, "active"),
 				Framed:  rapid.Bool().Draw(t, "framed"),
+				Dead:    rapid.Bool().Draw(t, "dead"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -93,9 +94,9 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 			if p.Framed {
 				status = "top"
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n",
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
 				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed),
-				p.X, p.Y, flag(p.Active), status, p.Path)
+				p.X, p.Y, flag(p.Active), status, flag(p.Dead), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -1091,5 +1092,53 @@ func TestCopyAndLatestClientInRealTmux(t *testing.T) {
 	}
 	if pid, err := s.LatestClient(); err != nil || pid != want {
 		t.Fatalf("LatestClient gave %d, %v, want %d", pid, err, want)
+	}
+}
+
+// HoldExits keeps an exited pane only while the list would be left alone
+// without it, and then at the width it had. Every other one closes, and
+// with it a window it was alone in.
+func TestHoldExitsKeepsOnlyThePaneBesideAListAlone(t *testing.T) {
+	s := testServer(t)
+	run := must(t)
+	list := strings.TrimSpace(run(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")))
+	if err := s.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HoldExits(list); err != nil {
+		t.Fatal(err)
+	}
+	spawn := func() Pane {
+		t.Helper()
+		p, err := s.Spawn("ov", "", nil, "sh", "-c", "read x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	beside, split, alone := spawn(), spawn(), spawn()
+	run(s.run("split-window", "-d", "-t", split.ID, "sleep 300"))
+	if err := s.Move(list, beside.ID, "40"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []Pane{beside, split, alone} {
+		run(s.run("send-keys", "-t", p.ID, "Enter"))
+	}
+	tmuxtest.Wait(t, "the exited panes to close, but the one beside the list", func() (bool, string) {
+		ps := byID(t, s)
+		_, kept := ps[beside.ID]
+		_, splitOpen := ps[split.ID]
+		_, aloneOpen := ps[alone.ID]
+		return kept && ps[beside.ID].Dead && !splitOpen && !aloneOpen, fmt.Sprint(ps)
+	})
+	ps := byID(t, s)
+	if ps[list].W != 40 || ps[list].Dead {
+		t.Fatalf("the list is %+v", ps[list])
+	}
+	if wins := strings.Fields(run(s.run("list-windows", "-a", "-F", "#{window_id}"))); slices.Contains(wins, alone.Window) {
+		t.Fatalf("the window %s that closed is still there: %v", alone.Window, wins)
+	}
+	if got := strings.TrimSpace(run(s.run("display-message", "-p", "-t", list, "#{remain-on-exit}"))); got != "off" {
+		t.Fatalf("the list's own pane has remain-on-exit %q", got)
 	}
 }

@@ -176,6 +176,10 @@ type model struct {
 	// pinsLanded those done. A refresh that read the file before the
 	// latest write landed is not taken for the pins.
 	pins, pinsLanded int
+	// dead are the session's panes whose programs have exited, which
+	// tmux keeps open until reap closes them: see tmux.HoldExits. The
+	// rest of the view takes them as closed.
+	dead []tmux.Pane
 	// opened is the pane c started, shown until its session is listed.
 	opened tmux.Pane
 	// blurred is set while the focus is in another pane. The list then
@@ -275,6 +279,9 @@ func Run(v View) error {
 		return err
 	}
 	if err := srv.BindPanels(); err != nil {
+		return err
+	}
+	if err := srv.HoldExits(self); err != nil {
 		return err
 	}
 	focused, err := srv.Focused(self)

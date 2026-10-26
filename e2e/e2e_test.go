@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1077,4 +1078,48 @@ func TestCockpitIssuesCard(t *testing.T) {
 		z := r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag}")
 		return ok && z == "0" && !strings.Contains(r.screen(), "#7 second thing"), z + " " + say
 	})
+}
+
+// A session's claude exits while the keyboard is in it, and the list was
+// alone beside it. tmux keeps the pane, dead, until the list has moved on
+// beside the holder, so the list never fills the window, and keeps its
+// width throughout.
+func TestAnEndedSessionLeavesTheListItsWidth(t *testing.T) {
+	r := launch(t, "x")
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, func(p pane) bool { return p.command == "sleep" && !p.list })
+	waitFor(t, "the list beside the session, the keyboard in it", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, 0)
+		return ok && r.active() == session.id, say + ", active " + r.active()
+	})
+	width := listPane(r.ov.panes()).w
+	// The fake claude is sleep, the pane's own process.
+	if err := syscall.Kill(session.pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ps := r.ov.panes()
+		list, shared := listPane(ps), 0
+		for _, p := range ps {
+			if p.window == list.window && !p.list {
+				shared++
+			}
+		}
+		if shared == 0 || list.w != width {
+			t.Fatalf("the list is %+v, %d panes beside it, %d wide before", list, shared, width)
+		}
+		gone := true
+		for _, p := range ps {
+			gone = gone && p.id != session.id
+		}
+		if ok, _ := beside(ps, r.holder, width); ok && gone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the list never moved on beside the holder: %+v", ps)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

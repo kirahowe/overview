@@ -401,6 +401,21 @@ func (f *fakeMux) exit(id string) {
 	}
 }
 
+// die ends a pane's process as tmux.HoldExits has it: the pane closes, as
+// exit does, unless the list would be left alone in its window without it.
+// Then it stays, dead, until it is killed.
+func (f *fakeMux) die(id string) {
+	i := f.find(id)
+	if i < 0 {
+		return
+	}
+	if w := f.panes[i].Window; w == f.stage() && f.inWindow(w) == 2 {
+		f.panes[i].Dead = true
+		return
+	}
+	f.exit(id)
+}
+
 // stage is the window the list is in.
 func (f *fakeMux) stage() string { return f.window("%0") }
 
@@ -742,6 +757,45 @@ func TestAListLeftAloneMovesOn(t *testing.T) {
 	}
 }
 
+// claude exits while the keyboard is in it, and tmux keeps its pane, dead,
+// beside the list: the list takes the keyboard and moves on at the width
+// it keeps, never filling the window, and the dead pane closes after.
+func TestAListBesideAnEndedSessionKeepsItsWidth(t *testing.T) {
+	f := newFakeMux()
+	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
+	m := stagedModel(t, f, red, blue)
+	pane, left := paneWithTTY(f, "ttys012"), f.stage()
+	for _, p := range slices.Clone(f.panes) {
+		f.setWinW(p.Window, 160)
+	}
+	m, cmd := step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	m = settle(t, m, cmd)
+	f.focus = pane
+	m = blurred(t, m)
+	moves, widths, keep := len(f.moves), len(f.widths), m.width.want
+	if keep == 0 || !m.blurred || !f.staged(pane) {
+		t.Fatalf("setup: width %d, blurred %v, list in %s", keep, m.blurred, f.stage())
+	}
+	f.die(pane)
+	listed, _ := f.Panes()
+	m, cmd = step(m, panesMsg{panes: listed, gen: m.spawns})
+	m = settle(t, m, cmd)
+	if m.blurred || f.focus != "%0" || !f.staged("%1") {
+		t.Fatalf("blurred %v, focus %s, list in %s", m.blurred, f.focus, f.stage())
+	}
+	if len(f.moves) != moves+1 || f.moves[moves] != strconv.Itoa(keep) || len(f.widths) != widths {
+		t.Fatalf("moves %v, widths %v after %d and %d; want one move %d wide", f.moves, f.widths, moves, widths, keep)
+	}
+	if f.inWindow(left) != 1 {
+		t.Fatalf("%d panes in %s, want the dead one until the next listing", f.inWindow(left), left)
+	}
+	m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+	settle(t, m, cmd)
+	if f.inWindow(left) != 0 {
+		t.Fatalf("the dead pane is still in %s", left)
+	}
+}
+
 func TestTheListKeepsItsWidth(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
@@ -1009,6 +1063,13 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				if !seen["%0"] {
 					t.Fatal("the list is gone")
 				}
+				// A dead pane stays in the list's window only as the one
+				// pane beside it, and while the list cannot move on.
+				for _, p := range f.panes {
+					if p.Dead && p.Window == f.stage() && (f.inWindow(p.Window) != 2 || (!m.blurred && m.want() != "" && !m.zoomWant() && !m.zooming)) {
+						t.Fatalf("the dead %s is still beside the list, with %d panes in %s", p.ID, f.inWindow(p.Window), p.Window)
+					}
+				}
 			},
 			"key": func(t *rapid.T) {
 				if m.blurred {
@@ -1018,6 +1079,12 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 			},
 			"blur": func(t *rapid.T) {
 				if !m.blurred {
+					// The keyboard goes to a pane beside the list, if any.
+					for _, p := range f.panes {
+						if p.Window == f.stage() && p.ID != "%0" {
+							f.focus = p.ID
+						}
+					}
 					m, moves = blurred(t, m), len(f.moves)
 				}
 			},
@@ -1067,9 +1134,15 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				if len(ids) == 0 {
 					return
 				}
-				f.exit(rapid.SampledFrom(ids).Draw(t, "pane"))
+				// It closes at once, or as HoldExits has it.
+				if id := rapid.SampledFrom(ids).Draw(t, "pane"); rapid.Bool().Draw(t, "held") {
+					f.die(id)
+				} else {
+					f.exit(id)
+				}
+				listed, _ := f.Panes()
 				var cmd tea.Cmd
-				m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+				m, cmd = step(m, panesMsg{panes: listed, gen: m.spawns})
 				m = settle(t, m, cmd)
 			},
 			"refresh": func(t *rapid.T) {
