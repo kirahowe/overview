@@ -100,6 +100,11 @@ func (f *fakePanes) Zoom(pane string) error {
 	return nil
 }
 
+func (f *fakePanes) Copy(text string) error {
+	f.calls = append(f.calls, "copy "+text)
+	return nil
+}
+
 // counter is a deterministic random source.
 type counter struct{ n byte }
 

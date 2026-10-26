@@ -4,6 +4,7 @@ package tmux
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -429,6 +430,65 @@ func (s Server) BindPanels() error {
 func (s Server) EnterPanels() error {
 	_, err := s.run("switch-client", "-T", PanelsTable, ";", "refresh-client")
 	return err
+}
+
+// Copy puts text in a tmux buffer and on the clipboard of the terminal the
+// user typed in last, which tmux reaches with an OSC 52 escape. That
+// terminal may be on another machine, at the far end of an ssh.
+func (s Server) Copy(text string) error {
+	_, err := s.feed(text, "load-buffer", "-w", "-")
+	return err
+}
+
+// CopyAll returns a copy that copies text with each of copies, of which
+// there is at least one. Each may reach a clipboard the others do not,
+// this machine's or that of a terminal on another, so it fails only when
+// all of them do.
+func CopyAll(copies ...func(text string) error) func(text string) error {
+	return func(text string) error {
+		var errs []error
+		for _, c := range copies {
+			if err := c(text); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) < len(copies) {
+			return nil
+		}
+		return errors.Join(errs...)
+	}
+}
+
+// LatestClient is the process id of the client the user typed in last,
+// and 0 when none is attached.
+func (s Server) LatestClient() (int, error) {
+	out, err := s.run("list-clients", "-F", "#{client_activity}\t#{client_pid}")
+	if err != nil {
+		return 0, err
+	}
+	return latestClient(out), nil
+}
+
+// latestClient reads LatestClient's list-clients output, a line of
+// activity and pid for each client. Malformed lines are skipped.
+func latestClient(out string) int {
+	var at int64
+	pid := 0
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 2 {
+			continue
+		}
+		a, err1 := strconv.ParseInt(f[0], 10, 64)
+		p, err2 := strconv.Atoi(f[1])
+		if err1 != nil || err2 != nil || p <= 0 {
+			continue
+		}
+		if pid == 0 || a >= at {
+			at, pid = a, p
+		}
+	}
+	return pid
 }
 
 // PaneSet is a pane option to set: its pane, name and value.

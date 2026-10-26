@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/review"
+	"overview/internal/tmux"
 	"overview/internal/vcs"
 )
 
@@ -28,6 +29,7 @@ func Run(cfg Config, mux panes) error {
 	}
 	if mux != nil {
 		d.mux = mux
+		d.copy = tmux.CopyAll(copyText, mux.Copy)
 	}
 	m := newModel(cfg, d)
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
@@ -47,6 +49,8 @@ func exists(path string) bool {
 	return err == nil
 }
 
+// copyText puts text on this machine's clipboard. In tmux the review also
+// copies through it, to reach a terminal on another machine.
 func copyText(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)

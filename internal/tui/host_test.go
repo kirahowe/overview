@@ -227,3 +227,55 @@ func TestEnterOnSessionWithoutAnAppOnlySaysSo(t *testing.T) {
 		t.Fatalf("cmd %v opened %v note %q", cmd != nil, *opened, m.note)
 	}
 }
+
+// Typed from another machine, enter on a session in another app says the
+// app is on this one, and opens nothing on a screen no one is at.
+func TestEnterOnAwaySessionFromAnotherMachineOnlySaysSo(t *testing.T) {
+	m, opened := awayModel(t)
+	m.mux = &fakeMux{client: 300}
+	m.deps.psTable = func() ([]byte, error) {
+		return []byte("  1     0 ??       /sbin/launchd\n" +
+			"200     1 ??       /usr/libexec/sshd-session\n" +
+			"250   200 ttys9    -zsh\n" +
+			"300   250 ttys9    tmux\n"), nil
+	}
+	m.sel = "obs"
+	m, cmd := press(m, "enter")
+	msg := cmd().(doneMsg)
+	if len(*opened) != 0 || msg.err != nil || !strings.Contains(msg.note, "on the machine overview runs on") {
+		t.Fatalf("opened %v, note %q, err %v", *opened, msg.note, msg.err)
+	}
+	m.deps.psTable = func() ([]byte, error) {
+		return []byte("  1     0 ??       /sbin/launchd\n" +
+			"200     1 ??       /Applications/Ghostty.app/Contents/MacOS/ghostty\n" +
+			"250   200 ttys9    -zsh\n" +
+			"300   250 ttys9    tmux\n"), nil
+	}
+	m, cmd = press(m, "enter")
+	if msg := cmd().(doneMsg); len(*opened) != 1 || msg.err != nil {
+		t.Fatalf("typed here, and opened %v, err %v", *opened, msg.err)
+	}
+}
+
+func TestOverNetwork(t *testing.T) {
+	procs := map[int]proc{
+		1:   {comm: "/sbin/launchd"},
+		10:  {ppid: 1, comm: "/usr/libexec/sshd-session"},
+		11:  {ppid: 10, comm: "-zsh"},
+		12:  {ppid: 11, comm: "tmux"},
+		20:  {ppid: 1, comm: "/opt/homebrew/bin/mosh-server"},
+		21:  {ppid: 20, comm: "tmux"},
+		30:  {ppid: 1, comm: "/Applications/Ghostty.app/Contents/MacOS/ghostty"},
+		31:  {ppid: 30, comm: "tmux"},
+		40:  {ppid: 41, comm: "a"},
+		41:  {ppid: 40, comm: "b"},
+		50:  {ppid: 1, comm: "/usr/sbin/sshd"},
+		51:  {ppid: 99, comm: "tmux"},
+		100: {ppid: 1, comm: "/usr/libexec/sshd-session"},
+	}
+	for pid, want := range map[int]bool{12: true, 21: true, 31: false, 40: false, 50: false, 51: false, 100: false, 7: false} {
+		if got := overNetwork(procs, pid); got != want {
+			t.Errorf("overNetwork(%d) = %v, want %v", pid, got, want)
+		}
+	}
+}

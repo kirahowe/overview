@@ -270,6 +270,7 @@ func Run(v View) error {
 		return err
 	}
 	m.mux, m.self, m.session, m.exe = srv, self, session, exe
+	m.deps.copyText = tmux.CopyAll(copyText, srv.Copy)
 	if err := srv.Frame(session, frameColours(v.Theme)); err != nil {
 		return err
 	}
@@ -346,6 +347,22 @@ func modTime(path string) time.Time {
 }
 
 func openApp(path string) error { return exec.Command("open", path).Run() }
+
+// remote says whether the user types from another machine: whether the
+// tmux client they typed in last runs over ssh or mosh. An app opens on
+// this machine's screen, so it cannot reach them. Outside tmux, or when
+// tmux or ps cannot say, they are taken to be here. It runs inside a Cmd.
+func remote(mux multiplexer, ps func() ([]byte, error)) bool {
+	if mux == nil {
+		return false
+	}
+	pid, err := mux.LatestClient()
+	if err != nil || pid == 0 {
+		return false
+	}
+	out, err := ps()
+	return err == nil && overNetwork(parseProcs(string(out)), pid)
+}
 
 type (
 	// digestsMsg is the list of digest files. newest asks to show the
@@ -1433,7 +1450,8 @@ func (m model) moveToSay(e entry, does string) string {
 	return does + ": move to one under #" + strconv.Itoa(e.stream.ID)
 }
 
-// copyText puts text on the clipboard.
+// copyText puts text on this machine's clipboard. In tmux the view also
+// copies through it, to reach a terminal on another machine.
 func copyText(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
@@ -1547,8 +1565,11 @@ func (m model) carry(e entry, k enterKind) (model, tea.Cmd) {
 		}
 		return m, nil
 	case enterApp:
-		row, h, reveal := e.sess, e.sess.Host, m.deps.reveal
+		row, h, reveal, mux, ps := e.sess, e.sess.Host, m.deps.reveal, m.mux, m.deps.psTable
 		return m.say("opening " + h.Name + "…"), func() tea.Msg {
+			if remote(mux, ps) {
+				return doneMsg{row.Name + " is in " + h.Name + ", on the machine overview runs on, which cannot open it from here", nil}
+			}
 			return doneMsg{row.Name + " is in " + h.Name, reveal(h.Path)}
 		}
 	case enterAttach:

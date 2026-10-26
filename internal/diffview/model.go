@@ -55,6 +55,7 @@ type panes interface {
 	Paste(pane, buffer, text string) error
 	Resize(pane, size string) error
 	Zoom(pane string) error
+	Copy(text string) error
 }
 
 // deps are the viewer's ways out to the system, each run inside a Cmd.

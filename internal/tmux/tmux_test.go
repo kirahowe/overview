@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -1018,5 +1019,77 @@ func TestSetZoomTakesTheRulesAway(t *testing.T) {
 	}
 	if err := s.SetFrame(list.ID, false); err != nil || framed() {
 		t.Fatalf("SetFrame off: err %v, framed %v", err, framed())
+	}
+}
+
+// The latest client is the one with the latest activity, the last listed
+// of those tied for it, and none at all is 0.
+func TestLatestClient(t *testing.T) {
+	for _, c := range []struct {
+		out  string
+		want int
+	}{
+		{"", 0},
+		{"200\t11\n100\t12\n", 11},
+		{"100\t11\n200\t12\n", 12},
+		{"100\t11\n100\t12\n", 12},
+		{"300\tx\nbroken\n50\t0\n100\t13\n", 13},
+	} {
+		if got := latestClient(c.out); got != c.want {
+			t.Errorf("latestClient(%q) = %d, want %d", c.out, got, c.want)
+		}
+	}
+}
+
+// CopyAll copies with every way it is given, and fails only when all of
+// them do, saying why each did.
+func TestCopyAll(t *testing.T) {
+	var got []string
+	keep := func(name string) func(string) error {
+		return func(text string) error { got = append(got, name+" "+text); return nil }
+	}
+	fail := func(why string) func(string) error { return func(string) error { return errors.New(why) } }
+	if err := CopyAll(keep("pbcopy"), keep("tmux"))("abc"); err != nil || !slices.Equal(got, []string{"pbcopy abc", "tmux abc"}) {
+		t.Fatalf("err %v, copied %v", err, got)
+	}
+	if err := CopyAll(fail("no pbcopy"), keep("tmux"))("abc"); err != nil {
+		t.Fatalf("tmux copied, yet: %v", err)
+	}
+	if err := CopyAll(keep("pbcopy"), fail("no server"))("abc"); err != nil {
+		t.Fatalf("the clipboard took it, yet: %v", err)
+	}
+	err := CopyAll(fail("no pbcopy"), fail("no server"))("abc")
+	if err == nil || !strings.Contains(err.Error(), "no pbcopy") || !strings.Contains(err.Error(), "no server") {
+		t.Fatalf("both failed, and the error is %v", err)
+	}
+}
+
+// Copy leaves the text in a tmux buffer, and LatestClient finds the client
+// attached in a terminal of its own, and no client before it attaches.
+func TestCopyAndLatestClientInRealTmux(t *testing.T) {
+	sock := tmuxtest.New(t, "")
+	s := At(sock.Path, "/dev/null")
+	sock.Must("new-session", "-d", "-s", "ov", "-x", "80", "-y", "24", "sleep", "300")
+	if pid, err := s.LatestClient(); err != nil || pid != 0 {
+		t.Fatalf("no client yet, and LatestClient gave %d, %v", pid, err)
+	}
+	if err := s.Copy("claude attach bg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sock.Must("show-buffer"); got != "claude attach bg-1" {
+		t.Fatalf("the buffer holds %q", got)
+	}
+	term := tmuxtest.New(t, "")
+	term.Must("new-session", "-d", "-x", "80", "-y", "24", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
+	tmuxtest.Wait(t, "the client to attach", func() (bool, string) {
+		out, _ := sock.Run("list-clients")
+		return out != "", out
+	})
+	want, err := strconv.Atoi(strings.TrimSpace(sock.Must("list-clients", "-F", "#{client_pid}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := s.LatestClient(); err != nil || pid != want {
+		t.Fatalf("LatestClient gave %d, %v, want %d", pid, err, want)
 	}
 }

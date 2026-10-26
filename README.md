@@ -284,7 +284,8 @@ selected session. In the panels mode `l` and the right arrow move the
 focus right instead, and in the cockpit's list they go into the issues
 card, where they do nothing more. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
-a session in another app, `enter` brings that app to the front. On a
+a session in another app, `enter` brings that app to the front, on the
+machine overview runs on; typed from another machine, it says so instead. On a
 workstream, `enter` does what it does on the entry shown beside it: the
 first session or terminal under it with a pane, or else its first
 session. A workstream that no session works on, such as one in review
@@ -297,7 +298,8 @@ list, in the cockpit and while searching: `type`, `attach`, `open app` or
 footer leaves it out. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a
 background session or closes a terminal, and asks first; closing a
-terminal kills what runs in it. `y` copies the attach command. To end a
+terminal kills what runs in it. `y` copies the attach command, to this
+machine's clipboard and through tmux to the terminal it was typed in. To end a
 session in another app, close it in that app. `v` reviews the selected
 session's changes, as the next section describes. `c` starts a new session
 at the root of the selected entry's project, or where overview was started
@@ -559,6 +561,37 @@ scripts/launchd install work    # or remove, or print to see the agent first
 The agent runs the `overview` and `claude` that are on your PATH when you
 install it, by their full paths, so it needs no PATH of its own. It logs
 to `~/Library/Logs/overview/`.
+
+## From another machine
+
+The sessions, the list and tmux all run on the machine overview runs on,
+so another machine needs only a terminal and ssh to reach them:
+
+```
+ssh -t <host> 'zsh -lic overview'
+```
+
+That attaches to the same view, with every session still running.
+Closing the terminal, or the laptop, only detaches it. The login shell
+gives overview the PATH it has on that machine, so it finds the same
+`tmux` and `claude` and keeps the view as it is. The window takes the
+size of the terminal typed in last, so moving from one machine to
+another needs nothing more.
+
+tmux has to know the far terminal, from a terminfo entry on the machine
+overview runs on. Ghostty's comes with Ghostty, but only its own shells
+can find it, so copy it to `~/.terminfo` once, from a Ghostty window
+there:
+
+```
+infocmp -x xterm-ghostty | tic -x -o ~/.terminfo -
+```
+
+`y`, and a review's copy, reach the far terminal's clipboard through
+tmux with an OSC 52 escape, when the terminal accepts one, as Ghostty
+does. A session in another app can only be brought to the front on the
+machine's own screen, so from another machine `enter` on it says that
+and opens nothing.
 
 ## Limits
 

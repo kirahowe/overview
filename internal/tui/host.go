@@ -2,6 +2,8 @@ package tui
 
 import (
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -103,4 +105,21 @@ func appBundle(comm string) (world.Host, bool) {
 		return world.Host{}, false
 	}
 	return world.Host{Name: name, Path: path}, true
+}
+
+// networkDaemons are the programs a terminal on another machine reaches
+// this one through: ssh's server, as one process or split in two, and
+// mosh's.
+var networkDaemons = []string{"sshd", "sshd-session", "mosh-server"}
+
+// overNetwork says whether pid runs under one of networkDaemons, at most
+// maxHops parents up. pid itself does not count.
+func overNetwork(procs map[int]proc, pid int) bool {
+	p, ok := procs[pid]
+	for hop := 0; ok && hop < maxHops && p.ppid > 0; hop++ {
+		if p, ok = procs[p.ppid]; ok && slices.Contains(networkDaemons, filepath.Base(p.comm)) {
+			return true
+		}
+	}
+	return false
 }

@@ -239,3 +239,57 @@ func TestPropPaneOfFindsTheListedPid(t *testing.T) {
 		}
 	})
 }
+
+// latestClient picks a client no other was used after, the last listed of
+// those used last, whatever junk lines are among them.
+func TestPropLatestClientIsTheLastUsed(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		type client struct {
+			at  int64
+			pid int
+		}
+		clients := rapid.SliceOf(rapid.Custom(func(t *rapid.T) client {
+			return client{rapid.Int64Range(0, 5).Draw(t, "at"), rapid.IntRange(1, 99999).Draw(t, "pid")}
+		})).Draw(t, "clients")
+		var lines []string
+		for _, c := range clients {
+			lines = append(lines, fmt.Sprintf("%d\t%d", c.at, c.pid))
+			if rapid.Bool().Draw(t, "junk") {
+				lines = append(lines, rapid.SampledFrom([]string{"", "x\t1", "1\t-3", "1\t2\t3"}).Draw(t, "line"))
+			}
+		}
+		want := 0
+		var at int64 = -1
+		for _, c := range clients {
+			if c.at >= at {
+				at, want = c.at, c.pid
+			}
+		}
+		if got := latestClient(strings.Join(lines, "\n")); got != want {
+			t.Fatalf("got %d, want %d", got, want)
+		}
+	})
+}
+
+// CopyAll copies with every way it is given, and fails exactly when all
+// of them fail.
+func TestPropCopyAllFailsOnlyWhenAllDo(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		works := rapid.SliceOfN(rapid.Bool(), 1, -1).Draw(t, "works")
+		tried := 0
+		var copies []func(string) error
+		for _, w := range works {
+			copies = append(copies, func(string) error {
+				tried++
+				if w {
+					return nil
+				}
+				return fmt.Errorf("no clipboard")
+			})
+		}
+		err := CopyAll(copies...)("abc")
+		if tried != len(works) || (err == nil) != slices.Contains(works, true) {
+			t.Fatalf("works %v: tried %d, err %v", works, tried, err)
+		}
+	})
+}

@@ -61,6 +61,7 @@ type multiplexer interface {
 	SetFrame(pane string, on bool) error
 	SetZoom(pane string, on bool) error
 	EnterPanels() error
+	LatestClient() (int, error)
 }
 
 type spawnKind int

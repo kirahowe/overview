@@ -55,6 +55,8 @@ type fakeMux struct {
 	panelsErr error
 
 	moveErr error
+
+	client int // the pid LatestClient gives
 }
 
 type spawnCall struct {
@@ -347,6 +349,8 @@ func (f *fakeMux) Select(pane string) error {
 }
 
 func (f *fakeMux) Detach() error { f.detach++; return nil }
+
+func (f *fakeMux) LatestClient() (int, error) { return f.client, nil }
 
 // SetZoom zooms pane's window or ends its zoom, as the one tmux command
 // does: idempotently, and not at all for a pane alone in its window.

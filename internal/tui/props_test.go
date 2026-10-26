@@ -2139,3 +2139,26 @@ func TestPropRowsKeepTheirNamesReadable(t *testing.T) {
 		}
 	})
 }
+
+// overNetwork finds an ssh or mosh server as far up as maxHops parents and
+// no further, never counts the process itself, and ends on a cycle.
+func TestPropOverNetworkLooksUpToMaxHops(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		n := rapid.IntRange(1, maxHops+4).Draw(t, "chain")
+		procs := map[int]proc{}
+		for pid := 1; pid <= n; pid++ {
+			procs[pid] = proc{ppid: pid + 1, comm: rapid.SampledFrom([]string{"-zsh", "tmux", "/bin/sh", "sshd-x"}).Draw(t, "comm")}
+		}
+		at := rapid.IntRange(0, n).Draw(t, "daemon") // 0: none
+		if at > 0 {
+			procs[at] = proc{ppid: at + 1, comm: "/usr/" + rapid.SampledFrom(networkDaemons).Draw(t, "name")}
+		}
+		if n > 1 && rapid.Bool().Draw(t, "cycle") {
+			procs[n] = proc{ppid: 2, comm: procs[n].comm} // 1 starts the chain, and is in no cycle
+		}
+		want := at > 1 && at-1 <= maxHops
+		if got := overNetwork(procs, 1); got != want {
+			t.Fatalf("daemon at %d of %d: got %v, want %v", at, n, got, want)
+		}
+	})
+}
