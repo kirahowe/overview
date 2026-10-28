@@ -667,22 +667,16 @@ func reviewCard(s review.Summary) card {
 }
 
 // issueGroup is one group of the issues card: its label, its colour, the
-// issues it lists, and how many more it has than it lists.
+// issues it lists.
 type issueGroup struct {
 	name   string
 	colour lipgloss.Color
 	shown  []issues.Issue
-	more   int
 }
-
-// groupCaps is the most issues each group of the issues card lists, so
-// the card stays short enough for the cockpit to show it whole.
-var groupCaps = map[string]int{"in review": 3, "in progress": 4, "blocked": 2, "up next": 3}
 
 // issueGroups is what the issues card lists of a project's other open
 // issues: those in review, those in progress, the blocked ones and the
-// ready ones, each as world.IssueLess orders them and cut to its cap,
-// and how many are in the inbox.
+// ready ones, each as world.IssueLess orders them, and how many are in the inbox.
 func issueGroups(others []issues.Issue) (groups []issueGroup, inbox int) {
 	sorted := append([]issues.Issue(nil), others...)
 	sort.SliceStable(sorted, func(i, j int) bool { return world.IssueLess(sorted[i], sorted[j]) })
@@ -702,11 +696,7 @@ func issueGroups(others []issues.Issue) (groups []issueGroup, inbox int) {
 		if !ok {
 			continue
 		}
-		if len(groups[g].shown) < groupCaps[groups[g].name] {
-			groups[g].shown = append(groups[g].shown, i)
-		} else {
-			groups[g].more++
-		}
+		groups[g].shown = append(groups[g].shown, i)
 	}
 	return groups, inbox
 }
@@ -761,9 +751,6 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 				}
 				out = append(out, r)
 				n++
-			}
-			if g.more > 0 {
-				out = append(out, cardRow{line: "  " + strings.Repeat(" ", label) + dim.Render(fmt.Sprintf("… %d more", g.more)), weight: g.more, group: gi})
 			}
 		}
 		if inbox > 0 {

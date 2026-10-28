@@ -571,8 +571,8 @@ func (m model) cockpitRows(t target) [][]card {
 		}
 		return [][]card{
 			{projectHeader(m.name(t.root), m.short(t.root), kind, open, ms, enter)},
-			issuesRow,
 			{changesCard("Uncommitted", "", info)},
+			issuesRow,
 		}
 	}
 	since := ""

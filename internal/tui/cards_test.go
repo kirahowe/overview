@@ -193,17 +193,18 @@ func TestIssuesCard(t *testing.T) {
 		"   up next      #9 urgent",
 		"                #5 threads",
 		"                #10 later",
-		"                … 1 more",
+		"                #11 much later",
 		"   inbox 2",
 	})
 	ids := []int{}
 	for _, i := range pickable(others) {
 		ids = append(ids, i.ID)
 	}
-	if !slices.Equal(ids, []int{4, 7, 14, 9, 5, 10}) {
+	if !slices.Equal(ids, []int{4, 7, 14, 9, 5, 10, 11}) {
 		t.Fatalf("pickable %v", ids)
 	}
-	// Each group lists a few, so the card stays short enough to show.
+	// Every issue is listed, however many a group has; the cockpit
+	// shortens the card around its cursor when it does not fit.
 	var many []issues.Issue
 	for n, st := range map[string]int{issues.Review: 5, issues.InProgress: 6, issues.Blocked: 4, issues.Ready: 9} {
 		for j := 0; j < st; j++ {
@@ -211,13 +212,16 @@ func TestIssuesCard(t *testing.T) {
 		}
 	}
 	text := ansi.Strip(strings.Join(drawn(issuesCard(many, nil, false, 0, ""), 50), "\n"))
-	for _, want := range []string{"… 2 more", "… 2 more", "… 2 more", "… 6 more"} {
-		if !strings.Contains(text, want) {
+	for _, i := range many {
+		if want := fmt.Sprintf("#%d x", i.ID); !strings.Contains(text, want) {
 			t.Errorf("lacks %q:\n%s", want, text)
 		}
 	}
-	if n := len(pickable(many)); n != 3+4+2+3 {
-		t.Fatalf("%d pickable, want those listed", n)
+	if strings.Contains(text, "more") {
+		t.Errorf("elides issues:\n%s", text)
+	}
+	if n := len(pickable(many)); n != len(many) {
+		t.Fatalf("%d pickable, want all %d", n, len(many))
 	}
 	if got := drawn(issuesCard(nil, nil, false, 0, ""), 40); !strings.Contains(got[1], "no other open issues") {
 		t.Fatalf("empty: %q", got)

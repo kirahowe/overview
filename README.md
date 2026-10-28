@@ -181,15 +181,16 @@ files changed since the workstream was taken on, most changed first, and
 how many of them are still uncommitted. The review counts the open notes
 across the workstream's sessions and the replies waiting on you. Last
 are the project's other open issues: those in review, those in progress,
-the blocked ones, the next three ready ones by priority, and how many sit
-in the inbox. A
+the blocked ones, the ready ones by priority, and how many sit in the
+inbox. A
 project's cockpit shows its root and the kind of repository, its
-sessions and terminals, its issues, and its uncommitted changes. A card
+sessions and terminals, its uncommitted changes, and its issues. A card
 the window has no room for is left out, from the bottom up. The last card
 shown fills the rows that are left, cut short with a line that says how
 many more it has, or, with one row left, its rule alone saying `↓ 3 more
-issues`. Each group
-of the issues card lists a few issues and says how many more it has.
+issues`. The issues card lists every issue and comes last in both
+cockpits, so a long list scrolls with its cursor in the rows below the
+other cards.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` only when the footer does, with the same

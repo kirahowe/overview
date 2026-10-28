@@ -191,14 +191,14 @@ For a workstream, in this order:
 - Review: the open notes across the workstream's sessions, the replies
   waiting on you, and when notes were last sent.
 - The project's other issues: those in review, those in progress with
-  their workstreams, the blocked ones, the next ready ones, and the
+  their workstreams, the blocked ones, all the ready ones, and the
   inbox count. `enter` on one that a session already works on moves the
   list's cursor to its workstream, with the cockpit following, rather
   than starting a second session. On any other issue, a paused one
   included, it starts a session, as the task picker does.
 
-For a project, the issues card is the cockpit, with the project's
-uncommitted changes under it. A project without `.issues/` gets a card
+For a project, the issues card is the cockpit, under the project's
+uncommitted changes. A project without `.issues/` gets a card
 in the issues card's place that says what `issues` does and that
 `issues init` in the project's root starts it.
 
@@ -207,10 +207,11 @@ left, when there are at least three: its rule, what fits of its body,
 and a line above and below counting what it leaves out there, as `↑ 3
 more issues`. The issues card keeps its cursor in that view, and the
 first issue in view of a group whose heading is cut takes the heading. A card is dropped, from the bottom up, only when fewer lines
-than that are left. To keep the issues card short enough to show,
-each of its groups lists a few issues (three in review, four in
-progress, two blocked, three up next) and counts the rest, and the
-issue card shows four lines of the issue's summary. When the issues card is dropped
+than that are left. The issues card lists every issue and is the last
+card in both cockpits, so it takes whatever rows the others leave and
+scrolls with its cursor; the changes card above it caps its files, so
+it stays short. The issue card shows four lines of the issue's summary.
+When the issues card is dropped
 anyway, the keyboard goes back to the list, and `tab` says the window
 has no room for the card.
 
