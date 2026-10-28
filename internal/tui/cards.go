@@ -389,8 +389,9 @@ func membersLine(ms []member) string {
 
 // streamHeader is the first card of a workstream's cockpit. enter is
 // enter's chip as the footer has it, from enterOn, none when enter only
-// says something.
-func streamHeader(ref, status, priority, title, started string, ms []member, enter []hint) card {
+// says something. mark says whether m acts on the workstream's issue,
+// which it does unless the issues card has the keyboard.
+func streamHeader(ref, status, priority, title, started string, ms []member, enter []hint, mark bool) card {
 	right := []string{}
 	for _, s := range []string{status, priority} {
 		if s != "" {
@@ -406,7 +407,11 @@ func streamHeader(ref, status, priority, title, started string, ms []member, ent
 		if slices.ContainsFunc(ms, func(mb member) bool { return !mb.term }) {
 			review = []hint{{"v", "review"}}
 		}
-		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}, {"m", "mark"}})...)
+		var m []hint
+		if mark {
+			m = []hint{{"m", "mark"}}
+		}
+		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}}, m)...)
 		return []string{
 			spread(bold.Foreground(pal.Text).Render(title), when, w),
 			membersLine(ms),

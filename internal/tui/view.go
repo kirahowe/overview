@@ -1394,6 +1394,12 @@ func (m model) footer() string {
 			f.hints = append(f.hints, hint{"pgup/pgdn", "details"})
 		}
 		f.hints = append(f.hints, hint{"esc", "cancel"})
+	case m.verdict.open():
+		// The box's own complaints, such as a missing note, take the line.
+		f.mode, f.hints = m.verdict.footer()
+		if m.note != "" {
+			f.hints = nil
+		}
 	case m.filtering:
 		f.mode, f.cut = []part{{"/", heading}, {m.filter, heading}, {"▏", heading}, count()}, 1
 		if e, _, ok := m.selected(m.ordered()); ok {

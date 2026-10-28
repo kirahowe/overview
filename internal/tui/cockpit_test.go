@@ -553,13 +553,14 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 		}
 		kinds[e.kind] = true
 		says = says || (e.kind == workstreamEntry && len(foot) == 0)
-		// With the issues card's keys, enter acts on its issue: the
-		// footer says so, and the header offers no enter of its own.
+		// With the issues card's keys, enter and m act on its issue: the
+		// footer says so, and the header offers neither of its own.
 		if k := update(m, keyMsg("tab")); k.inIssues() {
 			keyed++
 			header := strings.Join(drawn(k.cockpitRows(k.target())[0][0], 100), "\n")
 			hs := k.panelHints()
-			if strings.Contains(header, " enter ") || len(hs) == 0 || hs[0].key != "enter" {
+			if strings.Contains(header, " enter ") || strings.Contains(header, " m  mark") || len(hs) == 0 || hs[0].key != "enter" ||
+				!slices.ContainsFunc(hs, func(h hint) bool { return h.key == "m" }) {
 				t.Errorf("on %s with the issues card's keys, the header reads\n%s\nand the footer %v", e.key(), header, hs)
 			}
 		}

@@ -1179,7 +1179,7 @@ func genCards(t *rapid.T) [][]card {
 			Priority: rapid.SampledFrom([]string{"p0", "p2", ""}).Draw(t, "oprio")})
 	}
 	cards := []card{
-		streamHeader(text.Draw(t, "ref"), "review", "p1", text.Draw(t, "title"), text.Draw(t, "since"), ms, nil),
+		streamHeader(text.Draw(t, "ref"), "review", "p1", text.Draw(t, "title"), text.Draw(t, "since"), ms, nil, rapid.Bool().Draw(t, "mark")),
 		projectHeader(text.Draw(t, "name"), text.Draw(t, "root"), "jj", rapid.IntRange(-1, 9).Draw(t, "open"), ms, nil),
 		issueCard(6, issueInfo{summary: text.Draw(t, "summary"), criteria: crit, loading: rapid.Bool().Draw(t, "loading")}),
 		changesCard("Changes", text.Draw(t, "csince"), changeInfo{files: files, uncommitted: rapid.IntRange(-1, 9).Draw(t, "unc"),

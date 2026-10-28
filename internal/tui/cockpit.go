@@ -590,7 +590,7 @@ func (m model) cockpitRows(t target) [][]card {
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{
-		{streamHeader(t.stream.Ref(), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms, enter)},
+		{streamHeader(t.stream.Ref(), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms, enter, !m.inIssues())},
 		{issueCard(t.stream.ID, details)},
 		{changesCard("Changes", since, info), reviewCard(sum)},
 		issuesRow,

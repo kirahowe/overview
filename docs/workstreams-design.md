@@ -181,7 +181,9 @@ For a workstream, in this order:
   long the workstream has run, the state of each of its sessions, and
   the keys that act on it: `c` claude, `t` terminal and `m` mark, plus
   `enter` attach and `v` review once the workstream has a session. A workstream
-  with only terminals offers the first three.
+  with only terminals offers the first three. While the issues card
+  has the keyboard, `enter` and `m` act on its issue, so the header
+  drops both.
 - The issue: its details from `issues show`, with the acceptance
   criteria, those still to do first, and how many are checked.
 - Changes: the diff since the workstream was taken on, the earliest

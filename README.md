@@ -194,7 +194,9 @@ other cards.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` only when the footer does, with the same
-word, and none while the issues card has the keyboard, and `v` only when the workstream has a session. `l` or the right arrow moves the keyboard from the list into the
+word, and `v` only when the workstream has a session. While the issues
+card has the keyboard, `enter` and `m` act on the issue under its cursor,
+so the header offers neither. `l` or the right arrow moves the keyboard from the list into the
 issues card while the window has room to show the card, and `h` or the
 left arrow moves it back. `tab` does either. There,
 `j` and `k` move between the issues. On an issue that a session already
@@ -211,7 +213,7 @@ issues card has the keyboard. A box asks for the verdict first. On an
 issue in review, `a` approves it as done, `c` sends it back to ready and
 `r` rejects it, which drops it. On an issue in any other status, `a`
 marks it done and `r` drops it, and `c` is not offered. Any other key
-cancels. The box then asks for a note for the issue's details log, which
+cancels. While the box is open, the footer lists its keys. The box then asks for a note for the issue's details log, which
 `enter` sends and `esc` abandons. A note is optional except when sending
 an issue back. In that case the cockpit closes and a new session starts on
 the issue, with the note under its opening prompt. A done or dropped issue

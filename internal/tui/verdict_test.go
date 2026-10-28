@@ -121,3 +121,25 @@ func TestMarkOffATaskSaysWhatItIsFor(t *testing.T) {
 		t.Fatalf("open %v, note %q", m.verdict.open(), m.note)
 	}
 }
+
+// While the box is open the footer offers its keys, not the ones under
+// it, which would cancel it: the verdicts, then enter and esc for the
+// note.
+func TestTheFooterOffersTheVerdictBoxsKeys(t *testing.T) {
+	m, _ := verdictModel(t, newFakeMux(), nil)
+	m = resized(t, selectKey(t, m, "task:/code/app#4"), 150, 40)
+	m = pressSettled(t, m, "o", "m")
+	foot := ansi.Strip(m.footer())
+	if !strings.Contains(foot, "mark app#4") || !strings.Contains(foot, "a approve • c send back • r reject • esc cancel") || strings.Contains(foot, "o close") {
+		t.Fatalf("choosing: %q", foot)
+	}
+	m = pressSettled(t, m, "c")
+	foot = ansi.Strip(m.footer())
+	if !strings.Contains(foot, "send back app#4") || !strings.Contains(foot, "enter send back • esc cancel") {
+		t.Fatalf("the note: %q", foot)
+	}
+	m = pressSettled(t, m, "enter")
+	if foot = ansi.Strip(m.footer()); !strings.Contains(foot, "say what to change") {
+		t.Fatalf("the missing note: %q", foot)
+	}
+}

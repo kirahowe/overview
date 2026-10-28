@@ -41,7 +41,7 @@ func wantLines(t *testing.T, what string, got, want []string) {
 
 func TestStreamHeaderCard(t *testing.T) {
 	ms := []member{{name: "list squeeze", word: "working", age: "3m", mark: "⠋", markStyle: green, style: green}, {name: "go", term: true}}
-	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms, []hint{{"enter", "attach"}}), 60)
+	got := drawn(streamHeader("overview#6", "in-progress", "p1", "keep the list's width", "2h", ms, []hint{{"enter", "attach"}}, true), 60)
 	wantLines(t, "header", got, []string{
 		"── overview#6 ────────────────────────── in-progress · p1 ──",
 		" keep the list's width                       started 2h ago",
@@ -49,7 +49,7 @@ func TestStreamHeaderCard(t *testing.T) {
 		"  enter  attach   v  review   c  claude   t  term   m  mark",
 	})
 	// No sessions yet, and no start.
-	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil, nil), 40)
+	got = drawn(streamHeader("app#4", "review", "p2", "show cost", "", nil, nil, true), 40)
 	if strings.TrimSpace(got[1]) != "show cost" || !strings.Contains(got[2], "no sessions") {
 		t.Fatalf("empty header: %q", got)
 	}

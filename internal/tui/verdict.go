@@ -197,6 +197,21 @@ func (m model) verdictBox() []string {
 	return box(word+" "+v.ref, "", body, w, len(body)+2, true)
 }
 
+// footer is what the footer says while v's box is open: the keys the box
+// offers, so the line under it never offers keys that would cancel it.
+func (v verdictPrompt) footer() ([]part, []hint) {
+	status := v.issue.Status
+	if v.kind == "" {
+		hs := []hint{{"a", verdictWord(issues.Approve, status)}}
+		if status == issues.Review {
+			hs = append(hs, hint{"c", verdictWord(issues.Changes, status)})
+		}
+		return []part{{"mark " + v.ref, heading}}, append(hs, hint{"r", verdictWord(issues.Reject, status)}, hint{"esc", "cancel"})
+	}
+	word := verdictWord(v.kind, status)
+	return []part{{word + " " + v.ref, heading}}, []hint{{"enter", word}, {"esc", "cancel"}}
+}
+
 // fitLine is label, styled already, then typed text with a caret, keeping
 // the text's end when the line is too short for all of it.
 func fitLine(label, text string, w int) string {
