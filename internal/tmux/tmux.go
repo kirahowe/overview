@@ -102,6 +102,7 @@ type Pane struct {
 
 // Server is overview's tmux server. run runs one tmux command and returns
 // its output, and feed does the same with stdin as the command's input.
+// With an error, the output is what tmux had printed before it failed.
 type Server struct {
 	run    func(args ...string) (string, error)
 	feed   func(stdin string, args ...string) (string, error)
@@ -160,19 +161,20 @@ func feeder(base []string) func(stdin string, args ...string) (string, error) {
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
-			return "", fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+			return string(out), fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 		}
 		return string(out), nil
 	}
 }
 
 // ParsePanes reads list-panes output in paneFormat. Malformed lines are
-// skipped.
+// skipped, and so is a pane with no tty: an empty pane, which runs
+// nothing, as Move makes for the length of a move.
 func ParsePanes(out string) []Pane {
 	var panes []Pane
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.SplitN(line, "\t", paneFields)
-		if len(f) != paneFields || !strings.HasPrefix(f[0], "%") {
+		if len(f) != paneFields || !strings.HasPrefix(f[0], "%") || f[1] == "" {
 			continue
 		}
 		w, err1 := strconv.Atoi(f[4])
@@ -609,24 +611,52 @@ type Carried struct {
 // Move puts pane list in target's window as a full-height column on the
 // left, size wide, and makes that window current and list its active pane.
 // The pane it carries goes too, into the foot of that column, and is the
-// active pane instead when it has the keyboard. The list is then moved
-// without being made active on the way, or tmux would tell its program
-// the keyboard had come and gone. A window that they leave empty closes.
-// tmux runs both moves as one command, so no client draws the window
-// between them.
+// active pane instead when it has the keyboard. A window that they leave
+// empty closes.
+//
+// With a pane to carry, the two change places with empty panes. Joined in
+// one after the other, each would pass through a size it does not keep:
+// the list fills the new column until the other pane is under it, and
+// that pane fills the old column once the list has left. tmux tells a
+// program about a size that came and went, so that it draws again, and
+// both would draw for a pane as tall as the window, into one that is not.
+// So the column is first made in target's window out of two empty panes,
+// which run nothing, and each of the two is then swapped into the cell of
+// the size it is to have. Between windows of one size neither hears of a
+// resize. The pane with the keyboard is told it went and came back, since
+// tmux says so of any active pane that changes window, and no other pane
+// is told anything. tmux runs the swaps as one command, which also closes
+// the empty panes, so no client draws a window with them in it.
 func (s Server) Move(list, target, size string, with Carried) error {
-	args := []string{"join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target}
-	if with.Pane != "" && with.Focus {
-		args = slices.Insert(args, 1, "-d")
+	if with.Pane == "" {
+		_, err := s.run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
+		return err
 	}
-	if with.Pane != "" {
-		args = append(args, ";", "join-pane", "-v")
-		if !with.Focus {
-			args = append(args, "-d")
+	// The second split names no pane: a command that follows one which
+	// made a pane, and took the focus there, acts on that pane.
+	out, err := s.run("split-window", "-h", "-b", "-f", "-l", size, "-t", target, "-P", "-F", "#{pane_id}", "", ";",
+		"split-window", "-d", "-v", "-l", strconv.Itoa(with.Lines), "-P", "-F", "#{pane_id}", "")
+	cells := slices.DeleteFunc(strings.Fields(out), func(id string) bool { return !strings.HasPrefix(id, "%") })
+	if err == nil && len(cells) != 2 {
+		err = fmt.Errorf("tmux split-window: unexpected output %q", out)
+	}
+	if err == nil {
+		active := list
+		if with.Focus {
+			active = with.Pane
 		}
-		args = append(args, "-l", strconv.Itoa(with.Lines), "-s", with.Pane, "-t", list)
+		_, err = s.run("swap-pane", "-d", "-s", with.Pane, "-t", cells[1], ";",
+			"swap-pane", "-d", "-s", list, "-t", cells[0], ";",
+			"select-pane", "-t", active, ";", "select-window", "-t", active, ";",
+			"kill-pane", "-t", cells[0], ";", "kill-pane", "-t", cells[1])
 	}
-	_, err := s.run(args...)
+	if err != nil {
+		// tmux stops at the first command that fails, so an empty pane
+		// may be left wherever it was by then.
+		for _, id := range cells {
+			s.KillPane(id) //nolint:errcheck
+		}
+	}
 	return err
 }
 

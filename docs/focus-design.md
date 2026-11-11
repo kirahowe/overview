@@ -47,8 +47,8 @@ pane, and nothing has to pretend.
 
 - `tmux.Under` splits it off the foot of the list's pane and marks it
   with `@overview-agents`. `tmux.Move` takes it along when the list
-  changes window, in the same tmux command, and leaves the keyboard in
-  whichever of the two had it. The pane is part of the list's column, so
+  changes window, and leaves the keyboard in whichever of the two had
+  it. The pane is part of the list's column, so
   it is not company for the list: `panesIn` and `tmux.DiedHook` leave it
   out when they ask whether the list is alone.
 - One process still decides what both panes show. The pane runs
@@ -148,12 +148,30 @@ which of the view's two panes has the keys.
   reaches the view clears its flag, since the mode keeps every key for
   tmux. The Cmd that enters the mode holds listings off until it lands,
   as a spawn does, so an older listing cannot undo it.
-- A move that carries the agents' pane with the keys in it would make
-  the list active on the way, and tmux would report the keyboard to
-  both programs. `tmux.Move` moves the list with `-d` then. tmux still
-  tells the agents' pane the keyboard went and came back, so while a
-  move is in flight the cursor does not follow the list's window, as it
-  otherwise does while the keyboard is outside the view.
+- A pane that changes size and changes back inside one tmux command
+  still hears of the size in between. tmux passes it on so that the
+  program draws again, and the size the pane ends at follows about 10 ms
+  later. Joining the list and the agents' pane into a window one after
+  the other does this to both: each fills the column while the other is
+  elsewhere, and draws a screen as tall as the window into a pane that
+  is not, which shows as the list going blank for a frame. So
+  `tmux.Move` makes the column in the new window out of two empty panes
+  (`split-window ''`, which runs nothing) and swaps the two into them,
+  each into a cell of the size it is to have. The swaps, the change of
+  window and the closing of the empty panes are one tmux command.
+  `tmux.ParsePanes` skips a pane with no tty, so a listing taken while
+  the cells are made does not show them.
+- tmux holds a pane's resizes back for 250 ms after it has passed one
+  on, and then passes on only where they ended. So a size that came and
+  went shows when moves are a moment apart and not while a key repeats,
+  and a test that wants to see every size has to wait the hold out.
+- tmux tells the active pane of a window that the keyboard went and came
+  back whenever that pane changes window. `tmux.Move` swaps both panes
+  with `-d` and makes active only the one that had the keys, so the
+  other hears nothing, and neither does a session's pane in the window
+  they leave or the one they come to. While a move is in flight the
+  cursor does not follow the list's window, as it otherwise does while
+  the keyboard is outside the view.
 - A split or a resize ends a window's zoom, and a pane that is being
   split off is not listed yet. So while a step on the agents' pane is
   out (`agentsBusy`), the list does not move and the cockpit and the

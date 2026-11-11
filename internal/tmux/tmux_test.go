@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 
@@ -40,6 +41,8 @@ func TestParsePanes(t *testing.T) {
 		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t/\n" +
 		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
+		// An empty pane, which runs nothing and so has no tty.
+		"%7\t\ts\t@3\t60\t24\t80\t\t''\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
@@ -1354,22 +1357,201 @@ func TestHoldExitsDoesNotCountTheAgentsPane(t *testing.T) {
 	})
 }
 
-// A move that carries the agents' pane with the keyboard in it moves the
-// list without making it active, so tmux reports no keyboard to the
-// list's program on the way. Any other move makes the list active.
-func TestMoveKeepsTheListInactiveWhenThePaneItCarriesHasTheKeys(t *testing.T) {
+// A move tells the list's program and the agents' pane's only what is so
+// once it is over. Between windows of one size neither hears of a resize,
+// though the column is put together again in the new window. The pane
+// with the keyboard is told it went and came back, and no other pane is
+// told anything about the keyboard: not the other of the two, and not a
+// session's pane in the window they leave or the one they come to.
+func TestAMoveReportsNoSizeThePanesDoNotKeep(t *testing.T) {
+	sock := tmuxtest.New(t, "")
+	s := At(sock.Path, "/dev/null")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	log := func(name string) string { return filepath.Join(dir, name) }
+	list := sock.Must("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", exe, "probe", log("list"))
+	sock.Must("set-option", "-g", "focus-events", "on")
+	// A terminal looks at the session, or tmux has no keyboard to report.
+	term := tmuxtest.New(t, "")
+	term.Must("new-session", "-d", "-x", "200", "-y", "50", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
+	tmuxtest.Wait(t, "the client to attach", func() (bool, string) {
+		out, _ := sock.Run("list-clients")
+		return out != "", out
+	})
+	if err := s.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Frame("ov", Colours{}); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.Under(list, 6, exe, "probe", log("agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawn := func(name string) Pane {
+		t.Helper()
+		p, err := s.Spawn("ov", "", nil, exe, "probe", log(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	a, b := spawn("a"), spawn("b")
+	names := []string{"list", "agents", "a", "b"}
+
+	// settle makes the column w wide, which no move here does, and waits
+	// for both of its programs to say so: whatever tmux told them before
+	// that, they have written down by then. It returns how much each
+	// program had been told.
+	settle := func(w int) map[string]int {
+		t.Helper()
+		if err := s.SetWidth(list, w); err != nil {
+			t.Fatal(err)
+		}
+		ps := byID(t, s)
+		want := map[string]string{
+			"list":   fmt.Sprintf("size-%dx%d", w, ps[list].H),
+			"agents": fmt.Sprintf("size-%dx%d", w, ps[agents.ID].H),
+		}
+		tmuxtest.Wait(t, fmt.Sprintf("the column to hear it is %d wide", w), func() (bool, string) {
+			l, g := told(t, log("list")), told(t, log("agents"))
+			return slices.Contains(l, want["list"]) && slices.Contains(g, want["agents"]), fmt.Sprint(l, g, want)
+		})
+		at := map[string]int{}
+		for _, n := range names {
+			at[n] = len(told(t, log(n)))
+		}
+		return at
+	}
+	// since checks what the program name has been told after at.
+	since := func(step string, at map[string]int, name string, want ...string) {
+		t.Helper()
+		if got := told(t, log(name))[at[name]:]; !slices.Equal(got, want) {
+			t.Errorf("%s: %s was told %v, want %v", step, name, got, want)
+		}
+	}
+	// quiet checks that the program name has heard nothing of the
+	// keyboard after at.
+	quiet := func(step string, at map[string]int, name string) {
+		t.Helper()
+		for _, line := range told(t, log(name))[at[name]:] {
+			if strings.HasPrefix(line, "focus") {
+				t.Errorf("%s: %s was told %v", step, name, told(t, log(name))[at[name]:])
+				return
+			}
+		}
+	}
+	// For a quarter of a second after tmux has passed a resize on to a
+	// pane, it holds any more back, and then passes on only where they
+	// ended. settle has just resized both panes, so a move straight after
+	// it would hide a size that came and went. Nothing shows when the
+	// hold is over, so each move waits it out.
+	move := func(to Pane, w int, focus bool) {
+		t.Helper()
+		time.Sleep(400 * time.Millisecond)
+		if err := s.Move(list, to.ID, strconv.Itoa(w), Carried{Pane: agents.ID, Lines: 6, Focus: focus}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	move(a, 40, false)
+	at := settle(41)
+	h := byID(t, s)[list].H
+
+	// With the keyboard in the list.
+	move(b, 41, false)
+	if ps := byID(t, s); ps[list].Window != b.Window || ps[agents.ID].Window != b.Window || ps[list].H != h || ps[agents.ID].H != 6 {
+		t.Fatalf("the column is list %+v over agents %+v, want it beside %s, the list %d high", ps[list], ps[agents.ID], b.ID, h)
+	}
+	then := settle(42)
+	since("keyboard in the list", at, "list", "focus-out", "focus-in", fmt.Sprintf("size-42x%d", h))
+	since("keyboard in the list", at, "agents", "size-42x6")
+	quiet("keyboard in the list", at, "a")
+	quiet("keyboard in the list", at, "b")
+
+	// With the keyboard in the agents' pane.
+	if err := s.Select(agents.ID); err != nil {
+		t.Fatal(err)
+	}
+	at = settle(43)
+	since("the keyboard goes to the agents' pane", then, "list", "focus-out", fmt.Sprintf("size-43x%d", h))
+	since("the keyboard goes to the agents' pane", then, "agents", "focus-in", "size-43x6")
+	move(a, 43, true)
+	settle(44)
+	since("keyboard in the agents' pane", at, "list", fmt.Sprintf("size-44x%d", h))
+	since("keyboard in the agents' pane", at, "agents", "focus-out", "focus-in", "size-44x6")
+	quiet("keyboard in the agents' pane", at, "a")
+	quiet("keyboard in the agents' pane", at, "b")
+}
+
+// A move that fails halfway leaves none of its empty panes behind:
+// whether it is the swap that fails, with both of them made, or the
+// second of them that has no room, with the first made.
+func TestAMoveThatFailsLeavesNoEmptyPane(t *testing.T) {
+	s := testServer(t)
+	run := must(t)
+	list := strings.TrimSpace(run(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")))
+	agents, err := s.Under(list, 6, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := func() string {
+		return strings.Join(strings.Fields(run(s.run("list-panes", "-a", "-F", "#{pane_id}:#{window_id}:#{pane_width}x#{pane_height}"))), " ")
+	}
+	before := all()
+	// The pane to carry is not there, so the swap fails.
+	if err := s.Move(list, target.ID, "40", Carried{Pane: "%999", Lines: 6}); err == nil {
+		t.Fatal("a move that carries a pane that is not there succeeded")
+	}
+	if after := all(); after != before {
+		t.Fatalf("the swap failed: the panes were %s, and are %s", before, after)
+	}
+	// A window two lines high has room for the column and none to split it.
+	run(s.run("resize-window", "-t", target.Window, "-y", "2"))
+	before = all()
+	if err := s.Move(list, target.ID, "40", Carried{Pane: agents.ID, Lines: 6}); err == nil {
+		t.Fatal("a move into a window with no room for the carried pane succeeded")
+	}
+	if after := all(); after != before {
+		t.Fatalf("the second split failed: the panes were %s, and are %s", before, after)
+	}
+}
+
+// With no pane to carry, the list is joined into its place in one tmux
+// command. With one, the column is made of two empty panes, the second
+// split off whichever the first made, and the two change places with
+// them in one more command, which shows the window and closes the empty
+// panes. The pane with the keyboard is the one made active.
+func TestMoveRunsTheSwapsAsOneCommand(t *testing.T) {
 	var got []string
-	s := Server{run: func(args ...string) (string, error) { got = args; return "", nil }}
+	s := Server{run: func(args ...string) (string, error) {
+		got = append(got, strings.Join(args, " "))
+		if args[0] == "split-window" {
+			return "%8\n%9\n", nil
+		}
+		return "", nil
+	}}
+	cells := "split-window -h -b -f -l 40 -t %5 -P -F #{pane_id}  ; split-window -d -v -l 6 -P -F #{pane_id} "
 	for _, c := range []struct {
 		with Carried
-		want string
+		want []string
 	}{
-		{Carried{}, "join-pane -h -b -f -l 40 -s %0 -t %5"},
-		{Carried{Pane: "%2", Lines: 6}, "join-pane -h -b -f -l 40 -s %0 -t %5 ; join-pane -v -d -l 6 -s %2 -t %0"},
-		{Carried{Pane: "%2", Lines: 6, Focus: true}, "join-pane -d -h -b -f -l 40 -s %0 -t %5 ; join-pane -v -l 6 -s %2 -t %0"},
+		{Carried{}, []string{"join-pane -h -b -f -l 40 -s %0 -t %5"}},
+		{Carried{Pane: "%2", Lines: 6}, []string{cells,
+			"swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; select-pane -t %0 ; select-window -t %0 ; kill-pane -t %8 ; kill-pane -t %9"}},
+		{Carried{Pane: "%2", Lines: 6, Focus: true}, []string{cells,
+			"swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; select-pane -t %2 ; select-window -t %2 ; kill-pane -t %8 ; kill-pane -t %9"}},
 	} {
-		if err := s.Move("%0", "%5", "40", c.with); err != nil || strings.Join(got, " ") != c.want {
-			t.Errorf("Move with %+v ran %q, %v, want %q", c.with, strings.Join(got, " "), err, c.want)
+		got = nil
+		if err := s.Move("%0", "%5", "40", c.with); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("Move with %+v ran %q, %v, want %q", c.with, got, err, c.want)
 		}
 	}
 }
