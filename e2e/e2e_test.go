@@ -30,7 +30,7 @@ func (p pane) ours() bool { return p.list || p.agents }
 
 // The pid comes last: run trims the output, and with it an empty last field.
 const paneFormat = "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_command}\t#{@overview-list}\t#{@overview-holder}\t" +
-	"#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_height}\t#{@overview-agents}\t#{pane_pid}"
+	"#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_height}\t#{@overview-agents}\t#{pane_tty}\t#{pane_pid}"
 
 // server is a private tmux server, addressed by a name that is never
 // overview's own.
@@ -78,12 +78,16 @@ func (s server) panes() []pane {
 	var ps []pane
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 13 {
+		// A pane with no tty is an empty one, which tmux.Move makes for
+		// the length of a move. The view's own listing leaves those out,
+		// and a test that waits for a new pane must not take one for it.
+		// A dead pane keeps its tty, and is listed.
+		if len(f) != 14 || f[12] == "" {
 			continue
 		}
 		n := func(i int) int { v, _ := strconv.Atoi(f[i]); return v }
 		ps = append(ps, pane{id: f[0], window: f[1], session: f[2], command: f[3], list: f[4] == "1", holder: f[5] == "1",
-			left: n(6), top: n(7), w: n(8), h: n(9), winH: n(10), agents: f[11] == "1", pid: n(12)})
+			left: n(6), top: n(7), w: n(8), h: n(9), winH: n(10), agents: f[11] == "1", pid: n(13)})
 	}
 	return ps
 }
@@ -598,9 +602,12 @@ func TestTerminalsAndProjects(t *testing.T) {
 	before = r.ov.panes()
 	r.press("c")
 	started := r.fresh(t, "a session in the pinned project", before, isSleep)
-	if got := r.ov.must("show-options", "-wqv", "-t", started.id, "@overview-project"); got != proj {
-		t.Fatalf("the session's project is %q, want %q", got, proj)
-	}
+	// The view marks the window once the pane is there, in a command of
+	// its own.
+	waitFor(t, "the session's window marked with its project", func() (bool, string) {
+		got := r.ov.must("show-options", "-wqv", "-t", started.id, "@overview-project")
+		return got == proj, got
+	})
 	waitFor(t, "the list beside it", func() (bool, string) { return beside(r.ov.panes(), started.id, 0) })
 
 	// a, then a typed path, pins another project, and the cursor goes to
@@ -818,9 +825,12 @@ func TestWorkstreams(t *testing.T) {
 	before = r.ov.panes()
 	r.press("t")
 	shell := r.fresh(t, "a terminal for the task", before, isShell)
-	if got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-task"); got != r.work+"#6" {
-		t.Fatalf("the terminal's task is %q", got)
-	}
+	// The view marks the window once the pane is there, its project and
+	// then its task, each in a command of its own.
+	waitFor(t, "the terminal's window marked with its task", func() (bool, string) {
+		got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-task")
+		return got == r.work+"#6", got
+	})
 	waitFor(t, "the terminal under the workstream", func() (bool, string) {
 		s := r.screen()
 		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ "), strings.Index(s, "e2e-0")
