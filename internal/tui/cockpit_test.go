@@ -15,8 +15,8 @@ import (
 
 func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	first := paneWithTTY(f, m.in.TTYs[m.ordered()[0].sess.PID])
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
+	first := paneWithTTY(f, m.in.TTYs[rows(m)[0].sess.PID])
 	if !f.staged(first) {
 		t.Fatalf("the list is in %s, want beside %s", f.stage(), first)
 	}
@@ -29,11 +29,11 @@ func TestOOpensTheCockpitZoomedAndEscPutsItBack(t *testing.T) {
 	m = pressSettled(t, m, "j")
 	m, cmd := step(m, listPanes(f, m.deps.roots, m.landed)())
 	m = settle(t, m, cmd)
-	if m.sel != m.ordered()[1].key() || f.stage() != stage || !m.cockpit.open || len(f.moves) != moves {
+	if m.sel != rows(m)[1].key() || f.stage() != stage || !m.cockpit.open || len(f.moves) != moves {
 		t.Fatalf("after j: sel %s, list in %s (was %s), open %v, moves %v", m.sel, f.stage(), stage, m.cockpit.open, f.moves)
 	}
 	m = pressSettled(t, m, "esc")
-	second := paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
+	second := paneWithTTY(f, m.in.TTYs[rows(m)[1].sess.PID])
 	if m.cockpit.open || f.zoomed("%0") || len(f.zooms) != 2 {
 		t.Fatalf("after esc: open %v zoomed %v zooms %v", m.cockpit.open, f.zoomed("%0"), f.zooms)
 	}
@@ -136,7 +136,7 @@ func TestVFromTheCockpitLeavesTheReviewShown(t *testing.T) {
 // the zoom lands on the window the list went to, not the one it left.
 func TestOWhileTheListMovesOpensWhereItLands(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
 	m, move := press(m, "j")
 	if !m.staging {
 		t.Fatal("j started no move")
@@ -146,7 +146,7 @@ func TestOWhileTheListMovesOpensWhereItLands(t *testing.T) {
 		t.Fatalf("o during the move: open %v zooms %v", m.cockpit.open, f.zooms)
 	}
 	m = feed(t, m, cmdMsgs(move))
-	second := paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
+	second := paneWithTTY(f, m.in.TTYs[rows(m)[1].sess.PID])
 	if !m.cockpit.open || !f.staged(second) || !f.zoomed("%0") {
 		t.Fatalf("open %v, list in %s beside %s %v, zoomed %v", m.cockpit.open, f.stage(), second, f.staged(second), f.zoomed("%0"))
 	}
@@ -230,7 +230,7 @@ func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
 // closes the cockpit on the next press.
 func TestEscClearsTheFilterBeforeClosingTheCockpit(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
 	m = pressSettled(t, m, "o")
 	// A filter left applied to the list, as a search that matched
 	// nothing leaves it.
@@ -248,7 +248,7 @@ func TestEscClearsTheFilterBeforeClosingTheCockpit(t *testing.T) {
 // The wheel over the cards scrolls nothing and leaves the list's cursor
 // where it was; over the list it moves the cursor as ever.
 func TestTheWheelOverTheCardsDoesNothing(t *testing.T) {
-	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := newTestModel(t, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
 	m = update(m, tea.WindowSizeMsg{Width: 140, Height: 20})
 	m = pressSettled(t, m, "o")
 	sel := m.sel
@@ -454,7 +454,7 @@ func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 // an open cockpit, so it cannot open one afterwards. Pressing o again, or
 // esc, cancels it too.
 func TestAPendingOIsCancelled(t *testing.T) {
-	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID]) }
+	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.in.TTYs[rows(m)[1].sess.PID]) }
 	for _, c := range []struct {
 		name  string
 		keys  []string
@@ -468,7 +468,7 @@ func TestAPendingOIsCancelled(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeMux()
-			m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+			m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
 			m, move := press(m, "j")
 			if !m.staging {
 				t.Fatal("j started no move")

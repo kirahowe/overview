@@ -201,7 +201,7 @@ func TestTaskPickerKeysAndMouse(t *testing.T) {
 func TestSOnAnUntrackedProjectOnlySays(t *testing.T) {
 	f := newFakeMux()
 	m := selectKey(t, pinnedTasksModel(t, f), "project:/code/plain")
-	if strings.Contains(ansi.Strip(m.footer()), "s task") || !strings.Contains(ansi.Strip(m.View()), "▌+ c claude · t terminal") {
+	if strings.Contains(ansi.Strip(m.footer()), "s task") || !strings.Contains(ansi.Strip(m.View()), "▌/code/plain") || !strings.Contains(ansi.Strip(m.View()), " + c claude · t terminal") {
 		t.Fatalf("an untracked project offers s:\n%s", ansi.Strip(m.View()))
 	}
 	m = pressSettled(t, m, "s")

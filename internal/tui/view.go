@@ -459,6 +459,12 @@ func (m model) plain(s string) string {
 // between them. The title comes first: it is cut only when no note fits,
 // and then it keeps its end, where a project's name is.
 func (m model) rule(title string, style lipgloss.Style, notes ...string) string {
+	return m.ruleLine(title, style, false, notes...)
+}
+
+// ruleLine is rule with the cursor on it when selected, as a project's
+// heading has it.
+func (m model) ruleLine(title string, style lipgloss.Style, selected bool, notes ...string) string {
 	cw := m.contentWidth()
 	tw := ansi.StringWidth(title)
 	note := ""
@@ -475,11 +481,14 @@ func (m model) rule(title string, style lipgloss.Style, notes ...string) string 
 	}
 	title = keepEnd(title, max(room, 1))
 	n := max(room-ansi.StringWidth(title)+1, 0)
-	s := style.Render(title) + " " + fg(pal.Border).Render(strings.Repeat("─", n))
+	// The parts fill the width exactly, so line puts the one space
+	// between the rule and the note.
+	left := []seg{{title, style}, {" " + strings.Repeat("─", n), fg(pal.Border)}}
+	var right []seg
 	if note != "" {
-		s += " " + dim.Render(note)
+		right = []seg{{note, dim}}
 	}
-	return m.plain(s)
+	return m.line(left, right, false, selected)
 }
 
 // notePart is one count in a project's heading: shown of total units.
@@ -634,10 +643,20 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 		if sec.Away {
 			style = dim.Bold(true)
 		}
-		add("", m.rule(sec.Title, style, sectionNotes(sec)...))
-		for j, e := range sec.Entries {
+		es := sec.Entries
+		if len(es) > 0 && es[0].kind == projectEntry {
+			h := es[0]
+			add(h.key(), m.ruleLine(sec.Title, style, h.key() == sel, sectionNotes(sec)...))
+			if h.proj.Empty() {
+				add(h.key(), m.offerLine(h.proj))
+			}
+			es = es[1:]
+		} else {
+			add("", m.rule(sec.Title, style, sectionNotes(sec)...))
+		}
+		for j, e := range es {
 			add(e.key(), m.entryLine(e, e.key() == sel))
-			if e.kind == workstreamEntry && (j+1 == len(sec.Entries) || sec.Entries[j+1].stream != e.stream) {
+			if e.kind == workstreamEntry && (j+1 == len(es) || es[j+1].stream != e.stream) {
 				add(e.key(), m.plain(dim.Render("   no sessions")))
 			}
 		}
@@ -743,6 +762,16 @@ func (m model) stateMark(r fleet.Row) (mark string, markStyle lipgloss.Style, wo
 	return "○", dim, word, m.ago(r.Since), dim
 }
 
+// offerLine is the line under the heading of a pinned project with
+// nothing in it: the keys that start something there.
+func (m model) offerLine(p *world.Project) string {
+	offer := "c claude · t terminal"
+	if p.Tracked {
+		offer = "s task · " + offer
+	}
+	return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, false)
+}
+
 // entryLine renders one entry as one line.
 func (m model) entryLine(e entry, selected bool) string {
 	text := fg(pal.Text)
@@ -775,11 +804,7 @@ func (m model) entryLine(e entry, selected bool) string {
 		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
 		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
 	case projectEntry:
-		offer := "c claude · t terminal"
-		if e.proj.Tracked {
-			offer = "s task · " + offer
-		}
-		return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, selected)
+		return m.ruleLine(e.proj.Name, heading, selected)
 	}
 	r := e.sess
 	mark, markStyle, word, age, wordStyle := m.stateMark(r.Row)
@@ -1210,7 +1235,11 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	case terminalEntry:
 		return slices.Concat(enter, s, []hint{c, t, {"x", "close"}, help})
 	case projectEntry:
-		return slices.Concat(enter, s, []hint{c, t, {"x", "unpin"}, {"a", "add"}, help})
+		var x []hint
+		if e.pin() != "" {
+			x = []hint{{"x", "unpin"}}
+		}
+		return slices.Concat(enter, s, []hint{c, t}, x, []hint{{"a", "add"}, help})
 	}
 	hs := slices.Concat(enter, s, []hint{c, t, {"v", "review"}})
 	if e.sess.Background() {
@@ -1748,7 +1777,11 @@ func (m model) confirmBox() []string {
 		if e.kind == projectEntry && e.key() == m.confirm {
 			// The name keeps its end, which tells one project from another.
 			body := []string{bold.Foreground(pal.Text).Render("Unpin " + keepEnd(e.proj.Name, w-4-len("Unpin ?")) + "?")}
-			body = append(body, wrap(dim.Render("Nothing runs in it, so it leaves the list. a pins it again."), w-4)...)
+			why := "Nothing runs in it, so it leaves the list. a pins it again."
+			if !e.proj.Empty() {
+				why = "It stays in the list while something runs in it. a pins it again."
+			}
+			body = append(body, wrap(dim.Render(why), w-4)...)
 			body = append(body, "", red.Render("y")+dim.Render(" unpin   ")+dim.Render("any other key cancels"))
 			return box("unpin project", "", body, w, len(body)+2, true)
 		}

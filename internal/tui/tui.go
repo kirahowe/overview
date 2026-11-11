@@ -553,8 +553,20 @@ func (m model) selected(es []entry) (entry, int, bool) {
 	if len(es) == 0 {
 		return entry{}, -1, false
 	}
-	return es[0], 0, true
+	i := first(es)
+	return es[i], i, true
 }
+
+// first is where the cursor starts in es: the first entry it lands on,
+// or the first entry when it lands on none.
+func first(es []entry) int {
+	return max(slices.IndexFunc(es, landing), 0)
+}
+
+// landing says whether the cursor lands on e when it is put somewhere
+// rather than moved there: anything but the heading of a project with
+// something under it, which j and k and a click still reach.
+func landing(e entry) bool { return e.kind != projectEntry || e.proj.Empty() }
 
 // printable cleans typed or pasted filter text: tabs become spaces and other
 // control characters, which would have no width and break the layout, go.
@@ -570,14 +582,14 @@ func printable(s string) string {
 	}, s)
 }
 
-// keepSel puts the cursor on the first entry if it is on none that is
-// shown.
+// keepSel puts the cursor where it starts, as first has it, if it is on
+// none that is shown.
 func (m model) keepSel() model {
 	es := m.ordered()
 	if len(es) == 0 || m.shown(m.sel) {
 		return m
 	}
-	m.sel, m.confirm = es[0].key(), ""
+	m.sel, m.confirm = es[first(es)].key(), ""
 	return m
 }
 
@@ -635,15 +647,33 @@ func nearest(old []string, sel string, listed func(string) bool) (string, bool) 
 }
 
 // keepNear applies nearKey across one update, from the model before it,
-// when the entry under the cursor is no longer shown.
+// when the entry under the cursor is no longer shown, and moves it off
+// the heading of a pinned project that had nothing in it and has now, to
+// what started there.
 func (m model) keepNear(before model) model {
+	es := m.ordered()
 	if m.shown(m.sel) {
+		if key, ok := filled(before.ordered(), es, m.sel); ok {
+			m.sel, m.confirm = key, ""
+		}
 		return m
 	}
-	if key, ok := nearKey(before.ordered(), m.ordered(), m.sel); ok {
+	if key, ok := nearKey(before.ordered(), es, m.sel); ok {
 		m.sel, m.confirm = key, ""
 	}
 	return m
+}
+
+// filled is the first entry under the heading sel in now when that
+// heading's project was empty in old and is not in now. ok is false
+// otherwise.
+func filled(old, now []entry, sel string) (string, bool) {
+	at := func(es []entry) int { return slices.IndexFunc(es, func(e entry) bool { return e.key() == sel }) }
+	i, j := at(old), at(now)
+	if i < 0 || j < 0 || old[i].kind != projectEntry || !old[i].proj.Empty() || now[j].proj.Empty() || j+1 >= len(now) {
+		return "", false
+	}
+	return now[j+1].key(), true
 }
 
 // nearKey is where the cursor goes when sel, the key of an entry in old,
@@ -653,11 +683,11 @@ func (m model) keepNear(before model) model {
 // stays with the session it was on. Otherwise it stays in its project,
 // as sameProject finds, and else it is nearest: a cursor on an entry of
 // its own stays among those, out of the agents list, while there are
-// any.
+// any. It lands on a heading only when nothing else is left.
 func nearKey(old, now []entry, sel string) (string, bool) {
-	listed := map[string]bool{}
+	listed, stops := map[string]bool{}, map[string]bool{}
 	for _, e := range now {
-		listed[e.key()] = true
+		listed[e.key()], stops[e.key()] = true, landing(e)
 	}
 	if key, ok := samePlace(old, now, sel); ok {
 		return key, true
@@ -671,20 +701,24 @@ func nearKey(old, now []entry, sel string) (string, bool) {
 		keys = append(keys, e.key())
 		alias[e.key()] = e.alias != ""
 	}
-	key, ok := nearest(keys, sel, func(k string) bool { return listed[k] && (alias[sel] || !alias[k]) })
-	if !ok {
-		key, ok = nearest(keys, sel, func(k string) bool { return listed[k] })
+	for _, ok := range []func(string) bool{
+		func(k string) bool { return stops[k] && (alias[sel] || !alias[k]) },
+		func(k string) bool { return stops[k] },
+		func(k string) bool { return listed[k] },
+	} {
+		if key, found := nearest(keys, sel, ok); found {
+			return key, true
+		}
 	}
-	return key, ok
+	return "", false
 }
 
 // sameProject is where the cursor goes when sel, an entry of old in a
 // project's section, is not in now: to the nearest entry of old in that
 // project still listed, after it and then before it, or else to the
-// first entry now listed in the project. So the last terminal of a
-// pinned project leaves the cursor on the placeholder that takes its
-// place, and a session that starts in a project with only a placeholder
-// takes the cursor from it. An agents alias has no section to stay in.
+// first entry now listed in the project, its heading last. So the last
+// terminal of a pinned project leaves the cursor on its heading. An
+// agents alias has no section to stay in.
 func sameProject(old, now []entry, sel string) (string, bool) {
 	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
 	if i < 0 || old[i].alias == agentsPrefix {
@@ -695,22 +729,27 @@ func sameProject(old, now []entry, sel string) (string, bool) {
 		return "", false
 	}
 	in := func(e entry) bool { return e.alias != agentsPrefix && e.projectName() == name }
-	listed := map[string]bool{}
+	listed, stops := map[string]bool{}, map[string]bool{}
 	for _, e := range now {
 		if in(e) {
-			listed[e.key()] = true
+			listed[e.key()], stops[e.key()] = true, landing(e)
 		}
 	}
 	var keys []string
 	for _, e := range old {
 		keys = append(keys, e.key())
 	}
-	if key, ok := nearest(keys, sel, func(k string) bool { return listed[k] }); ok {
-		return key, true
+	for _, ok := range []func(string) bool{
+		func(k string) bool { return stops[k] },
+		func(k string) bool { return listed[k] },
+	} {
+		if key, found := nearest(keys, sel, ok); found {
+			return key, true
+		}
 	}
-	for _, e := range now {
-		if in(e) {
-			return e.key(), true
+	for _, ok := range []func(entry) bool{func(e entry) bool { return in(e) && landing(e) }, in} {
+		if i := slices.IndexFunc(now, ok); i >= 0 {
+			return now[i].key(), true
 		}
 	}
 	return "", false
@@ -1159,6 +1198,10 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	case move:
 		return m.moveTo(es, i+a.n), nil
 	case moveTo:
+		// g goes where the cursor starts, under the top project's rule.
+		if a.n == 0 {
+			a.n = first(es)
+		}
 		return m.moveTo(es, a.n), nil
 	case nextNeedy:
 		// Wraps round the list.
@@ -1187,7 +1230,8 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		}
 		// New search text puts the cursor on the first match.
 		if m.filter != before {
-			return m.moveTo(m.ordered(), 0), nil
+			es := m.ordered()
+			return m.moveTo(es, first(es)), nil
 		}
 	case cancelSearch:
 		m.filter, m.filtering = "", false
@@ -1230,8 +1274,10 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		switch {
 		case ok && e.kind == terminalEntry:
 			m.confirm = e.key()
-		case ok && e.kind == projectEntry:
+		case ok && e.kind == projectEntry && e.pin() != "":
 			m.confirm = e.key()
+		case ok && e.kind == projectEntry:
+			return m.say("x unpins a pinned project, and " + e.proj.Name + " is not pinned"), nil
 		case ok && e.kind == workstreamEntry:
 			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:
@@ -1453,8 +1499,8 @@ func (m model) toProject(root string) model {
 }
 
 // rootOf is the root of the project an entry belongs to, where c and t
-// start: a session's, a terminal's, or a pinned project's. With nothing
-// selected it is the project overview was started in.
+// start: a session's, a terminal's, or a heading's project's. With
+// nothing selected it is the project overview was started in.
 func (m model) rootOf(e entry, ok bool) string {
 	switch {
 	case !ok:
@@ -1462,7 +1508,7 @@ func (m model) rootOf(e entry, ok bool) string {
 	case e.kind == terminalEntry:
 		return e.term.Root
 	case e.kind == projectEntry:
-		return e.pin()
+		return e.proj.Root
 	case e.stream != nil:
 		return e.stream.Root
 	}
@@ -1540,8 +1586,8 @@ func (k enterKind) does(what string) string {
 // shows beside it, and with nothing under it it opens the cockpit, or in
 // the cockpit says how to start a session. A background session gets an
 // attach pane first. One that runs inside another app brings that app
-// forward, since that is where it is used. A pinned project with nothing
-// in it only says how to start one.
+// forward, since that is where it is used. A project's heading only says
+// how to start something there.
 func (m model) enterOn(e entry) (entry, enterKind) {
 	switch e.kind {
 	case workstreamEntry:
@@ -1612,10 +1658,16 @@ func (m model) enterNote(e entry) string {
 	case workstreamEntry:
 		return "No session works on #" + strconv.Itoa(e.stream.ID) + ". c starts one, t a terminal."
 	case projectEntry:
-		if e.proj.Tracked {
-			return "Nothing runs in " + e.proj.Name + " yet. s starts a task, c Claude, t a terminal."
+		p := e.proj
+		switch {
+		case p.Empty() && p.Tracked:
+			return "Nothing runs in " + p.Name + " yet. s starts a task, c Claude, t a terminal."
+		case p.Empty():
+			return "Nothing runs in " + p.Name + " yet. c starts Claude here, t a terminal."
+		case p.Tracked:
+			return "c starts Claude in " + p.Name + " on no task, s one on a task, t a terminal."
 		}
-		return "Nothing runs in " + e.proj.Name + " yet. c starts Claude here, t a terminal."
+		return "c starts Claude in " + p.Name + ", t a terminal."
 	case terminalEntry:
 		return "terminals open only inside overview's tmux"
 	}

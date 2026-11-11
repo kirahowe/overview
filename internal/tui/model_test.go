@@ -21,6 +21,13 @@ func row(id, name, title string, pid int) fleet.Row {
 	}
 }
 
+// in is r with its cwd in the project at dir, so sessions of different
+// names can share a project and j steps from one to the next.
+func in(dir string, r fleet.Row) fleet.Row {
+	r.Cwd = dir
+	return r
+}
+
 // newTestModel returns a loaded model over rows, with ttys ttys<pid>, and
 // no tmux.
 func newTestModel(t *testing.T, rows ...fleet.Row) model {
@@ -156,7 +163,7 @@ func TestUnhandledKeyWhileFilteringKeepsTheCursor(t *testing.T) {
 		}
 	}
 	m, _ = press(m, "backspace") // the text changed: back to the first match
-	if first := m.ordered()[0].key(); m.sel != first {
+	if first := rows(m)[0].key(); m.sel != first {
 		t.Fatalf("new filter text should select the first match %q, got %q", first, m.sel)
 	}
 }
@@ -236,9 +243,10 @@ func TestSlowSecondClickOnlySelects(t *testing.T) {
 func TestClickOffARowDoesNothing(t *testing.T) {
 	m := newTestModel(t, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
 	before := m.sel
-	// A project's rule, the blank lines above the agents panel, its
-	// rule, and the footer. The rule along the top is tmux's.
-	for _, y := range []int{0, 3, 5, 20, 26, 29} {
+	// The blank line between the projects, those above the agents panel,
+	// its rule, and the footer. A project's rule is its heading, which a
+	// click selects. The rule along the top is tmux's.
+	for _, y := range []int{2, 5, 20, 26, 29} {
 		m, _ = mouseClick(m, 5, y)
 		if m.sel != before {
 			t.Fatalf("click at line %d moved the cursor to %q", y, m.sel)
@@ -252,7 +260,7 @@ func TestClickDoesNotScrollTheList(t *testing.T) {
 	m := newTestModel(t, manyRows(8)...)
 	m = update(m, tea.WindowSizeMsg{Width: 120, Height: 12})
 	m, _ = press(m, "G")
-	for _, e := range m.ordered() {
+	for _, e := range rows(m) {
 		r := e.sess
 		y := screenY(m, r.SessionID)
 		if y < 1 || y+1 > 9 {

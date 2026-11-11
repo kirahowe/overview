@@ -438,15 +438,58 @@ func TestCStartsASessionOnTheTask(t *testing.T) {
 			t.Fatalf("%s: the window has project %q task %q", key, p.Project, p.Task)
 		}
 	}
-	// Elsewhere, c is a plain claude: on s2, and on s1's agents entry,
-	// which sits under no workstream.
-	for _, key := range []string{"s2", "agents/s1"} {
+	// Elsewhere, c is a plain claude: on s2, on s1's agents entry, which
+	// sits under no workstream, and on the project's heading.
+	for _, key := range []string{"s2", "agents/s1", "project:/code/app"} {
 		f := newFakeMux()
 		m := selectKey(t, taskModel(t, f), key)
 		m = pressSettled(t, m, "c")
 		if len(f.spawned) != 1 || len(f.spawned[0].command) != 1 {
 			t.Fatalf("%s: spawned %+v", key, f.spawned)
 		}
+	}
+}
+
+// With every session on a task, the project's heading is where c starts
+// a session on none: a plain claude at the project's root. The heading
+// shows the project's cockpit beside the list, enter says what starts
+// there, and x has nothing to unpin.
+func TestCOnAProjectsHeadingStartsASessionOnNoTask(t *testing.T) {
+	f := newFakeMux()
+	s1, s2 := row("s1", "red", "", 11), row("s2", "blue", "", 12)
+	s1.Cwd, s2.Cwd = "/code/app", "/code/app"
+	s1.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
+	s2.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 4}}
+	m := stagedModel(t, f, s1, s2)
+	m.trackers = trackers{"/code/app": tracked("app",
+		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
+		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"},
+	)}
+	m = m.setInputs(nil)
+	m, cmd := step(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs})
+	m = settle(t, m, cmd)
+	if m.sel == "project:/code/app" {
+		t.Fatal("the cursor starts on the heading, not the first row")
+	}
+	if m = pressSettled(t, m, "j", "g"); m.sel != "task:/code/app#4" {
+		t.Fatalf("g goes to %s, want the first row under the heading", m.sel)
+	}
+	m = pressSettled(t, m, "g", "k")
+	if m.sel != "project:/code/app" || !f.staged("%1") || !strings.Contains(ansi.Strip(m.View()), "▌/code/app ─") {
+		t.Fatalf("g k: sel %s, list in %s\n%s", m.sel, f.stage(), ansi.Strip(m.View()))
+	}
+	if text := ansi.Strip(f.drawn["ttys901"]); !strings.Contains(text, "#4") || !strings.Contains(text, "#6") {
+		t.Fatalf("the holder shows no cockpit cards: %q", text)
+	}
+	if m = pressSettled(t, m, "enter"); len(f.selects) != 0 || m.note != "c starts Claude in /code/app on no task, s one on a task, t a terminal." {
+		t.Fatalf("enter: selects %v, note %q", f.selects, m.note)
+	}
+	if m = pressSettled(t, m, "x"); m.confirm != "" || !strings.Contains(m.note, "not pinned") {
+		t.Fatalf("x: confirm %q, note %q", m.confirm, m.note)
+	}
+	m = pressSettled(t, m, "c")
+	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/app" || len(f.spawned[0].command) != 1 {
+		t.Fatalf("spawned %+v", f.spawned)
 	}
 }
 
@@ -643,7 +686,7 @@ func TestARuleSaysTheIssuesFailed(t *testing.T) {
 	if !strings.Contains(text, "issues failed") || strings.Contains(text, "2 tasks") {
 		t.Fatalf("rule:\n%s", text)
 	}
-	if secs := m.sections(); !secs[0].Failed || len(flatten(secs[:1])) != 4 {
+	if secs := m.sections(); !secs[0].Failed || len(flatten(secs[:1])) != 5 {
 		t.Fatalf("sections %+v: want the failed project with its workstreams", secs)
 	}
 }

@@ -122,7 +122,7 @@ func ids(secs []section) []string {
 	var out []string
 	for _, s := range secs {
 		for _, e := range s.Entries {
-			if !s.Agents && e.alias == "" {
+			if !s.Agents && e.alias == "" && landing(e) {
 				out = append(out, e.key())
 			}
 		}
@@ -578,16 +578,14 @@ func genListWorld(t *rapid.T) *world.World {
 }
 
 // presented is what the World holds that the list shows, in the World's
-// order: each listed project's workstreams, each with its sessions and
-// terminals, and its own sessions and terminals, then the away sessions,
-// then the agents. A session under a workstream that is not its primary
-// one is an alias.
+// order: each listed project's heading, its workstreams, each with its
+// sessions and terminals, and its own sessions and terminals, then the
+// away sessions, then the agents. A session under a workstream that is
+// not its primary one is an alias.
 func presented(w *world.World) []string {
 	var out []string
 	for _, p := range w.Projects {
-		if p.Empty() {
-			out = append(out, "project:"+p.Pins[0])
-		}
+		out = append(out, "project:"+p.Root)
 		for _, st := range p.Streams {
 			out = append(out, "task:"+st.Key.String())
 			for _, s := range st.Sessions {
@@ -698,7 +696,7 @@ func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w, q := genListWorld(t), genQuery(t)
 		for _, e := range flatten(present(w, q)) {
-			if e.kind != projectEntry {
+			if e.kind != projectEntry || !e.proj.Empty() {
 				continue
 			}
 			name := strings.ToLower(e.proj.Name)
@@ -707,6 +705,50 @@ func TestPropSearchShowsPlaceholdersByName(t *testing.T) {
 					t.Fatalf("%q shows the placeholder for %q", q, name)
 				}
 			}
+		}
+	})
+}
+
+// Whatever the search, a project's section starts with its heading, its
+// only one, and the heading of a project with something in it never
+// stands alone.
+func TestPropAProjectsSectionStartsWithItsHeading(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		w, q := genListWorld(t), genQuery(t)
+		for _, sec := range present(w, q) {
+			if sec.Away || sec.Agents {
+				continue
+			}
+			h := sec.Entries[0]
+			if h.kind != projectEntry || h.proj.Name != sec.Title {
+				t.Fatalf("%q: %s starts with %s", q, sec.Title, h.key())
+			}
+			if len(sec.Entries) == 1 && !h.proj.Empty() {
+				t.Fatalf("%q shows %s's heading alone", q, sec.Title)
+			}
+			for _, e := range sec.Entries[1:] {
+				if e.kind == projectEntry {
+					t.Fatalf("%q: %s has a second heading %s", q, sec.Title, e.key())
+				}
+			}
+		}
+	})
+}
+
+// The cursor starts on the first entry it lands on: never the heading of
+// a project with something in it while any other entry is listed.
+func TestPropTheCursorStartsOffHeadings(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		es := flatten(present(genListWorld(t), genQuery(t)))
+		if len(es) == 0 {
+			return
+		}
+		i := first(es)
+		if j := slices.IndexFunc(es, landing); j >= 0 && i != j {
+			t.Fatalf("starts at %d (%s), want %d (%s)", i, es[i].key(), j, es[j].key())
+		}
+		if !landing(es[i]) && slices.ContainsFunc(es, landing) {
+			t.Fatalf("starts on the heading %s", es[i].key())
 		}
 	})
 }
@@ -1084,9 +1126,9 @@ func parsedIssues(t *rapid.T, list []issues.Issue) []issues.Issue {
 	return out
 }
 
-// j from the top visits every entry once, aliases and workstreams too, and
-// n only ever stops at a session's own entry that needs you or at a
-// workstream in review.
+// j from the top, which g and k reach, visits every entry once,
+// aliases, workstreams and headings too, and n only ever stops at a
+// session's own entry that needs you or at a workstream in review.
 func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
@@ -1098,7 +1140,7 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 		m = m.setInputs(nil)
 		m = update(m, rowsMsg{rows: rows, ttys: ttys})
 		es := m.ordered()
-		m, _ = press(m, "g")
+		m, _ = press(m, "g", "k")
 		var visited []string
 		for range len(es) + 2 {
 			if len(visited) == 0 || visited[len(visited)-1] != m.sel {

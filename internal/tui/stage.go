@@ -808,6 +808,11 @@ func (m model) holderText(w, h int) string {
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
+	case e.kind == projectEntry && !e.proj.Empty(), idleStream(es, e):
+		// No session to show: the cockpit's cards, where o goes, or
+		// enter on a workstream.
+		cards, _, _ := layoutCards(m.cockpitRows(m.target()), w, h, "")
+		return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(cards, "\r\n")
 	case e.kind == projectEntry:
 		hint := ". c starts Claude here, t a terminal, x unpins it."
 		if e.proj.Tracked {
@@ -816,10 +821,6 @@ func (m model) holderText(w, h int) string {
 		lines = wrap(dim.Render("No sessions in "+e.proj.Name+hint), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
-	case idleStream(es, e):
-		// No session to show: the cockpit's cards, where enter goes.
-		cards, _, _ := layoutCards(m.cockpitRows(m.target()), w, h, "")
-		return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(cards, "\r\n")
 	case e.kind == workstreamEntry:
 		lines = m.workstreamLines(e, cw)
 	default:

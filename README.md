@@ -87,7 +87,12 @@ many of each it shows, zero included, as `0 of 3 tasks · 1 of 2 sessions`,
 and the footer counts the matches,
 each session once even when it is listed twice. When the pane is narrow
 the counts give way before the name: first all but the first count go,
-then its unit, as `1/3`, then the count itself. A project is
+then its unit, as `1/3`, then the count itself. The rule is an entry
+the cursor reaches with `j`, `k` and a click, and on it `c` and `t`
+start a session or a terminal at the project's root on no task, `s`
+picks a task, and `o` opens the project's cockpit, whose cards show
+beside the list. The cursor lands on a rule only when you move it there
+or nothing else in the project is left. A project is
 the nearest parent directory with a `.jj` or `.git` in it, or the session's
 own directory when there is none, and projects are in alphabetical order.
 Every entry takes one line. Inside a project, sessions are listed newest
@@ -103,9 +108,10 @@ plugin's chat panel, has no terminal. Unless it works on a task, it goes
 in a section of its own, "in other apps", dimmed and named after the app
 that runs it. When the entry under the cursor goes away, the cursor moves
 to the one after it in its project, or to the one before it when it was
-last. When nothing it was beside is left, it goes to the first entry
-now in the project: the placeholder of a pinned project that has
-emptied, or the session that took a placeholder's place.
+last, and it skips the projects' rules. When nothing it was beside is
+left, it goes to the first entry now in the project: the rule of a
+pinned project that has emptied, or the session that started in a
+pinned project that had nothing in it.
 
 The agents are a panel of their own, under the projects. They hold every
 session in the list once more, in order of priority: those that need you
@@ -292,7 +298,8 @@ nothing typed by mistake reaches a session. The
 cockpit has no panels mode, since it fills the window.
 
 In the list, `j`/`k` move, and walk on from the projects into the agents.
-`g` and `G` go to the first and last entry. `n` jumps to the next session
+`g` goes to the first entry under the top project's rule, and `G` to the
+last entry. `n` jumps to the next session
 that needs you or workstream in review, `N` to the previous one, and `/`
 searches. Search looks at the project,
 title, last prompt and name, and the app's name for a session in another
@@ -327,7 +334,8 @@ session's changes, as the next section describes. `c` starts a new session
 at the root of the selected entry's project, or where overview was started
 when the list is empty, shows it on the right and moves the keyboard into
 it. On a workstream, or on anything under one, the new session's first
-prompt is `Work on <project>#<n>: <title>`, so it works on that issue. `t`
+prompt is `Work on <project>#<n>: <title>`, so it works on that issue.
+On the project's rule it has no prompt and works on no task. `t`
 does the same with a terminal, and a terminal opened on a workstream is
 listed under it. `d` shows the digests, and `1` and `2` go to the list and the digests
 directly. There `[` and `]`, or `h` and `l`, step through older ones,
@@ -357,10 +365,10 @@ that directory's project. When the project cannot be added, the picker
 comes back with what you typed, and the footer says why. `esc` closes the
 picker. A note in the footer that names a long directory cuts the
 directory from its left before its message. A
-pinned project stays in the list when nothing runs in it, on a row of its
-own that offers `c` and `t`, and either starts something in it. In a
-project that tracks its tasks the row offers `s` too. `x` on that row asks
-to unpin the project, and `y` does it. The pinned projects are kept in `<home>/overview/projects`.
+pinned project stays in the list when nothing runs in it, with a line
+under its rule that offers `c` and `t`, and either starts something in
+it. In a project that tracks its tasks the line offers `s` too. `x` on
+the rule of a pinned project asks to unpin it, and `y` does it. The pinned projects are kept in `<home>/overview/projects`.
 
 `s` starts work on one of a project's tasks. On any entry of a project
 that tracks its tasks, a picker takes the list's place and lists the

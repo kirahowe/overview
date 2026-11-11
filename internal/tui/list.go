@@ -38,7 +38,7 @@ type entryKind int
 const (
 	sessionEntry    entryKind = iota
 	terminalEntry             // a window of plain shells, or a dev server
-	projectEntry              // a pinned project with nothing in it yet
+	projectEntry              // a project's heading
 	workstreamEntry           // an issue that is being worked on
 )
 
@@ -49,8 +49,8 @@ const (
 )
 
 // entry is one thing the cursor can be on: a Claude session, a terminal,
-// the placeholder of an empty pinned project, or a workstream. It points
-// into the World the list was presented from.
+// a project's heading, or a workstream. It points into the World the list
+// was presented from.
 //
 // A session can be listed more than once: under each workstream it is
 // linked to, and in the agents list. Its primary entry, under the
@@ -69,16 +69,16 @@ type entry struct {
 }
 
 // key names an entry for the cursor and for clicks, across refreshes: a
-// session's id, a terminal's window ("@7"), "project:" and the pinned
-// directory, or "task:" and the workstream's key. A session's alias puts
+// session's id, a terminal's window ("@7"), "project:" and the project's
+// root, or "task:" and the workstream's key. A session's alias puts
 // its placement and a slash before its id: "task:/w/app#6/<id>" or
-// "agents/<id>".
+// "agents/<id>". A project's heading is "project:" and its root.
 func (e entry) key() string {
 	switch e.kind {
 	case terminalEntry:
 		return e.term.Window
 	case projectEntry:
-		return "project:" + e.pin()
+		return "project:" + e.proj.Root
 	case workstreamEntry:
 		return taskPrefix + e.task()
 	}
@@ -91,7 +91,8 @@ func (e entry) key() string {
 	return e.sess.SessionID
 }
 
-// pin is a placeholder's pinned directory, which x unpins.
+// pin is a heading's pinned directory, which x unpins, "" when the
+// project is not pinned.
 func (e entry) pin() string {
 	if e.proj == nil || len(e.proj.Pins) == 0 {
 		return ""
@@ -184,12 +185,13 @@ func issueRef(id string, i issues.Issue) string {
 // so the list is the World's order. The renderer, the cursor, n/N and
 // the header all read it.
 //
-// Each of the World's projects is a section: its workstreams, each with
-// the sessions and terminals under it, then its own sessions and
-// terminals. A pinned project with nothing in it is a placeholder, which
-// the query matches on the project's name. Then come the sessions other
-// apps run, and last the agents list: every session shown above, once,
-// in the World's order.
+// Each of the World's projects is a section: its heading, then its
+// workstreams, each with the sessions and terminals under it, then its
+// own sessions and terminals. The heading is shown with anything else the
+// section shows, and a pinned project with nothing in it has only its
+// heading, which the query matches on the project's name. Then come the
+// sessions other apps run, and last the agents list: every session shown
+// above, once, in the World's order.
 //
 // A workstream matches the query on its ref, number, title and project
 // name, and is shown when it or anything under it matches. When it
@@ -254,6 +256,7 @@ func present(w *world.World, query string) []section {
 			}
 		}
 		if len(sec.Entries) > 0 {
+			sec.Entries = append([]entry{{kind: projectEntry, proj: p}}, sec.Entries...)
 			out = append(out, sec)
 		}
 	}
@@ -308,7 +311,8 @@ func matchFields(terms []string, fields ...string) bool {
 // matches counts what a search shows, each session once, though it may
 // be listed under several workstreams and in the agents list too. A
 // workstream's row counts only when nothing is shown under it, since
-// otherwise it heads what was found.
+// otherwise it heads what was found, and a project's heading only when
+// the project is empty, for the same reason.
 func matches(secs []section) int {
 	seen := map[string]bool{}
 	es := flatten(secs)
@@ -316,6 +320,8 @@ func matches(secs []section) int {
 		k := e.key()
 		switch {
 		case e.kind == workstreamEntry && i+1 < len(es) && es[i+1].stream == e.stream:
+			continue
+		case e.kind == projectEntry && !e.proj.Empty():
 			continue
 		case e.sess != nil:
 			k = e.sess.SessionID

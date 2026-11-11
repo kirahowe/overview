@@ -86,6 +86,17 @@ func (s server) panes() []pane {
 
 // waitFor polls until cond holds, failing with what it last said. It is
 // tmuxtest.Wait, so every wait in the repo has the same generous deadline.
+// selectedLine is the line of screen s with the cursor's bar on it, ""
+// for none.
+func selectedLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, "▌") {
+			return l
+		}
+	}
+	return ""
+}
+
 func waitFor(t *testing.T, what string, cond func() (bool, string)) {
 	t.Helper()
 	tmuxtest.Wait(t, what, cond)
@@ -584,7 +595,7 @@ func TestTerminalsAndProjects(t *testing.T) {
 	waitFor(t, "its placeholder, selected, with the holder", func() (bool, string) {
 		s := r.screen()
 		ok, say := beside(r.ov.panes(), r.holder, 0)
-		return ok && strings.Count(s, "+ c claude · t terminal") == 1 && strings.Contains(s, "zother") && strings.Contains(s, "▌+ c claude · t terminal"), say + "\n" + s
+		return ok && strings.Count(s, "+ c claude · t terminal") == 1 && strings.Contains(selectedLine(s), "zother"), say + "\n" + s
 	})
 }
 
@@ -805,7 +816,7 @@ func TestWorkstreams(t *testing.T) {
 	r.press("Enter")
 	waitFor(t, "the placeholder selected", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(s, "▌+ s task · c claude · t terminal"), s
+		return strings.Contains(selectedLine(s), "zbacklog"), s
 	})
 	// The picker zooms the list's pane and shows the selected issue's
 	// details beside its rows.

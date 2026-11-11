@@ -493,6 +493,18 @@ func stagedModel(t testing.TB, f *fakeMux, rows ...fleet.Row) model {
 	return settle(t, m, cmd)
 }
 
+// rows are the entries of m's list that are not a project's heading,
+// as most tests count them.
+func rows(m model) []entry {
+	var out []entry
+	for _, e := range m.ordered() {
+		if e.kind != projectEntry {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // tester is what settle needs from *testing.T and *rapid.T alike.
 type tester interface {
 	Helper()
@@ -552,13 +564,13 @@ func paneWithTTY(f *fakeMux, tty string) string {
 
 func TestTheStageFollowsTheCursor(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
-	want := paneWithTTY(f, m.in.TTYs[m.ordered()[0].sess.PID])
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
+	want := paneWithTTY(f, m.in.TTYs[rows(m)[0].sess.PID])
 	if !f.staged(want) || m.windowOf(m.self) != f.stage() {
 		t.Fatalf("the list is in %s (model %s), want the selected session's %s", f.stage(), m.windowOf(m.self), want)
 	}
 	m = pressSettled(t, m, "j")
-	want = paneWithTTY(f, m.in.TTYs[m.ordered()[1].sess.PID])
+	want = paneWithTTY(f, m.in.TTYs[rows(m)[1].sess.PID])
 	if !f.staged(want) || f.inWindow(f.stage()) != 2 {
 		t.Fatalf("after j the list is in %s, want %s's window alone", f.stage(), want)
 	}
@@ -1241,7 +1253,7 @@ func TestTOpensATerminalThatTheCursorTakes(t *testing.T) {
 	// It is listed under its project, after the session, and not in the
 	// agents list.
 	secs := m.sections()
-	if len(secs) != 2 || len(secs[0].Entries) != 2 || secs[0].Entries[1].key() != shell.Window || len(secs[1].Entries) != 1 {
+	if len(secs) != 2 || len(secs[0].Entries) != 3 || secs[0].Entries[2].key() != shell.Window || len(secs[1].Entries) != 1 {
 		t.Fatalf("sections %+v", secs)
 	}
 	// Back to it later, enter goes to the split used last, beside the list.
@@ -1307,7 +1319,7 @@ func TestClosingATerminalSelectsTheNextEntry(t *testing.T) {
 // A session that ends leaves the cursor on its neighbour, not the top.
 func TestAnEndedSessionSelectsTheNextEntry(t *testing.T) {
 	f := newFakeMux()
-	a, b, c := row("s1", "a", "", 11), row("s2", "b", "", 12), row("s3", "c", "", 13)
+	a, b, c := row("s1", "a", "", 11), in("/w/a", row("s2", "b", "", 12)), in("/w/a", row("s3", "c", "", 13))
 	m := stagedModel(t, f, a, b, c)
 	m = pressSettled(t, m, "j")
 	if m.sel != "s2" {
@@ -1426,14 +1438,14 @@ func TestTInAPinnedProjectAdoptsItsTerminal(t *testing.T) {
 	if len(f.spawned) != 1 || f.spawned[0].dir != "/code/empty" || e.kind != terminalEntry || e.term.Root != "/code/empty" {
 		t.Fatalf("spawned %+v, sel %+v", f.spawned, e)
 	}
-	if m.shown("project:/code/empty") {
-		t.Fatal("the placeholder stayed beside the terminal")
+	if !m.shown("project:/code/empty") || strings.Contains(ansi.Strip(m.View()), "c claude · t terminal") {
+		t.Fatal("the heading went, or its offer stayed beside the terminal")
 	}
 }
 
-// Closing the only terminal of a pinned project leaves the cursor on the
-// placeholder that takes its place, not on another project's entry, so
-// a second x does not reach into that project.
+// Closing the only terminal of a pinned project leaves the cursor on its
+// heading, not on another project's entry, so a second x does not reach
+// into that project.
 func TestClosingAPinnedProjectsLastTerminalKeepsTheCursorThere(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f)
@@ -1443,20 +1455,20 @@ func TestClosingAPinnedProjectsLastTerminalKeepsTheCursorThere(t *testing.T) {
 	beta := m.sel
 	m = pressSettled(t, selectKey(t, m, "project:/code/gamma"), "t")
 	gamma := m.sel
-	if gamma == beta || m.shown("project:/code/gamma") {
+	if gamma == beta {
 		t.Fatalf("sel %s, beta's terminal %s", gamma, beta)
 	}
 	m = pressSettled(t, m, "x", "y")
 	if m.sel != "project:/code/gamma" {
-		t.Fatalf("sel %s after closing %s, want gamma's placeholder", m.sel, gamma)
+		t.Fatalf("sel %s after closing %s, want gamma's heading", m.sel, gamma)
 	}
 	if m = pressSettled(t, m, "x"); m.confirm != "project:/code/gamma" || !strings.Contains(ansi.Strip(m.View()), "Unpin /code/gamma?") {
 		t.Fatalf("a second x asks about %q, want to unpin gamma", m.confirm)
 	}
 }
 
-// A session that starts in a pinned project with only its placeholder
-// takes the cursor from the placeholder, so it stays in that project.
+// A session that starts in a pinned project with nothing in it takes the
+// cursor from the project's heading, so it stays in that project.
 func TestASessionStartingInAPinnedProjectTakesItsPlaceholdersCursor(t *testing.T) {
 	f := newFakeMux()
 	m := stagedModel(t, f)
@@ -1527,7 +1539,7 @@ func TestClaudeTypedInATerminalKeepsTheList(t *testing.T) {
 // the list while the user types in it.
 func TestANewSessionIDKeepsTheListWhileTyping(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
 	m = blurred(t, pressSettled(t, m, "j"))
 	cur, moves := f.stage(), len(f.moves)
 	rows := slices.Clone(m.in.Rows)
@@ -1558,7 +1570,7 @@ func TestASessionInAnotherOverviewSessionGetsTheHolder(t *testing.T) {
 	m := stagedModel(t, f, row("s1", "red", "auth", 11))
 	f.add("overview-other", "ttys777")
 	ttys := map[int]string{11: m.in.TTYs[11], 22: "ttys777"}
-	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), row("s2", "zzz", "x", 22)), ttys: ttys})
+	m, cmd := step(m, rowsMsg{rows: append(slices.Clone(m.in.Rows), in("/w/red", row("s2", "zzz", "x", 22))), ttys: ttys})
 	m = settle(t, m, cmd)
 	m = pressSettled(t, m, "j")
 	if m.sel != "s2" || f.panes[f.find("%0")].Session != "ov" || !f.staged("%1") {
@@ -1578,7 +1590,7 @@ func TestALateAttachDoesNotTakeTheKeyboard(t *testing.T) {
 	m := stagedModel(t, f, bg, row("s1", "red", "auth", 11))
 	m = pressSettled(t, m, "g")
 	m, spawned := press(m, "enter")
-	m = pressSettled(t, m, "j")
+	m = pressSettled(t, m, "j", "j")
 	m = settle(t, m, spawned)
 	if len(f.spawned) != 1 || len(f.selects) != 0 || !f.staged(paneWithTTY(f, "ttys011")) {
 		t.Fatalf("spawned %d, selects %v, list in %s", len(f.spawned), f.selects, f.stage())
@@ -1685,7 +1697,7 @@ func TestAClickWhileBlurredSelects(t *testing.T) {
 // or when the keyboard comes back to the list, which shows it again.
 func TestASearchLostWhileTypingKeepsTheListOnReturn(t *testing.T) {
 	f := newFakeMux()
-	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "auth", 12))
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "auth", 12)))
 	m = pressSettled(t, m, "/", "a", "u", "t", "h", "esc", "j")
 	m.filter = "auth"
 	m = blurred(t, m)
