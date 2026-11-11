@@ -1594,6 +1594,10 @@ func helpSections() (left, right []helpSection) {
 			e("t", "new terminal for it"),
 			e("m", "approve, send back or drop it"),
 		}},
+		{"on a project", []helpEntry{
+			e("c", "new session on no task"),
+			e("t", "new terminal in project"),
+		}},
 		{"cockpit", []helpEntry{
 			e("o", "open the cockpit"),
 			in(cockpitMode, "o esc", "close the cockpit"),
