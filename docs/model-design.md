@@ -360,6 +360,18 @@ The model holds three kinds of state, and nothing else:
    projects that left the World, and `readTrackers` asks for the
    World's `Trackers` when the count has moved since it last asked.
 
+The refresh and the listing of tmux's panes come from ticks instead,
+every two seconds and twice a second. A tick starts one only when the
+last has landed. A machine too slow to finish a read between ticks then
+has one out at a time, where it would otherwise gather `claude`, `ps`
+and `tmux` processes, each of which slows the next. A refresh that `r`
+or a finished action asks for while one is out starts when that one
+lands, since the one out may have read the sessions too early.
+`claude agents --json` and `ps` are each given 30 seconds and then
+killed, so a read that hangs fails and the next tick asks again. A
+refresh that cannot read the process table fails as a whole, and the
+World keeps what the last one found.
+
 Nothing in steps 2 to 4 changes inputs, so one message makes one World.
 Before step 1, `Update` reads the clock once into `m.now`, and every
 step stamps what it needs with that: a note, a click, a tracker read.

@@ -88,6 +88,13 @@ type model struct {
 	trackers                 trackers
 	reading                  map[string]bool
 	refreshes, trackersAsked int
+	// refreshing says a refresh is out, and refreshOwed that something the
+	// user did asked for another meanwhile, which starts when the one out
+	// lands. listing says a listing of tmux's panes that a tick asked for
+	// is out. A tick starts neither while one is out. On a machine too
+	// slow to finish one between ticks they would pile up, each a claude
+	// and a ps, or a tmux, and slow it further.
+	refreshing, refreshOwed, listing bool
 
 	// in holds the sources' latest values, unjoined: the rows, ttys,
 	// hosts, panes, pins, roots and trackers. Only setInputs changes it,
@@ -448,17 +455,22 @@ func (m model) showDigest(i int) tea.Cmd {
 	}
 }
 
+// Init starts the ticks, each with one that comes at once. The first
+// refresh and the first listing of the panes are then asked for as every
+// later one is, so no more than one of each is ever out.
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.refresh, tick(), nextFrame(), m.listDigests(true)}
+	cmds := []tea.Cmd{tickIn(0), nextFrame(), m.listDigests(true)}
 	if m.mux != nil {
 		// The first listing also starts a holder when there is none.
-		cmds = append(cmds, listPanes(m.mux, m.deps.roots, m.landed), panesEveryTick())
+		cmds = append(cmds, panesTickIn(0))
 	}
 	return tea.Batch(cmds...)
 }
 
-func tick() tea.Cmd {
-	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return tickMsg(t) })
+func tick() tea.Cmd { return tickIn(refreshEvery) }
+
+func tickIn(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func nextFrame() tea.Cmd {
@@ -470,9 +482,28 @@ func (m model) refresh() tea.Msg {
 	if err != nil {
 		return rowsMsg{err: err}
 	}
-	out, _ := m.deps.psTable()
+	// Without the process table no session has a terminal, and the list
+	// would leave every one of them for the holder. A refresh that fails
+	// keeps what the last one found.
+	out, err := m.deps.psTable()
+	if err != nil {
+		return rowsMsg{err: err}
+	}
 	ttys, hosts := places(parseProcs(string(out)), rows)
 	return m.rowsMsg(rows, ttys, hosts, m.home.Projects())
+}
+
+// askRefresh starts a refresh, unless one is out. due says the refresh is
+// to show something that has just changed. The one that is out may have
+// read it too early, so another then follows it. A tick's is not due: the
+// next tick asks again.
+func (m model) askRefresh(due bool) (model, tea.Cmd) {
+	if m.refreshing {
+		m.refreshOwed = m.refreshOwed || due
+		return m, nil
+	}
+	m.refreshing = true
+	return m, m.refresh
 }
 
 // rowsMsg is a refresh of rows, with the roots of the directories it
@@ -1052,7 +1083,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.noteAt.IsZero() && time.Time(msg).Sub(m.noteAt) > noteFor {
 			m.note = ""
 		}
-		return m, tea.Batch(m.refresh, tick(), m.listDigests(false))
+		m, refresh := m.askRefresh(false)
+		return m, tea.Batch(refresh, tick(), m.listDigests(false))
 	case digestsMsg:
 		// The orchestrator publishes digests on its own schedule. Follow the
 		// newest one unless the reader has gone back to an older one.
@@ -1073,7 +1105,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case issueReadMsg, changesReadMsg:
 		m = m.landRead(msg)
 	case rowsMsg:
-		return m.landRows(msg), nil
+		m = m.landRows(msg)
+		m.refreshing = false
+		if m.refreshOwed {
+			m.refreshOwed = false
+			return m.askRefresh(false)
+		}
+		return m, nil
 	case trackerMsg:
 		m = m.landTracker(msg)
 	case verdictMsg:
@@ -1127,7 +1165,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.note != "" {
 			m = m.say(msg.note)
 		}
-		return m, m.refresh
+		return m.askRefresh(true)
 	}
 	return m, nil
 }
@@ -1258,7 +1296,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.digesting = true
 		return m, m.runDigest // the footer says so while it runs
 	case refresh:
-		return m, m.refresh
+		return m.askRefresh(true)
 	case move, moveTo:
 		// The cursor stays on its side of the list while the agents have
 		// a pane of their own.

@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -44,11 +45,30 @@ func (h Home) claude(args ...string) *exec.Cmd {
 	return cmd
 }
 
+// liveWithin is how long Live gives `claude agents --json`, which answers
+// in about a tenth of a second. One that has not by then is stuck, as it
+// is while the keychain it reads does not answer, and is killed, so that
+// whoever asked can ask again.
+const liveWithin = 30 * time.Second
+
 // Live asks Claude Code which sessions are running under this home.
 // `claude agents --json` is the supported listing; the files behind it are
 // internal and change between versions.
-func (h Home) Live() ([]Live, error) {
-	out, err := h.claude("agents", "--json").Output()
+func (h Home) Live() ([]Live, error) { return h.liveIn(liveWithin) }
+
+// liveIn is Live with a time limit of its own.
+func (h Home) liveIn(limit time.Duration) ([]Live, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.Claude, "agents", "--json")
+	cmd.Env = append(os.Environ(), h.ClaudeEnv())
+	// What claude started may hold its output open after it is killed:
+	// stop waiting for that soon after.
+	cmd.WaitDelay = limit / 10
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		err = fmt.Errorf("timed out after %v", limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("claude agents --json: %w", err)
 	}

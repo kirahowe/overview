@@ -325,6 +325,26 @@ func TestSaveSessionCleansUpWhenRenameFails(t *testing.T) {
 	}
 }
 
+// A claude that does not answer is killed when its time is up, and Live
+// does not wait for what it started, which may still hold its output
+// open.
+func TestLiveGivesUpOnAClaudeThatDoesNotAnswer(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "claude")
+	// The sleep outlives the shell that started it, and has its output.
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nsleep 5 &\nwait\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err := Home{Dir: dir, Claude: fake}.liveIn(300 * time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Live gave %v, want it to time out", err)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("Live took %v to give up on a claude given 300ms", took)
+	}
+}
+
 // A digest run is overview's own, so it must not record itself through the
 // hook: it starts with every hook off, from its own arguments.
 func TestRunDigestTurnsHooksOff(t *testing.T) {

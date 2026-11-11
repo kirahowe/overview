@@ -148,8 +148,10 @@ func SessionName(home fleet.Home) string {
 	return "overview-" + strings.NewReplacer(".", "_", ":", "_").Replace(home.Name())
 }
 
-func panesEveryTick() tea.Cmd {
-	return tea.Tick(panesEvery, func(t time.Time) tea.Msg { return panesTick(t) })
+func panesEveryTick() tea.Cmd { return panesTickIn(panesEvery) }
+
+func panesTickIn(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg { return panesTick(t) })
 }
 
 func listPanes(mux multiplexer, find func(...string) roots, gen int) tea.Cmd {
@@ -620,8 +622,14 @@ func movedSelf(panes, listing []tmux.Pane, self string) []tmux.Pane {
 func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case panesTick:
+		// One listing at a time: see model.listing.
+		if m.listing {
+			return m, panesEveryTick()
+		}
+		m.listing = true
 		return m, tea.Batch(listPanes(m.mux, m.deps.roots, m.landed), panesEveryTick())
 	case panesMsg:
+		m.listing = false
 		if msg.err != nil {
 			return m.say(msg.err.Error()), nil
 		}

@@ -144,14 +144,15 @@ func (m model) landVerdict(msg verdictMsg) (model, tea.Cmd) {
 	}
 	if v.kind != issues.Changes {
 		word := map[string]string{"approve": "approved", "done": "closed", "reject": "rejected", "drop": "dropped"}
-		return m.say(word[verdictWord(v.kind, v.issue.Status)] + " " + v.ref), m.refresh
+		return m.say(word[verdictWord(v.kind, v.issue.Status)] + " " + v.ref).askRefresh(true)
 	}
 	var out tea.Cmd
 	if m.cockpit.open {
 		m, out = m.closeCockpit()
 	}
 	m, cmd := m.startChanges(v.root, v.issue, v.note)
-	return m, tea.Batch(out, cmd, m.refresh)
+	m, refresh := m.askRefresh(true)
+	return m, tea.Batch(out, cmd, refresh)
 }
 
 // changesPrompt is the opening prompt of a session on changes asked for

@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"overview/internal/fleet"
 	"overview/internal/world"
@@ -15,9 +18,23 @@ import (
 // also ends the walk on a cycle.
 const maxHops = 12
 
+// psWithin is how long psTable gives ps, which answers in a few
+// hundredths of a second. One that has not by then is stuck and is killed,
+// so that the refresh it is part of ends and the next can start.
+const psWithin = 30 * time.Second
+
 // psTable lists every process as `pid ppid tty comm`.
 func psTable() ([]byte, error) {
-	return exec.Command("ps", "-A", "-o", "pid=,ppid=,tty=,comm=").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), psWithin)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,tty=,comm=").Output()
+	switch {
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("ps: timed out after %v", psWithin)
+	case err != nil:
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	return out, nil
 }
 
 // proc is one line of the process table.
