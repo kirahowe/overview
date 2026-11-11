@@ -68,6 +68,18 @@ pane, and nothing has to pretend.
   arrives in one of the two panes the cursor goes to that side, to the
   same session's entry there when it was on a session (`across`), so the
   stage does not move because the focus did.
+- The cursor's session is marked wherever else it is listed, which is
+  mostly on the side the cursor is not on. `echoes` lists the session's
+  other entries, and each is drawn with the cursor's background behind a
+  thinner bar in the border's colour. A side with no cursor scrolls to
+  the first of them (`marks.at`), which is the entry `across` would put
+  the cursor on, so the row is on the screen before the keyboard gets
+  there. The agents are in priority order and under no project's
+  heading, so the mark is what shows where one of them is in the list
+  while the keyboard stays where it is. The accent still says where the
+  keys are: only the cursor's own bar takes it, in the pane that has the
+  keyboard. The echo's bar is another character, so the two differ on a
+  terminal with no colours, and a test can find the cursor by its bar.
 - The list's pane draws the agents itself, as it used to, whenever the
   pane is not showing them (`apart` is false): before the pane's program
   has connected, in a window too short for it, and while the cockpit or
@@ -115,8 +127,9 @@ plain flag, `cockpit.issues`. The other cards only show.
 
 The view reads whether a client of its session is in the mode as it
 lists the panes, and right away when it puts one there. While the mode
-is on and its pane is focused, the cursor's row has no background, so a
-row with a background still means j and k move it. While the mode is
+is on and its pane is focused, the cursor's row has no background, and
+neither has a row that echoes it, so a row with a background still means
+j and k move the cursor. While the mode is
 on, whichever pane has the focus, the footer starts with "panels" and
 shows the mode's keys, `ctrl+[ list` among them, since the list's pane
 is where the user looks for the way back.

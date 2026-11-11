@@ -139,7 +139,7 @@ func TestTheCursorRowKeepsItsColours(t *testing.T) {
 	t.Cleanup(func() { lipgloss.SetColorProfile(was) })
 	m := workModel(t, 44, 28)
 	left := []seg{{"! ", red}, {"name", fg(pal.Text)}}
-	line := m.line(left, []seg{{"blocked", red}}, false, true)
+	line := m.line(left, []seg{{"blocked", red}}, false, cursorRow)
 	bg := lipgloss.NewStyle().Background(pal.CursorDimBg).Render("x")
 	bgCode := bg[:strings.Index(bg, "x")]
 	for _, part := range []string{
@@ -156,11 +156,58 @@ func TestTheCursorRowKeepsItsColours(t *testing.T) {
 		t.Errorf("row %q", line)
 	}
 	m.blurred = true
-	if line := m.line(left, nil, false, true); !strings.Contains(line, fg(pal.Border).Render("▌")) {
+	if line := m.line(left, nil, false, cursorRow); !strings.Contains(line, fg(pal.Border).Render("▌")) {
 		t.Errorf("blurred bar: %q", line)
 	}
-	if line := m.line(left, nil, false, false); strings.Contains(line, "▌") || strings.Contains(line, bgCode) {
+	if line := m.line(left, nil, false, unmarked); strings.Contains(line, "▌") || strings.Contains(line, bgCode) {
 		t.Errorf("a row without the cursor: %q", line)
+	}
+}
+
+// A row that echoes the cursor has the cursor's background behind a
+// thinner bar, which is never the accent's: that says where the keys are.
+// It keeps its parts' colours as the cursor's row does, and loses its
+// background with it in the panels mode.
+func TestAnEchoRowIsQuieterThanTheCursors(t *testing.T) {
+	was := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(was) })
+	m := workModel(t, 44, 28)
+	left := []seg{{"! ", red}, {"name", fg(pal.Text)}}
+	bg := lipgloss.NewStyle().Background(pal.CursorDimBg).Render("x")
+	bgCode := bg[:strings.Index(bg, "x")]
+	accent := fg(pal.CursorBg).Render("x")
+	accentCode := accent[:strings.Index(accent, "x")]
+	for _, c := range []struct {
+		what          string
+		set           func(*model)
+		band, lit, on bool // the rows' background, the cursor's accent, and whether the keys move the cursor
+	}{
+		{"with the keys in this pane", func(*model) {}, true, true, true},
+		{"with the keys in the view's other pane", func(m *model) { m.other = true }, true, false, true},
+		{"with the keys in a session's pane", func(m *model) { m.blurred = true }, true, false, false},
+		{"in the panels mode", func(m *model) { m.panels = true }, false, false, false},
+	} {
+		m := m
+		c.set(&m)
+		cursor, echo := m.line(left, []seg{{"blocked", red}}, false, cursorRow), m.line(left, []seg{{"blocked", red}}, false, echoRow)
+		if got := m.cursorHasKeys(); got != c.on {
+			t.Errorf("%s: the keys move the cursor %v, want %v", c.what, got, c.on)
+		}
+		if !strings.HasPrefix(echo, fg(pal.Border).Render("▎")) || strings.Contains(echo, "▌") || strings.Contains(echo, accentCode) {
+			t.Errorf("%s: the echo's bar: %q", c.what, echo)
+		}
+		if strings.Contains(cursor, "▎") || strings.Contains(cursor, accentCode) != c.lit {
+			t.Errorf("%s: the cursor's bar, lit %v: %q", c.what, c.lit, cursor)
+		}
+		for _, row := range []string{cursor, echo} {
+			if got := strings.Contains(row, bgCode); got != c.band || ansi.StringWidth(row) != 44 {
+				t.Errorf("%s: a row with a background %v, want %v: %q", c.what, got, c.band, row)
+			}
+		}
+		if c.band && !strings.Contains(echo, red.Background(pal.CursorDimBg).Render("! ")) {
+			t.Errorf("%s: the echo lost a part's colour: %q", c.what, echo)
+		}
 	}
 }
 
@@ -215,7 +262,7 @@ func TestTheFooterDropsWholeHints(t *testing.T) {
 
 func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 	m := workModel(t, 44, 12)
-	col := m.listView(m.sections(), m.sel)
+	col := m.listView(m.sections(), m.marked(m.sections()))
 	lines := col.lines
 	i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), "── agents ──") })
 	if i != col.rule || col.agentsH < 1 || col.projH+1+col.agentsH != m.listHeight() || len(col.owners) != len(lines) {
@@ -575,7 +622,7 @@ func TestNarrowRowsKeepTheirNames(t *testing.T) {
 		{entry{kind: sessionEntry, sess: s, alias: agentsPrefix}, "? fix-parse… …rk/alpha"},
 		{entry{kind: workstreamEntry, stream: st}, "#7 Digest sche… review"},
 	} {
-		if got := strings.TrimSpace(ansi.Strip(m.entryLine(c.e, false))); got != c.want {
+		if got := strings.TrimSpace(ansi.Strip(m.entryLine(c.e, unmarked))); got != c.want {
 			t.Errorf("%q, want %q", got, c.want)
 		}
 	}
@@ -591,7 +638,7 @@ func TestASessionRowShowsItsTitle(t *testing.T) {
 		r := row("s", "home-opds-4c", "", 1)
 		r.Title = c.title
 		s := &world.Session{Row: r, Project: &world.Project{Name: "home-opds"}}
-		got := ansi.Strip(m.entryLine(entry{kind: sessionEntry, sess: s}, false))
+		got := ansi.Strip(m.entryLine(entry{kind: sessionEntry, sess: s}, unmarked))
 		if !strings.Contains(got, c.want) || c.title != "" && strings.Contains(got, "home-opds-4c") {
 			t.Errorf("title %q: %q, want %q in place of the name", c.title, got, c.want)
 		}

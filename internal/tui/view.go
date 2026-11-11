@@ -78,7 +78,7 @@ func (m model) View() string {
 		return ""
 	}
 	apart := m.apart()
-	// While the keyboard is in the agents' pane, no row here is lit.
+	// While the keyboard is in the agents' pane, no bar here is lit.
 	m.other = apart && m.inAgents
 	var body []string
 	switch {
@@ -116,8 +116,7 @@ func (m model) sessionsView() []string {
 		return lines
 	}
 	secs := m.sections()
-	e, _, _ := m.selected(flatten(secs))
-	return m.listView(secs, e.key()).lines
+	return m.listView(secs, m.marked(secs)).lines
 }
 
 // pickerView is the add-project picker in the list's place: the query,
@@ -151,7 +150,7 @@ func (m model) pickerView() []string {
 		start := window(0, sel, sel+1, len(matches), room)
 		for i := start; i < min(start+room, len(matches)); i++ {
 			// A long directory keeps its end, as a project's heading does.
-			lines = append(lines, m.line([]seg{{"  " + keepEnd(m.short(matches[i]), w-2), fg(pal.Text)}}, nil, false, i == m.pick.sel))
+			lines = append(lines, m.line([]seg{{"  " + keepEnd(m.short(matches[i]), w-2), fg(pal.Text)}}, nil, false, cursorIf(i == m.pick.sel)))
 		}
 	}
 	return lines
@@ -314,9 +313,9 @@ func (m model) taskLines(r taskRow, selected bool) []string {
 	if tw > 0 {
 		title = wrap(i.Title, tw)
 	}
-	out := []string{m.line([]seg{{num, dim}, {title[0], fg(pal.Text)}}, right, false, selected)}
+	out := []string{m.line([]seg{{num, dim}, {title[0], fg(pal.Text)}}, right, false, cursorIf(selected))}
 	for _, t := range title[1:] {
-		out = append(out, m.line([]seg{{strings.Repeat(" ", nw), dim}, {t, fg(pal.Text)}}, nil, false, selected))
+		out = append(out, m.line([]seg{{strings.Repeat(" ", nw), dim}, {t, fg(pal.Text)}}, nil, false, cursorIf(selected)))
 	}
 	return out
 }
@@ -394,14 +393,45 @@ func cutSegs(ss []seg, w int) []seg {
 	return out
 }
 
+// rowMark is how a line of the list is marked.
+type rowMark int
+
+const (
+	unmarked rowMark = iota
+	// cursorRow is the cursor's own line.
+	cursorRow
+	// echoRow is a line that shows the cursor's session somewhere the
+	// cursor is not: among the agents while the cursor is in the list,
+	// in the list while it is among the agents, or under another of the
+	// session's workstreams.
+	echoRow
+)
+
+// cursorIf is the cursor's mark when selected, for a line that echoes
+// nothing.
+func cursorIf(selected bool) rowMark {
+	if selected {
+		return cursorRow
+	}
+	return unmarked
+}
+
+// The bars in a marked line's first column. An echo's is thinner, so the
+// two are told apart without their colours.
+const (
+	cursorBar = "▌"
+	echoBar   = "▎"
+)
+
 // line renders one line of the list: left at the left edge and right at
 // the right one, cut to fit. A right side that does not fit beside at
 // least a few cells of the left goes, unless shrink lets it lose its
 // start instead, as a directory can. A right side that shrinks gives way
 // to the whole left first, so a terminal keeps its name and loses its
 // directory, and the name is cut only once the directory has gone. The
-// selected line gets the cursor's bar and background.
-func (m model) line(left, right []seg, shrink, selected bool) string {
+// cursor's line gets its bar and a background, and a line that echoes it
+// the same background behind a thinner bar.
+func (m model) line(left, right []seg, shrink bool, mark rowMark) string {
 	cw := m.contentWidth()
 	lw, rw := segsWidth(left), segsWidth(right)
 	if rw > 0 {
@@ -430,17 +460,22 @@ func (m model) line(left, right []seg, shrink, selected bool) string {
 	gap := max(cw-segsWidth(left)-rw, 0)
 	bg := func(st lipgloss.Style) lipgloss.Style { return st }
 	bar := " "
-	if selected {
-		// In the panels mode, or in the issues card, the row loses its
-		// background, so a lit row always means the keys move it.
-		if m.blurred || m.listHasKeys() {
+	if mark != unmarked {
+		// In the panels mode, or in the issues card, the rows lose their
+		// background, so a lit row always means the keys move the cursor.
+		if m.blurred || m.cursorHasKeys() {
 			bg = func(st lipgloss.Style) lipgloss.Style { return st.Background(pal.CursorDimBg) }
 		}
-		edge := pal.CursorBg
-		if !m.listHasKeys() {
-			edge = pal.Border
+		// Only the cursor's own bar takes the accent, and only where the
+		// keys are.
+		switch {
+		case mark == echoRow:
+			bar = fg(pal.Border).Render(echoBar)
+		case m.listHasKeys():
+			bar = fg(pal.CursorBg).Render(cursorBar)
+		default:
+			bar = fg(pal.Border).Render(cursorBar)
 		}
-		bar = fg(edge).Render("▌")
 	}
 	var b strings.Builder
 	b.WriteString(bar)
@@ -499,7 +534,7 @@ func (m model) ruleLine(title string, style lipgloss.Style, selected bool, notes
 	if note != "" {
 		right = []seg{{note, dim}}
 	}
-	return m.line(left, right, false, selected)
+	return m.line(left, right, false, cursorIf(selected))
 }
 
 // notePart is one count in a project's heading: shown of total units.
@@ -615,10 +650,53 @@ func countOf(k, n int, unit string) string {
 	return s
 }
 
+// marks says which lines of the list are marked: the cursor's entry, by
+// its key, and the entries that echo it, as echoes lists them.
+type marks struct {
+	sel  string
+	echo []string
+}
+
+// marked is how the lines of secs are marked with the cursor where it is.
+func (m model) marked(secs []section) marks {
+	es := flatten(secs)
+	e, i, _ := m.selected(es)
+	return marks{sel: e.key(), echo: echoes(es, i)}
+}
+
+// of is the mark of the line of the entry key.
+func (k marks) of(key string) rowMark {
+	switch {
+	case key == "":
+		return unmarked
+	case key == k.sel:
+		return cursorRow
+	case slices.Contains(k.echo, key):
+		return echoRow
+	}
+	return unmarked
+}
+
+// at is the entry that a part of the list scrolls to, of those whose
+// lines owners names: the cursor's, or with the cursor in another part
+// the first that echoes it, so the session under the cursor shows in both
+// parts. It is "" when the part has neither.
+func (k marks) at(owners []string) string {
+	if slices.Contains(owners, k.sel) {
+		return k.sel
+	}
+	for _, key := range k.echo {
+		if slices.Contains(owners, key) {
+			return key
+		}
+	}
+	return ""
+}
+
 // projectLines renders the projects, unscrolled, with the key of the
 // entry each line belongs to ("" for headings, gaps and messages). Clicks
 // read the owners.
-func (m model) projectLines(secs []section, sel string) (lines, owners []string) {
+func (m model) projectLines(secs []section, mk marks) (lines, owners []string) {
 	add := func(owner string, ls ...string) {
 		lines = append(lines, ls...)
 		for range ls {
@@ -657,7 +735,7 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 		es := sec.Entries
 		if len(es) > 0 && es[0].kind == projectEntry {
 			h := es[0]
-			add(h.key(), m.ruleLine(sec.Title, style, h.key() == sel, sectionNotes(sec)...))
+			add(h.key(), m.ruleLine(sec.Title, style, h.key() == mk.sel, sectionNotes(sec)...))
 			if h.proj.Empty() {
 				add(h.key(), m.offerLine(h.proj))
 			}
@@ -666,7 +744,7 @@ func (m model) projectLines(secs []section, sel string) (lines, owners []string)
 			add("", m.rule(sec.Title, style, sectionNotes(sec)...))
 		}
 		for j, e := range es {
-			add(e.key(), m.entryLine(e, e.key() == sel))
+			add(e.key(), m.entryLine(e, mk.of(e.key())))
 			if e.kind == workstreamEntry && (j+1 == len(es) || es[j+1].stream != e.stream) {
 				add(e.key(), m.plain(dim.Render("   no sessions")))
 			}
@@ -687,8 +765,9 @@ func agentEntries(secs []section) []entry {
 
 // column is the list as its pane shows it, h lines: the projects, then,
 // when there are sessions, the agents panel, a rule and its lines. Each
-// part scrolls on its own, as little as its cursor needs, from projTop
-// and agentsTop. owners holds the key of each line's entry, "" for
+// part scrolls on its own from projTop and agentsTop, as little as it
+// takes to show the cursor's line, or the line that echoes it in the part
+// the cursor is not in. owners holds the key of each line's entry, "" for
 // others, and rule the line of the agents panel's rule, -1 for none.
 // While the agents have a pane of their own, the column is the projects
 // alone, and agentsTop says how far that pane has scrolled.
@@ -699,21 +778,21 @@ type column struct {
 	rule               int
 }
 
-// column lays the list out in h lines, with sel under the cursor.
-func (m model) column(secs []section, sel string, h int) column {
-	plines, powners := m.projectLines(secs, sel)
+// column lays the list out in h lines, marked as mk says.
+func (m model) column(secs []section, mk marks, h int) column {
+	plines, powners := m.projectLines(secs, mk)
 	apart := m.apart()
 	var alines, aowners []string
 	for _, e := range agentEntries(secs) {
 		aowners = append(aowners, e.key())
 		if !apart {
-			alines = append(alines, m.entryLine(e, e.key() == sel))
+			alines = append(alines, m.entryLine(e, mk.of(e.key())))
 		}
 	}
 	c := column{rule: -1}
 	c.projH, c.agentsH = splitList(len(plines), len(alines), h)
-	c.projTop = scrollTo(m.listTop, powners, sel, c.projH)
-	c.agentsTop = scrollTo(m.agentsTop, aowners, sel, c.agentsH)
+	c.projTop = scrollTo(m.listTop, powners, mk.at(powners), c.projH)
+	c.agentsTop = scrollTo(m.agentsTop, aowners, mk.at(aowners), c.agentsH)
 	show := func(lines, owners []string, top, n int) {
 		end := min(top+n, len(lines))
 		c.lines, c.owners = append(c.lines, lines[top:end]...), append(c.owners, owners[top:end]...)
@@ -723,7 +802,7 @@ func (m model) column(secs []section, sel string, h int) column {
 	}
 	show(plines, powners, c.projTop, c.projH)
 	if apart {
-		_, _, c.agentsTop = m.agentsBody(secs, sel)
+		_, _, c.agentsTop = m.agentsBody(secs, mk)
 		return c
 	}
 	if c.agentsH > 0 {
@@ -735,7 +814,8 @@ func (m model) column(secs []section, sel string, h int) column {
 }
 
 // scrollTo is the first of owners' lines shown in h: top, moved just
-// enough to show the lines of sel whole, when they are there.
+// enough to show the lines of sel whole, when they are there. With no
+// such line it is the first.
 func scrollTo(top int, owners []string, sel string, h int) int {
 	selTop, selBottom := 0, 0
 	for i, o := range owners {
@@ -761,8 +841,8 @@ func window(top, selTop, selBottom, n, h int) int {
 }
 
 // listView is the list as its pane shows it.
-func (m model) listView(secs []section, sel string) column {
-	return m.column(secs, sel, m.listHeight())
+func (m model) listView(secs []section, mk marks) column {
+	return m.column(secs, mk, m.listHeight())
 }
 
 // stateMark is how a session's state shows: its mark and the mark's
@@ -790,11 +870,11 @@ func (m model) offerLine(p *world.Project) string {
 	if p.Tracked {
 		offer = "s task · " + offer
 	}
-	return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, false)
+	return m.line([]seg{{"+ ", dim}, {offer, dim}}, nil, false, unmarked)
 }
 
-// entryLine renders one entry as one line.
-func (m model) entryLine(e entry, selected bool) string {
+// entryLine renders one entry as one line, marked as how says.
+func (m model) entryLine(e entry, how rowMark) string {
 	text := fg(pal.Text)
 	indent := []seg{}
 	if e.stream != nil && e.kind != workstreamEntry {
@@ -820,12 +900,12 @@ func (m model) entryLine(e entry, selected bool) string {
 		if len(right) > 0 {
 			right[len(right)-1].text = strings.TrimSuffix(right[len(right)-1].text, " ")
 		}
-		return m.line(left, m.fitRight(left, full, right, nil), false, selected)
+		return m.line(left, m.fitRight(left, full, right, nil), false, how)
 	case terminalEntry:
 		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
-		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, selected)
+		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, how)
 	case projectEntry:
-		return m.ruleLine(e.proj.Name, heading, selected)
+		return m.ruleLine(e.proj.Name, heading, how == cursorRow)
 	}
 	r := e.sess
 	mark, markStyle, word, age, wordStyle := m.stateMark(r.Row)
@@ -874,7 +954,7 @@ func (m model) entryLine(e entry, selected bool) string {
 			[]seg{{word, wordStyle}},
 			nil)
 	}
-	return m.line(left, right, false, selected)
+	return m.line(left, right, false, how)
 }
 
 // nameMin is the fewest cells of a row's name, or a workstream's title,

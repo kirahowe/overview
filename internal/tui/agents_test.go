@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"overview/internal/fleet"
 	"overview/internal/tmux"
+	"overview/internal/world"
 )
 
 // screens are the screens the view sent the agents' pane, in order.
@@ -179,6 +181,147 @@ func TestTheCursorKeepsToItsSide(t *testing.T) {
 	m = fromPane(t, m, tea.FocusMsg{}, tea.BlurMsg{})
 	if !m.blurred || m.inAgents {
 		t.Fatalf("the keyboard left the pane: blurred %v inAgents %v", m.blurred, m.inAgents)
+	}
+}
+
+// The echoes of an entry are the other entries of its session, the
+// session's own before those under its other workstreams and among the
+// agents, and from a workstream they are every entry of its lead. What is
+// listed once has none.
+func TestEchoes(t *testing.T) {
+	a, b := &world.Stream{Key: world.Key{Root: "/w/app", ID: 1}}, &world.Stream{Key: world.Key{Root: "/w/app", ID: 2}}
+	both := &world.Session{Row: row("s", "app", "", 1), Streams: []*world.Stream{a, b}} // b is its primary
+	lone := &world.Session{Row: row("o", "app", "", 2)}
+	es := []entry{
+		{kind: projectEntry, proj: &world.Project{Root: "/w/app"}},
+		{kind: workstreamEntry, stream: a},
+		{kind: sessionEntry, sess: both, stream: a, alias: taskPrefix + a.Key.String()},
+		{kind: workstreamEntry, stream: b},
+		{kind: sessionEntry, sess: both, stream: b},
+		{kind: sessionEntry, sess: lone},
+		{kind: terminalEntry, term: &world.Terminal{Window: "@9"}},
+		{kind: sessionEntry, sess: both, alias: agentsPrefix},
+		{kind: sessionEntry, sess: lone, alias: agentsPrefix},
+	}
+	under, own, agent := es[2].key(), es[4].key(), es[7].key()
+	for _, c := range []struct {
+		what string
+		i    int
+		want []string
+	}{
+		{"a project's heading", 0, nil},
+		{"a workstream", 1, []string{own, under, agent}},
+		{"a session under another of its workstreams", 2, []string{own, agent}},
+		{"a session's own entry", 4, []string{under, agent}},
+		{"a session listed twice", 5, []string{es[8].key()}},
+		{"a terminal", 6, nil},
+		{"a session among the agents", 7, []string{own, under}},
+		{"no entry", -1, nil},
+		{"an entry past the end", len(es), nil},
+	} {
+		if got := echoes(es, c.i); !slices.Equal(got, c.want) {
+			t.Errorf("the echoes of %s are %v, want %v", c.what, got, c.want)
+		}
+	}
+}
+
+// markedLines are the lines of a screen that start with bar.
+func markedLines(screen []string, bar string) []string {
+	var out []string
+	for _, l := range screen {
+		if strings.HasPrefix(l, bar) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// The session under the cursor is marked in both panes: the cursor's bar
+// in the one that has the keyboard, and a thinner bar on that session's
+// row in the other. The two move together whichever pane the keys are
+// typed in, and an entry that is no session has no second row to mark.
+func TestTheCursorsSessionIsMarkedInBothPanes(t *testing.T) {
+	f := newFakeMux()
+	m, s := agentsModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	list, _ := m.pane(m.self)
+	m = resized(t, m, list.W, list.H)
+	// one says that just one of lines is there, and that it names the
+	// session.
+	one := func(lines []string, name string) bool { return len(lines) == 1 && strings.Contains(lines[0], name) }
+	check := func(what, name string, inAgents bool) {
+		t.Helper()
+		with, without := screenText(m), s.last()
+		if inAgents {
+			with, without = without, with
+		}
+		if !one(markedLines(with, cursorBar), name) || len(markedLines(with, echoBar)) != 0 {
+			t.Fatalf("%s: the pane with the keyboard marks\n%s", what, strings.Join(with, "\n"))
+		}
+		if !one(markedLines(without, echoBar), name) || len(markedLines(without, cursorBar)) != 0 {
+			t.Fatalf("%s: the other pane marks\n%s", what, strings.Join(without, "\n"))
+		}
+	}
+	m = pressSettled(t, m, "G")
+	check("G in the list", "auth", false)
+	m = pressSettled(t, m, "g")
+	check("g in the list", "billing", false)
+
+	m = fromPane(t, m, tea.FocusMsg{})
+	check("the keyboard in the agents' pane", "billing", true)
+	on := m.sel
+	if m = fromPane(t, m, keyMsg("j")); m.sel == on {
+		m = fromPane(t, m, keyMsg("k"))
+	}
+	check("the cursor moved among the agents", "auth", true)
+
+	m, cmd := step(m, tea.FocusMsg{})
+	m = settle(t, m, cmd)
+	check("back in the list", "auth", false)
+
+	// A project's heading is listed once.
+	m = pressSettled(t, m, "k")
+	if e, _, _ := m.selected(m.ordered()); e.kind != projectEntry {
+		t.Fatalf("k went to %s, want the heading above", m.sel)
+	}
+	if got := append(markedLines(screenText(m), echoBar), markedLines(s.last(), echoBar)...); len(got) != 0 {
+		t.Fatalf("with the cursor on a heading, an echo is marked:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// Each of the two panes scrolls to the row it marks. With more sessions
+// than either shows, every session the cursor reaches in one pane is
+// marked on the screen of the other.
+func TestTheOtherPaneScrollsToTheCursorsSession(t *testing.T) {
+	f := newFakeMux()
+	var rows []fleet.Row
+	for i := range 20 {
+		n := fmt.Sprintf("%02d", i)
+		rows = append(rows, row("s"+n, "p"+n, "task-"+n, 11+i))
+	}
+	m, s := agentsModel(t, f, rows...)
+	list, _ := m.pane(m.self)
+	m = resized(t, m, list.W, list.H)
+	projects, _ := m.projectLines(m.sections(), marks{})
+	if agents := agentsPaneOf(f); len(projects) <= list.H || len(rows) <= agents.H-1 {
+		t.Fatalf("the panes show everything: %d lines of projects in %d, %d agents in %d", len(projects), list.H, len(rows), agents.H-1)
+	}
+	name := func() string {
+		e, _, _ := m.selected(m.ordered())
+		return e.sess.Title
+	}
+	for range rows {
+		if got := markedLines(s.last(), echoBar); len(got) != 1 || !strings.Contains(got[0], name()) {
+			t.Fatalf("with the cursor on %s in the list, the agents' pane marks %q:\n%s", name(), got, strings.Join(s.last(), "\n"))
+		}
+		// To the next session, past the heading between them.
+		m = pressSettled(t, m, "j", "j")
+	}
+	m = fromPane(t, m, tea.FocusMsg{}, keyMsg("g"))
+	for range rows {
+		if got := markedLines(screenText(m), echoBar); len(got) != 1 || !strings.Contains(got[0], name()) {
+			t.Fatalf("with the cursor on %s among the agents, the list's pane marks %q:\n%s", name(), got, strings.Join(screenText(m), "\n"))
+		}
+		m = fromPane(t, m, keyMsg("j"))
 	}
 }
 

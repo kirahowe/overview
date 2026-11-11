@@ -1204,8 +1204,10 @@ func TestAnEndedSessionLeavesTheListItsWidth(t *testing.T) {
 // keyboard into it and back, and so does the panels mode. In it j and k
 // move the cursor among the agents, the list's column follows the cursor
 // into another session's window with the keyboard still in that pane, and
-// going back up leaves the cursor on the same session. The cockpit zooms
-// the list over it and gives it back. It closes with the last session.
+// going back up leaves the cursor on the same session. All the while the
+// pane without the cursor marks the row of the cursor's session with a
+// thinner bar. The cockpit zooms the list over the agents' pane and gives
+// it back. It closes with the last session.
 func TestTheAgentsPane(t *testing.T) {
 	r := launch(t, "a")
 	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
@@ -1250,9 +1252,48 @@ func TestTheAgentsPane(t *testing.T) {
 	}
 	// shown is the session whose window the list's column is in.
 	shown := func() string { return sessionBeside(r.ov.panes()) }
+	// named is the session a line names, "" for neither.
+	named := func(line string) string {
+		for i := range sessions {
+			if n := fmt.Sprintf("e2e-%d", i); strings.Contains(line, n) {
+				return n
+			}
+		}
+		return ""
+	}
+	// marks are the sessions a pane's screen marks, by the name each has
+	// there: the one under the cursor's bar, and the one under the
+	// thinner bar that echoes a cursor in the other pane.
+	marks := func(screen string) (cursor, echo string) {
+		for _, l := range strings.Split(screen, "\n") {
+			switch {
+			case strings.HasPrefix(l, "▌"):
+				cursor = named(l)
+			case strings.HasPrefix(l, "▎"):
+				echo = named(l)
+			}
+		}
+		return cursor, echo
+	}
+	// echoed waits until the pane with the keyboard has the cursor on a
+	// session and the other pane marks that session's row and no cursor.
+	echoed := func(what string, inAgents bool) {
+		t.Helper()
+		waitFor(t, what+", the same session marked in both panes", func() (bool, string) {
+			with, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+			without := r.agentsScreen()
+			if inAgents {
+				with, without = without, with
+			}
+			cursor, stray := marks(with)
+			none, echo := marks(without)
+			return cursor != "" && echo == cursor && stray == "" && none == "", with + "\n" + without
+		})
+	}
 	waitFor(t, "the keys in the list, and no cursor among the agents", func() (bool, string) {
 		return r.active() == r.list.id && row() == "", r.active() + " " + row()
 	})
+	echoed("the keys in the list", false)
 	was := shown()
 
 	// tmux's own key for the pane below: the keyboard goes to the
@@ -1265,6 +1306,7 @@ func TestTheAgentsPane(t *testing.T) {
 	if got := shown(); got != was {
 		t.Fatalf("going down to the agents moved the list from %s to %s", was, got)
 	}
+	echoed("the keys in the agents' pane", true)
 
 	// j and k move the cursor among the agents. The column follows it to
 	// the other session's window, and the keyboard stays in the pane.
@@ -1284,6 +1326,7 @@ func TestTheAgentsPane(t *testing.T) {
 		ok, say := beside(r.ov.panes(), other, 0)
 		return ok && row() != on && r.active() == agents.id, say + ", active " + r.active() + ", row " + row()
 	})
+	echoed("the cursor moved among the agents", true)
 	// At the end of the agents the cursor stops: it does not walk on
 	// into the list.
 	r.typed(key, key, key)
@@ -1311,6 +1354,7 @@ func TestTheAgentsPane(t *testing.T) {
 		ok, say := beside(r.ov.panes(), other, 0)
 		return ok && r.active() == r.list.id && row() == "" && r.cursor() != "", say + ", active " + r.active() + ", cursor " + r.cursor()
 	})
+	echoed("the keys back in the list", false)
 
 	// The cockpit zooms the list over the agents' pane and draws them
 	// itself, and closing it gives the pane back.

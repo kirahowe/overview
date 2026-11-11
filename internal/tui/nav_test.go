@@ -176,7 +176,7 @@ func TestThePanelsLookApartFromTheList(t *testing.T) {
 	leads := func(s string) bool {
 		return strings.Contains(strings.ReplaceAll(ansi.Strip(s), "esc panels", ""), "panels")
 	}
-	in, row := m.footer(), m.line(text, nil, false, true)
+	in, row := m.footer(), m.line(text, nil, false, cursorRow)
 	m.panels = true
 	out := m.footer()
 	if leads(in) || !leads(out) {
@@ -189,7 +189,7 @@ func TestThePanelsLookApartFromTheList(t *testing.T) {
 	m.note = ""
 	bg := lipgloss.NewStyle().Background(pal.CursorDimBg).Render("x")
 	bgCode := bg[:strings.Index(bg, "x")]
-	if bare := m.line(text, nil, false, true); !strings.Contains(row, bgCode) || strings.Contains(bare, bgCode) {
+	if bare := m.line(text, nil, false, cursorRow); !strings.Contains(row, bgCode) || strings.Contains(bare, bgCode) {
 		t.Fatalf("the cursor's row in the list %q, in the mode %q", row, bare)
 	}
 }

@@ -51,11 +51,15 @@ func splitList(p, a, h int) (proj, agents int) {
 // shows the mode's keys and not the list's.
 func (m model) inPanels() bool { return m.panels }
 
-// listHasKeys says whether the keys move the list's cursor: the keyboard
-// is in the view and not in the panels mode or the cockpit's issues card.
-// For a copy of the model that draws one of the view's two panes, it is
-// in that pane and not the other.
-func (m model) listHasKeys() bool { return !m.blurred && !m.panels && !m.inIssues() && !m.other }
+// cursorHasKeys says whether the keys move the list's cursor: the
+// keyboard is in one of the view's two panes, and not in the panels mode
+// or the cockpit's issues card.
+func (m model) cursorHasKeys() bool { return !m.blurred && !m.panels && !m.inIssues() }
+
+// listHasKeys says whether the keys are in the pane being drawn: they
+// move the cursor, and for a copy of the model that draws one of the
+// view's two panes, the keyboard is in that pane and not the other.
+func (m model) listHasKeys() bool { return m.cursorHasKeys() && !m.other }
 
 // inIssues says whether the keys move the cockpit's issues card's cursor.
 func (m model) inIssues() bool { return m.cockpit.open && m.cockpit.issues }

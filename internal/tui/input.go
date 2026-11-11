@@ -404,11 +404,11 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time, agents bool) []actio
 // shownColumn is the list's column as the screen shows it, where clicks land.
 func (m model) shownColumn() column {
 	secs := m.sections()
-	cur, _, _ := m.selected(flatten(secs))
+	mk := m.marked(secs)
 	if m.cockpit.open {
 		lm := m
 		lm.w = cockpitListWidth(m.width.want, m.w)
-		return lm.column(secs, cur.key(), m.listHeight()-1)
+		return lm.column(secs, mk, m.listHeight()-1)
 	}
-	return m.column(secs, cur.key(), m.listHeight())
+	return m.column(secs, mk, m.listHeight())
 }

@@ -2008,7 +2008,7 @@ func TestPropATerminalKeepsItsNameBeforeItsDirectory(t *testing.T) {
 		name := rapid.StringMatching(`[a-z][a-z 0-9]{0,30}`).Draw(t, "name")
 		dir := rapid.StringMatching(`[A-Z]{1,8}(/[a-z0-9-]{1,20}){1,5}`).Draw(t, "dir")
 		text := fg(pal.Text)
-		row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {name, text}}, []seg{{dir, dim}}, true, false))
+		row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {name, text}}, []seg{{dir, dim}}, true, unmarked))
 		if ansi.StringWidth(row) != w {
 			t.Fatalf("the row %q is %d wide in %d", row, ansi.StringWidth(row), w)
 		}
@@ -2029,7 +2029,7 @@ func TestATerminalRowKeepsItsName(t *testing.T) {
 	m := newTestModel(t)
 	m = update(m, tea.WindowSizeMsg{Width: 40, Height: 10})
 	dir := "/private/tmp/claude-501/30e99375-3942-48f0/work/beta"
-	row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {"sleep 600", fg(pal.Text)}}, []seg{{dir, dim}}, true, false))
+	row := ansi.Strip(m.line([]seg{{"$ ", codeFg}, {"sleep 600", fg(pal.Text)}}, []seg{{dir, dim}}, true, unmarked))
 	if !strings.Contains(row, "$ sleep 600 ") || !strings.HasSuffix(strings.TrimSpace(row), "/work/beta") {
 		t.Fatalf("row %q", row)
 	}
@@ -2170,7 +2170,7 @@ func TestPropRowsKeepTheirNamesReadable(t *testing.T) {
 			Review: review.Summary{Open: rapid.IntRange(0, 3).Draw(t, "open"), Waiting: rapid.IntRange(0, 1).Draw(t, "waiting")}}
 		alias := rapid.SampledFrom([]string{"", agentsPrefix}).Draw(t, "alias")
 		e := entry{kind: sessionEntry, sess: s, alias: alias}
-		line := ansi.Strip(m.entryLine(e, false))
+		line := ansi.Strip(m.entryLine(e, unmarked))
 		if ansi.StringWidth(line) > m.w {
 			t.Fatalf("%q is wider than %d", line, m.w)
 		}
@@ -2327,6 +2327,123 @@ func TestPropSideIsTheCursorsOwn(t *testing.T) {
 		for j, e := range es {
 			if in, same := j >= lo && j < hi, (e.alias == agentsPrefix) == (es[i].alias == agentsPrefix); in != same {
 				t.Fatalf("entry %d %s: in the side %v, on the cursor's side %v", j, e.key(), in, same)
+			}
+		}
+	})
+}
+
+// The entries that echo the cursor's are the other entries of the session
+// it stands for, its own or its workstream's lead's: each of them, and
+// never the cursor's own. The first of them on a side is where across
+// puts the cursor, so the row marked there is the row the cursor crosses
+// to, and the part of the list that holds the cursor scrolls to it.
+func TestPropEchoesAreTheCursorsSession(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		es := flatten(present(genListWorld(t), ""))
+		if len(es) == 0 {
+			return
+		}
+		i := rapid.IntRange(0, len(es)-1).Draw(t, "i")
+		got := echoes(es, i)
+		id := "" // the session the entry stands for, "" for none
+		switch e := es[i]; e.kind {
+		case sessionEntry:
+			id = e.sess.SessionID
+		case workstreamEntry:
+			if c, ok := lead(children(es, e.task())); ok && c.kind == sessionEntry {
+				id = c.sess.SessionID
+			}
+		}
+		same := func(j int) bool {
+			return j != i && id != "" && es[j].kind == sessionEntry && es[j].sess.SessionID == id
+		}
+		var want []string
+		for j, e := range es {
+			if same(j) {
+				want = append(want, e.key())
+			}
+		}
+		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+			t.Fatalf("the echoes of %s are %v, want %v", es[i].key(), got, want)
+		}
+		mk := marks{sel: es[i].key(), echo: got}
+		for _, agents := range []bool{false, true} {
+			onSide := func(e entry) bool { return (e.alias == agentsPrefix) == agents }
+			var owners []string
+			echoed := false
+			for j, e := range es {
+				if onSide(e) {
+					owners = append(owners, e.key())
+					echoed = echoed || same(j)
+				}
+			}
+			at := mk.at(owners)
+			key, ok := across(es, i, agents)
+			switch {
+			case onSide(es[i]):
+				if at != es[i].key() {
+					t.Fatalf("the cursor's side scrolls to %q, not to the cursor on %s", at, es[i].key())
+				}
+			case !echoed:
+				if at != "" {
+					t.Fatalf("agents %v: that side scrolls to %q, which does not echo %s", agents, at, es[i].key())
+				}
+			case !ok || key != at:
+				t.Fatalf("agents %v: across from %s goes to %q, and the side scrolls to %q", agents, es[i].key(), key, at)
+			}
+		}
+	})
+}
+
+// Whatever the list holds and however short its pane, the marked lines
+// are the ones that show the cursor's session: the cursor's bar on a line
+// of its own entry, and the thinner bar on every other line of that
+// session on the screen, and on no line else. Each part of the list, the
+// projects and the agents, shows such a line when it has one, so the
+// session under the cursor is marked in both.
+func TestPropTheCursorsSessionIsMarkedInBothParts(t *testing.T) {
+	root := t.TempDir()
+	rapid.Check(t, func(t *rapid.T) {
+		m := newModel(caseHome(t, root), "")
+		m.deps = fakeDeps(nil)
+		m = update(m, tea.WindowSizeMsg{Width: 60, Height: rapid.IntRange(4, 40).Draw(t, "h")})
+		rows, ttys, ts := workRows(t)
+		m.trackers = ts
+		m = m.setInputs(nil)
+		m = update(m, rowsMsg{rows: rows, ttys: ttys})
+		if len(m.ordered()) == 0 {
+			return
+		}
+		m, _ = press(m, "g", "k")
+		for range rapid.IntRange(0, len(m.ordered())).Draw(t, "steps") {
+			m, _ = press(m, "j")
+		}
+		secs := m.sections()
+		mk, col := m.marked(secs), m.shownColumn()
+		lines := strings.Split(ansi.Strip(m.View()), "\n")
+		for y, o := range col.owners {
+			echo, cursor := strings.HasPrefix(lines[y], echoBar), strings.HasPrefix(lines[y], cursorBar)
+			if echo != slices.Contains(mk.echo, o) || cursor && o != mk.sel {
+				t.Fatalf("line %d, of %q, is marked echo %v cursor %v with the cursor on %s and echoes %v:\n%s",
+					y, o, echo, cursor, mk.sel, mk.echo, strings.Join(lines, "\n"))
+			}
+		}
+		_, projects := m.projectLines(secs, mk)
+		var agents []string
+		for _, e := range agentEntries(secs) {
+			agents = append(agents, e.key())
+		}
+		marked := func(o string) bool { return o != "" && (o == mk.sel || slices.Contains(mk.echo, o)) }
+		for _, part := range []struct {
+			name       string
+			all, shown []string
+		}{
+			{"projects", projects, col.owners[:col.projH]},
+			{"agents", agents, col.owners[len(col.owners)-col.agentsH:]},
+		} {
+			if slices.ContainsFunc(part.all, marked) && len(part.shown) > 0 && !slices.ContainsFunc(part.shown, marked) {
+				t.Fatalf("the %s show no line of the cursor's session, with the cursor on %s and echoes %v:\n%s",
+					part.name, mk.sel, mk.echo, strings.Join(lines, "\n"))
 			}
 		}
 	})

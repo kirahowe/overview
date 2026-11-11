@@ -26,7 +26,9 @@ import (
 // The cursor is still one cursor. With the agents apart, j and k stop at
 // the end of the side they are on, and the cursor changes sides when the
 // keyboard does: it goes to the same session's entry on the other side,
-// so the pane beside the list does not change under it.
+// so the pane beside the list does not change under it. That entry is
+// marked already, with a thinner bar than the cursor's, so each side
+// shows where the session under the cursor is on the other.
 //
 // Whenever the pane is not showing the agents, the list's own pane draws
 // them as its last lines, and the cursor walks on into them: before the
@@ -142,6 +144,42 @@ func across(es []entry, i int, agents bool) (string, bool) {
 	return any, any != ""
 }
 
+// echoes are the entries of es that show the same session as the ith
+// does, by their keys: a session's entries other than the ith itself,
+// among the agents and under each workstream it is linked to, and for a
+// workstream every entry of its lead, the session shown beside it. The
+// session's primary entry comes first and the rest in the list's order,
+// so the first of them on a side is the one across puts the cursor on. A
+// terminal and a project's heading are listed once, and have none.
+func echoes(es []entry, i int) []string {
+	if i < 0 || i >= len(es) {
+		return nil
+	}
+	from := es[i]
+	if from.kind == workstreamEntry {
+		c, ok := lead(children(es, from.task()))
+		if !ok {
+			return nil
+		}
+		from = c
+	}
+	s, ok := from.session()
+	if !ok {
+		return nil
+	}
+	var primary, rest []string
+	for j, e := range es {
+		switch {
+		case j == i || e.kind != sessionEntry || e.sess.SessionID != s.SessionID:
+		case e.alias == "":
+			primary = append(primary, e.key())
+		default:
+			rest = append(rest, e.key())
+		}
+	}
+	return append(primary, rest...)
+}
+
 // cross puts the cursor on the side of the list the keyboard or the mouse
 // has arrived on, as across has it. It cancels a move of the keyboard that
 // was on its way to a pane, since the user has gone somewhere else.
@@ -252,7 +290,7 @@ func (m model) keepAgents() (model, tea.Cmd) {
 	all := m
 	all.filter = ""
 	secs := all.sections()
-	projects, _ := all.projectLines(secs, "")
+	projects, _ := all.projectLines(secs, marks{})
 	step, panes, ask := agentsPlan(m.in.Panes, m.session, list, len(projects), len(agentEntries(secs)), m.agentsRefused)
 	if step == agentsStay {
 		return m, nil
@@ -361,27 +399,27 @@ func (m model) fromAgents(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // inPane is the model as the agents' pane draws it: at that pane's size,
-// and with the cursor's row lit only while the keyboard is in that pane.
+// and with the cursor's bar lit only while the keyboard is in that pane.
 func (m model) inPane() model {
 	m.w, m.h, m.other = m.aw, m.ah, !m.inAgents
 	return m
 }
 
 // agentsBody is what the agents' pane shows above the footer: a line for
-// each of the agents, scrolled as little as the cursor needs from
-// agentsTop, with the key of the entry each line shows, "" for none, and
-// the first line shown.
-func (m model) agentsBody(secs []section, sel string) (lines, owners []string, top int) {
+// each of the agents, marked as mk says and scrolled from agentsTop as
+// little as its marked line needs, with the key of the entry each line
+// shows, "" for none, and the first line shown.
+func (m model) agentsBody(secs []section, mk marks) (lines, owners []string, top int) {
 	am := m.inPane()
 	h := max(m.ah-1, 0)
 	var all, keys []string
 	for _, e := range agentEntries(secs) {
-		all, keys = append(all, am.entryLine(e, e.key() == sel)), append(keys, e.key())
+		all, keys = append(all, am.entryLine(e, mk.of(e.key()))), append(keys, e.key())
 	}
 	if len(all) == 0 && m.filter != "" {
 		all, keys = []string{am.plain(dim.Render("nothing matches /" + m.filter))}, []string{""}
 	}
-	top = scrollTo(m.agentsTop, keys, sel, h)
+	top = scrollTo(m.agentsTop, keys, mk.at(keys), h)
 	end := min(top+h, len(all))
 	lines, owners = append(lines, all[top:end]...), append(owners, keys[top:end]...)
 	for len(lines) < h {
@@ -394,8 +432,7 @@ func (m model) agentsBody(secs []section, sel string) (lines, owners []string, t
 // the footer.
 func (m model) agentsScreen() string {
 	secs := m.sections()
-	e, _, _ := m.selected(flatten(secs))
-	lines, _, _ := m.agentsBody(secs, e.key())
+	lines, _, _ := m.agentsBody(secs, m.marked(secs))
 	return strings.Join(append(lines, m.inPane().footer()), "\n")
 }
 
@@ -426,8 +463,7 @@ func (m model) agentsMouse(msg tea.MouseMsg, step int, at time.Time) []action {
 		return doN(move, step)
 	}
 	secs := m.sections()
-	cur, _, _ := m.selected(flatten(secs))
-	_, owners, _ := m.agentsBody(secs, cur.key())
+	_, owners, _ := m.agentsBody(secs, m.marked(secs))
 	if y := msg.Y; y >= 0 && y < len(owners) && owners[y] != "" {
 		return []action{{do: click, id: owners[y], at: at}}
 	}

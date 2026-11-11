@@ -42,7 +42,8 @@ See README.md for behaviour and docs/ for design notes.
   opening under the list with the footer on its last line, through
   tmux's own key for the pane below, `j` and `k` among the agents with
   the list's column following the cursor and the keyboard staying in
-  that pane, the panels mode moving between the two, and the cockpit
+  that pane, the pane without the cursor marking its session's row, the
+  panels mode moving between the two, and the cockpit
   zoomed over it, to its closing with the last session. The key table
   itself is tested in `internal/tmux`. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,

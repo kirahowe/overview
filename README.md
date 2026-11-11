@@ -145,6 +145,17 @@ that session's row in the list. Every key of the list does in the agents'
 pane what it does in the list. Help, a search and a question such as
 whether to stop a session still show in the list's pane and the footer.
 
+The session under the cursor is marked on the other side as well. Its
+row there has the cursor's background and a thinner bar, `▎`, in grey,
+and that side scrolls to show it. So with the cursor among the agents the
+list shows which project and task the session is in, and with the cursor
+in the list the agents show where it stands in their order. The bar is in
+the accent colour only on the cursor's own row, in the pane that has the
+keyboard. A session listed under two tasks is marked under both. With the
+cursor on a task, the rows marked are those of the session that stands
+for it, the one shown beside the list. A terminal and a project's rule
+are listed once, so nothing else is marked for them.
+
 While the cockpit or the task picker is open, the list is zoomed over the
 agents' pane and draws the agents itself, as its last lines under a rule
 of their own, and there `j` and `k` walk on from the list into them. It
@@ -310,8 +321,9 @@ is tmux's active pane, and tmux lights its rule and border.
 in the panels mode, which is a key table of tmux's own. In the list
 `ctrl+[` does the same, since the default binding sends the list an
 Escape there, and so does a terminal that cannot send extended keys. The footer says
-`panels`, the cursor's row loses its background, and the focused pane's
-rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
+`panels`, the cursor's row and the row that echoes it lose their
+background, and the focused pane's rule says `enter to act` after its
+title. In the mode `h`, `j`, `k` and
 `l`, or the arrows, move the focus to the pane that way, and the mode
 stays on: `j` from the list goes down to the agents, and `k` from there
 back up. `enter` or `esc` leaves it, and the keys then go to what the
@@ -573,9 +585,10 @@ accent = #c678dd
 
 The keys are `accent` (headings, the rule of the panel with the keys and
 the block its name is on, keys in the footer and the help), `border`
-(rules, and the cursor's bar while the keyboard is elsewhere), `text`,
+(rules, the cursor's bar while the keyboard is elsewhere, and the bar of
+a row that echoes the cursor), `text`,
 `muted`,
-`cursor-bg` (the cursor's bar while the keyboard is in the list), `cursor-dim-bg` (the background of the selected row),
+`cursor-bg` (the cursor's bar while the keyboard is in the list), `cursor-dim-bg` (the background of the selected row and of a row that echoes it),
 `status-fg` and `status-bg` (the review's bottom bar, and a panel's name
 in its rule and the block it is on),
 `pill-fg` (text on the state badge beside a session's details, and the
