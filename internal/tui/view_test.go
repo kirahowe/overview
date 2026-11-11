@@ -164,6 +164,36 @@ func TestTheCursorRowKeepsItsColours(t *testing.T) {
 	}
 }
 
+// A rule the view draws sets the panel's name on a block of colour, as
+// tmux does for its panes: the accent while the panel is lit and the
+// status bar's colour otherwise. What follows the name keeps its own
+// colours, on no block.
+func TestAPanelRuleSetsItsNameOnABlock(t *testing.T) {
+	was := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(was) })
+	m := workModel(t, 44, 28)
+	title := m.titleText([]titleSeg{{text: "agents"}, {"  ! 2", pal.Blocked}})
+	block := func(fg, bg lipgloss.Color) string {
+		return lipgloss.NewStyle().Bold(true).Foreground(fg).Background(bg).Render(" agents ")
+	}
+	for _, c := range []struct {
+		lit         bool
+		block, edge string
+	}{
+		{true, block(pal.PillFg, pal.Accent), fg(pal.Accent).Render("──")},
+		{false, block(pal.StatusFg, pal.StatusBg), fg(pal.Border).Render("──")},
+	} {
+		got := panelRule(title, "", 30, c.lit)
+		if !strings.HasPrefix(got, c.edge+c.block+fg(pal.Blocked).Render(" ! 2")+" ") {
+			t.Errorf("lit %v: the rule %q", c.lit, got)
+		}
+		if text := ansi.Strip(got); text != "── agents  ! 2 "+strings.Repeat("─", 15) {
+			t.Errorf("lit %v: the rule reads %q", c.lit, text)
+		}
+	}
+}
+
 // The footer drops whole hints that do not fit, never half of one.
 func TestTheFooterDropsWholeHints(t *testing.T) {
 	hs := []hint{{"enter", "type"}, {"c", "claude"}, {"t", "term"}, {"?", "help"}}

@@ -42,9 +42,13 @@ const ReviewOption = "@overview-review"
 // of date.
 const ViewOption = "@overview-view"
 
-// TitleOption is the pane option holding the title set into the rule along
-// a pane's top, tmux styles and all. Frame says how it is drawn.
-const TitleOption = "@overview-title"
+// TitleOption is the pane option holding the name set into the rule along
+// a pane's top, and NoteOption the one holding what follows the name
+// there, tmux styles and all. Frame says how they are drawn.
+const (
+	TitleOption = "@overview-title"
+	NoteOption  = "@overview-note"
+)
 
 // PanelsTable is the key table of the panels mode: while a client is in
 // it, its keys move the focus between panes and do not reach the program
@@ -358,21 +362,31 @@ func frameArgs(pane string, on bool) []string {
 }
 
 // Colours are the colours Frame draws the rules in, as tmux takes them:
-// "#rrggbb" or "colour123".
-type Colours struct{ Accent, Border, Text, Muted string }
+// "#rrggbb" or "colour123". Block is the block of colour a pane's name is
+// set on while the pane is not the active one, and OnBlock the name's
+// colour there. OnAccent is the name's colour on the accent, which is the
+// active pane's block.
+type Colours struct{ Accent, Border, Muted, Block, OnBlock, OnAccent string }
 
-// FrameFormat is what Frame sets pane-border-format to: the pane's title,
-// which is its TitleOption, or what runs in it while it has none. The
-// active pane's title is in the accent colour and bold, the others' in the
-// text colour. While a client is in the panels mode, the active pane's
-// title is followed by a note that enter acts there. tmux draws the rest
-// of the rule itself, in the border style.
-const FrameFormat = "#{?pane_active,#[fg=#{@overview-accent} bold],#[fg=#{@overview-text}]} " +
-	"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} " +
-	"#{?#{&&:#{pane_active},#{==:#{client_key_table}," + PanelsTable + "}},#[fg=#{@overview-muted} nobold]· enter to act ,}"
+// FrameFormat is what Frame sets pane-border-format to. The pane's name,
+// which is its TitleOption, or what runs in it while it has none, is set
+// bold on a block of colour, so a rule reads as a heading among the lines
+// around it: the accent for the active pane, and Colours.Block for the
+// others. The pane's NoteOption follows it. While a client is in the
+// panels mode, the active pane's rule then says that enter acts there.
+// tmux draws the rest of the rule itself, in the border style.
+const FrameFormat = "#{?pane_active,#[fg=#{@overview-on-accent} bg=#{@overview-accent} bold],#[fg=#{@overview-on-block} bg=#{@overview-block} bold]} " +
+	"#{?#{" + TitleOption + "},#{" + TitleOption + "},#{pane_current_command}} #[default]" +
+	"#{?#{" + NoteOption + "},#{" + NoteOption + "},}" +
+	"#{?" + inPanels + ",#[fg=#{@overview-muted}] · enter to act,}" +
+	"#{?#{||:#{" + NoteOption + "}," + inPanels + "}, ,}"
+
+// inPanels is the format that says whether a pane is the active one of a
+// client in the panels mode.
+const inPanels = "#{&&:#{pane_active},#{==:#{client_key_table}," + PanelsTable + "}}"
 
 // Frame gives every pane on the server a rule along its top, the pane's
-// title set into it, and single lines between panes. tmux lights the
+// name set into it on a block of colour, and single lines between panes. tmux lights the
 // active pane's whole border in the accent colour, and the others' in the
 // border colour: the indicators are off, since they would light only half
 // of the border between two panes. The colours are the session's, so views
@@ -380,7 +394,8 @@ const FrameFormat = "#{?pane_active,#[fg=#{@overview-accent} bold],#[fg=#{@overv
 // theme.
 func (s Server) Frame(session string, c Colours) error {
 	var args []string
-	for _, o := range [][2]string{{"@overview-accent", c.Accent}, {"@overview-border", c.Border}, {"@overview-text", c.Text}, {"@overview-muted", c.Muted}} {
+	for _, o := range [][2]string{{"@overview-accent", c.Accent}, {"@overview-border", c.Border}, {"@overview-muted", c.Muted},
+		{"@overview-block", c.Block}, {"@overview-on-block", c.OnBlock}, {"@overview-on-accent", c.OnAccent}} {
 		args = append(args, "set-option", "-t", "="+session+":", o[0], o[1], ";")
 	}
 	for _, o := range [][2]string{

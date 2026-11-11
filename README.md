@@ -68,8 +68,10 @@ running.
 The window is made of panels, and each has a rule along its top with its
 title in it: the list, the agents, the session beside them and any split
 of its window, and the cockpit's cards. tmux draws the rules of its panes,
-and the view draws the same rule for the panels it draws itself. The
-panel that has the keyboard has its rule in the accent colour. For a tmux
+and the view draws the same rule for the panels it draws itself. A rule
+starts with the panel's name, bold on a block of colour, so it stands out
+from the headings and lines of a long list. The panel that has the
+keyboard has that block and its rule in the accent colour. For a tmux
 pane that is its active pane, whose whole border tmux lights. In the list
 it is the agents' rule while the cursor is in the agents.
 
@@ -539,12 +541,15 @@ base   = revdiff
 accent = #c678dd
 ```
 
-The keys are `accent` (headings, the rule of the panel with the keys, keys in
-the footer and the help), `border` (rules, and the cursor's bar while the
-keyboard is elsewhere), `text` (and the titles in rules), `muted`,
+The keys are `accent` (headings, the rule of the panel with the keys and
+the block its name is on, keys in the footer and the help), `border`
+(rules, and the cursor's bar while the keyboard is elsewhere), `text`,
+`muted`,
 `cursor-bg` (the cursor's bar while the keyboard is in the list), `cursor-dim-bg` (the background of the selected row),
-`status-fg` and `status-bg` (the review's bottom bar),
-`pill-fg` (text on the state badge beside a session's details), `blocked`,
+`status-fg` and `status-bg` (the review's bottom bar, and a panel's name
+in its rule and the block it is on),
+`pill-fg` (text on the state badge beside a session's details, and the
+name of the panel with the keys, on the accent), `blocked`,
 `asking`, `working`,
 `code`, and for reviews `added` and `removed` (the signs and numbers of
 changed lines), `added-bg` and `removed-bg` (their backgrounds),

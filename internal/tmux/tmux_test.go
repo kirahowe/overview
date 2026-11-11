@@ -778,10 +778,10 @@ func newFramed(t *testing.T) framed {
 	if err := s.MarkList(list); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee", Muted: "#777777"}); err != nil {
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Muted: "#777777", Block: "#222222", OnBlock: "#eeeeee", OnAccent: "#000001"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetPaneOptions([]PaneSet{{list, TitleOption, "one"}, {beside, TitleOption, "two"}}); err != nil {
+	if err := s.SetPaneOptions([]PaneSet{{list, TitleOption, "one"}, {beside, TitleOption, "two"}, {beside, NoteOption, "#[fg=#00ff00] note"}}); err != nil {
 		t.Fatal(err)
 	}
 	col, err := strconv.Atoi(strings.TrimSpace(must(t)(s.run("display-message", "-p", "-t", list, "#{pane_width}"))))
@@ -866,6 +866,48 @@ func TestFrameLightsTheActivePane(t *testing.T) {
 	check("the pane beside active", border, accent)
 }
 
+// A pane's name is set on a block of colour, so its rule reads as a
+// heading: the accent for the active pane and the block's colour for the
+// other, each with its own text colour. The note after the name keeps the
+// colour it asks for, on no block, and the rule goes on after it.
+func TestFrameSetsTheNameOnABlock(t *testing.T) {
+	f := newFramed(t)
+	const accent, onAccent, block, onBlock, note = "255;0;0", "0;0;1", "34;34;34", "238;238;238", "0;255;0"
+	// run is the cells of row from the first that shows text on.
+	run := func(row []drawn, text string) []drawn {
+		t.Helper()
+		var line strings.Builder
+		for _, c := range row {
+			line.WriteString(c.r)
+		}
+		at := strings.Index(line.String(), text)
+		if at < 0 {
+			t.Fatalf("no %q in %q", text, line.String())
+		}
+		return row[len([]rune(line.String()[:at])):][:len([]rune(text))]
+	}
+	check := func(step string, cs []drawn, fg, bg string) {
+		t.Helper()
+		for _, c := range cs {
+			if c.fg != fg || c.bg != bg {
+				t.Fatalf("%s: %q is %s on %q, want %s on %q", step, c.r, c.fg, c.bg, fg, bg)
+			}
+		}
+	}
+	must(t)(f.s.run("select-pane", "-t", f.list))
+	rows := f.rows("the list active", accent)
+	check("the active pane's name", run(rows[0], " one "), onAccent, accent)
+	check("the other pane's name", run(rows[0], " two "), onBlock, block)
+	check("the other pane's note", run(rows[0], "note"), note, "")
+	if got := f.top(); !strings.Contains(got, "── one ──") || !strings.Contains(got, "── two  note ──") {
+		t.Fatalf("the rules read %q", got)
+	}
+	must(t)(f.s.run("select-pane", "-t", f.beside))
+	rows = f.rows("the pane beside active", accent)
+	check("the name of the pane left", run(rows[0], " one "), onBlock, block)
+	check("the name of the pane now active", run(rows[0], " two "), onAccent, accent)
+}
+
 // The panels mode is a key table: in it h and l move the focus and stay in
 // the mode, enter and esc leave it, and ctrl+[ goes to the list. Each key
 // is typed at the client, so it takes the path a user's does. While a
@@ -940,8 +982,9 @@ func TestPanelsModeMovesFocus(t *testing.T) {
 }
 
 // drawn is one cell of a captured screen: its character and its
-// foreground, as the r;g;b of an SGR sequence, "" for the default.
-type drawn struct{ r, fg string }
+// foreground and background, each as the r;g;b of an SGR sequence, ""
+// for the default.
+type drawn struct{ r, fg, bg string }
 
 // cells splits what capture-pane -e prints into rows of cells, following
 // the foreground colours tmux sets.
@@ -949,10 +992,10 @@ func cells(out string) [][]drawn {
 	var rows [][]drawn
 	for _, line := range strings.Split(out, "\n") {
 		var row []drawn
-		fg := ""
+		fg, bg := "", ""
 		for rs := []rune(line); len(rs) > 0; {
 			if rs[0] != '\x1b' || len(rs) < 2 || rs[1] != '[' {
-				row = append(row, drawn{string(rs[0]), fg})
+				row = append(row, drawn{string(rs[0]), fg, bg})
 				rs = rs[1:]
 				continue
 			}
@@ -964,8 +1007,18 @@ func cells(out string) [][]drawn {
 				params := strings.Split(string(rs[2:end]), ";")
 				for i := 0; i < len(params); i++ {
 					switch {
-					case params[i] == "" || params[i] == "0" || params[i] == "39":
+					case params[i] == "" || params[i] == "0":
+						fg, bg = "", ""
+					case params[i] == "39":
 						fg = ""
+					case params[i] == "49":
+						bg = ""
+					case params[i] == "48" && i+4 < len(params) && params[i+1] == "2":
+						bg = strings.Join(params[i+2:i+5], ";")
+						i += 4
+					case params[i] == "48" && i+2 < len(params):
+						bg = "5;" + params[i+2]
+						i += 2
 					case params[i] == "38" && i+4 < len(params) && params[i+1] == "2":
 						fg = strings.Join(params[i+2:i+5], ";")
 						i += 4
@@ -993,7 +1046,7 @@ func TestSetZoomTakesTheRulesAway(t *testing.T) {
 	if _, err := s.Split(list.ID, "/", "50%", nil, "sleep", "300"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111", Text: "#eeeeee"}); err != nil {
+	if err := s.Frame("ov", Colours{Accent: "#ff0000", Border: "#111111"}); err != nil {
 		t.Fatal(err)
 	}
 	framed := func() bool {

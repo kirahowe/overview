@@ -45,8 +45,9 @@ type fakeMux struct {
 
 	zooms []string // the zooms SetZoom was asked for, "%0 true"
 
-	// The rules' titles, by pane, as SetPaneOptions set them.
-	titles map[string]string
+	// The rules' titles and the notes after them, by pane, as
+	// SetPaneOptions set them.
+	titles, notes map[string]string
 
 	// panels says a client of the session is in the panels mode, as the
 	// listing shows it, and entered counts the times EnterPanels was asked.
@@ -67,7 +68,7 @@ type spawnCall struct {
 // newFakeMux holds the view's pane %0, alone in its window, and a holder
 // %1 in a window of its own, both in session ov.
 func newFakeMux() *fakeMux {
-	f := &fakeMux{drawn: map[string]string{}, set: map[string]string{}, titles: map[string]string{},
+	f := &fakeMux{drawn: map[string]string{}, set: map[string]string{}, titles: map[string]string{}, notes: map[string]string{},
 		current: map[string]string{"ov": "@0"}, next: 2}
 	f.panes = []tmux.Pane{
 		{ID: "%0", TTY: "ttys900", Session: "ov", Window: "@0", W: 160, H: 40, List: true},
@@ -196,6 +197,8 @@ func (f *fakeMux) SetPaneOptions(sets []tmux.PaneSet) error {
 			return errors.New("can't find pane " + ps.Pane)
 		case ps.Name == tmux.TitleOption:
 			f.titles[ps.Pane] = ps.Value
+		case ps.Name == tmux.NoteOption:
+			f.notes[ps.Pane] = ps.Value
 		default:
 			return fmt.Errorf("unexpected pane option %s on %s", ps.Name, ps.Pane)
 		}

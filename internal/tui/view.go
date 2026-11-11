@@ -162,7 +162,7 @@ func (m model) taskPickBody() (lines []string, owners []int) {
 	// The rule's title has w-5 cells: "── ", a space and a dash. The
 	// counts give way to the picker's name before anything is cut.
 	segs := tagTitle(m.listTitle(), titleSeg{"  · start a task", pal.Muted}, lw-5)
-	left := append([]string{panelRule(m.titleText(segs, !m.blurred), "", lw, !m.blurred)}, rows...)
+	left := append([]string{panelRule(m.titleText(segs), "", lw, !m.blurred)}, rows...)
 	owners = append([]int{-1}, rowOwners...)
 	right := m.taskDetail(m.w-lw-1, h)
 	for i := 0; i < h; i++ {
@@ -707,7 +707,7 @@ func (m model) column(secs []section, sel string, h int) column {
 	show(plines, powners, c.projTop, c.projH)
 	if c.agentsH > 0 {
 		c.rule = len(c.lines)
-		c.lines, c.owners = append(c.lines, panelRule(m.titleText([]titleSeg{{text: agentsTitle}}, m.agentsLit()), dim.Render("priority"), m.w, m.agentsLit())), append(c.owners, "")
+		c.lines, c.owners = append(c.lines, panelRule(ruleTitle{name: agentsTitle}, dim.Render("priority"), m.w, m.agentsLit())), append(c.owners, "")
 		show(alines, aowners, c.agentsTop, c.agentsH)
 	}
 	return c
@@ -1127,31 +1127,54 @@ func tagTitle(segs []titleSeg, tag titleSeg, w int) []titleSeg {
 // none reports through the hook, so none of them can show as blocked.
 const noHook = "hook not installed"
 
-// titleText renders a title as the view draws it into a rule: accent and
-// bold while lit, as tmux draws the rules of its panes.
-func (m model) titleText(segs []titleSeg, lit bool) string {
-	base := fg(pal.Text)
-	if lit {
-		base = heading
+// ruleTitle is a title as a rule shows it: the panel's name, which the
+// rule sets on a block of colour, and what follows the name, styled
+// already.
+type ruleTitle struct{ name, rest string }
+
+// titleText renders a title as the view draws it into a rule: the first
+// run is the name, and the others follow it in their own colours.
+func (m model) titleText(segs []titleSeg) ruleTitle {
+	if len(segs) == 0 {
+		return ruleTitle{}
 	}
+	t := ruleTitle{name: segs[0].text}
 	var b strings.Builder
-	for _, sg := range segs {
-		st := base
+	for i, sg := range segs[1:] {
+		st := fg(pal.Text)
 		if sg.colour != "" {
 			st = fg(sg.colour)
 		}
-		b.WriteString(st.Render(sg.text))
+		text := sg.text
+		if i == 0 {
+			// The name's block ends in a space of its own.
+			text = strings.TrimPrefix(text, " ")
+		}
+		b.WriteString(st.Render(text))
 	}
-	return b.String()
+	t.rest = b.String()
+	return t
+}
+
+// nameBlock sets a panel's name on a block of colour, bold, as tmux sets
+// those of its panes: the accent while the panel is lit, and the status
+// bar's colours otherwise. The block has a space each side of the name.
+func nameBlock(name string, lit bool) string {
+	st := lipgloss.NewStyle().Bold(true).Foreground(pal.StatusFg).Background(pal.StatusBg)
+	if lit {
+		st = st.Foreground(pal.PillFg).Background(pal.Accent)
+	}
+	return st.Render(" " + name + " ")
 }
 
 // panelRule is the rule along the top of a panel the view draws, as tmux
-// draws its panes': "── title ────── right ──", w cells, in the accent
-// colour when lit. title and right are styled already; right goes when
-// it does not fit beside the whole title. Each column in cuts that
-// falls on the dashes between them becomes a ┴, where a divider above
-// ends.
-func panelRule(title, right string, w int, lit bool, cuts ...int) string {
+// draws its panes': "── title ────── right ──", w cells, the title's name
+// on a block of colour and the rest in the accent colour when lit. right
+// is styled already, and goes when it does not fit beside the whole
+// title. A title too long for the rule loses what follows the name
+// first, and then the name's end. Each column in cuts that falls on the
+// dashes between them becomes a ┴, where a divider above ends.
+func panelRule(t ruleTitle, right string, w int, lit bool, cuts ...int) string {
 	if w < 6 {
 		return strings.Repeat(" ", max(w, 0))
 	}
@@ -1159,24 +1182,50 @@ func panelRule(title, right string, w int, lit bool, cuts ...int) string {
 	if lit {
 		edge = fg(pal.Accent)
 	}
+	nw, sw := ansi.StringWidth(t.name), ansi.StringWidth(t.rest)
+	// The rest follows the name's block and ends in a space.
+	tail := func(sw int) int {
+		if sw == 0 {
+			return 0
+		}
+		return sw + 1
+	}
 	rw := ansi.StringWidth(right)
-	if right != "" && ansi.StringWidth(title)+rw+9 > w {
+	if right != "" && nw+tail(sw)+rw+9 > w {
 		right, rw = "", 0
 	}
-	// "── " title " " dashes, then " " right " ──" when there is one.
-	room := w - 4
+	// "──", the name in its block, the rest, a dash at least, then
+	// " " right " ──" when there is one.
+	room := w - 5
 	if right != "" {
 		room -= rw + 4
 	}
-	title = ansi.Truncate(title, max(room-1, 1), "…")
-	from := 3 + ansi.StringWidth(title) + 1
-	dashes := []rune(strings.Repeat("─", max(room-ansi.StringWidth(title), 0)))
+	name, rest := t.name, t.rest
+	if nw+tail(sw) > room {
+		rest, sw = "", 0
+		if keep := room - nw - 1; keep >= 1 {
+			rest = ansi.Truncate(t.rest, keep, "…")
+			sw = ansi.StringWidth(rest)
+		}
+		name = ansi.Truncate(name, max(room-tail(sw), 1), "…")
+		nw = ansi.StringWidth(name)
+	}
+	from := 2 + nw + 2 + tail(sw)
+	end := w
+	if right != "" {
+		end -= rw + 4
+	}
+	dashes := []rune(strings.Repeat("─", max(end-from, 0)))
 	for _, c := range cuts {
 		if i := c - from; i >= 0 && i < len(dashes) {
 			dashes[i] = '┴'
 		}
 	}
-	out := edge.Render("── ") + title + " " + edge.Render(string(dashes))
+	out := edge.Render("──") + nameBlock(name, lit) + rest
+	if rest != "" {
+		out += " "
+	}
+	out += edge.Render(string(dashes))
 	if right != "" {
 		out += " " + right + " " + edge.Render("──")
 	}

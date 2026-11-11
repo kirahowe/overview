@@ -12,13 +12,17 @@ whatever frames a session has to come from tmux. tmux can draw a rule
 along the top of every pane with a title set into it
 (`pane-border-status top`), but not a closed box at the window's edges.
 So the shared look is the one tmux can draw: a panel is a rule along its
-top, `── title ───── note ──`, with single lines between panels.
+top, `── title ───── note ──`, with single lines between panels. The
+name that starts the title is bold on a block of colour. A project's
+heading in the list is a name and a line too, and in a long list a panel's
+rule drawn the same way was hard to find among them.
 
 - tmux draws the rules of its panes. The view sets the border options
   once as it starts (`tmux.Frame`), and gives each pane of its session a
-  title in the pane option `@overview-title`, tmux styles and all, with
-  every `#` doubled. The theme's colours are session options, so two
-  homes on one server keep their own.
+  title in two pane options: the name in `@overview-title`, and what
+  follows it in `@overview-note`, tmux styles and all, with every `#`
+  doubled. The theme's colours are session options, so two homes on one
+  server keep their own.
 - The view draws the same rule for the panels it draws itself: the
   agents, under the projects in the list's pane, and the cockpit's cards.
   `panelRule` is that rule, and the cockpit joins rules to the lines
@@ -32,9 +36,9 @@ top, `── title ───── note ──`, with single lines between panel
 The panel with the keyboard has its rule in the accent colour. For a tmux
 pane that is its active pane, and tmux lights it: `pane-active-border-style`
 is the accent and `pane-border-style` the border colour, and
-`pane-border-format` sets the title in the accent, bold, while the pane is
-active (`pane_active`) and in the text colour otherwise. The view sets
-nothing per pane to light one.
+`pane-border-format` puts the name on the accent while the pane is active
+(`pane_active`), in the theme's `pill-fg`, and otherwise on `status-bg`
+in `status-fg`. The view sets nothing per pane to light one.
 
 The border between two panes is lit along its whole length. tmux's
 `pane-border-indicators` would light only half of it in a window of two

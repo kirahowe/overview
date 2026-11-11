@@ -2220,3 +2220,34 @@ func TestVerdictKindProps(t *testing.T) {
 		}
 	})
 }
+
+// A panel's rule is as wide as it is asked to be, whatever its title. With
+// room for one it starts with its dashes and the name's block, keeps a
+// dash after the title, and shows the whole name before any of what
+// follows it.
+func TestPropAPanelRuleFitsItsWidth(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		name := rapid.StringMatching(`[a-z#◆ ]{1,30}`).Draw(t, "name")
+		rest := rapid.SampledFrom([]string{"", "  ● 2", "  ! 1  ○ 12", "  · hook not installed"}).Draw(t, "rest")
+		right := rapid.SampledFrom([]string{"", "priority", "3-9 of 40"}).Draw(t, "right")
+		w := rapid.IntRange(0, 90).Draw(t, "w")
+		title := ruleTitle{name: name, rest: strings.TrimPrefix(rest, " ")}
+		got := ansi.Strip(panelRule(title, right, w, rapid.Bool().Draw(t, "lit")))
+		if n := ansi.StringWidth(got); n != w {
+			t.Fatalf("%d cells wide, want %d: %q", n, w, got)
+		}
+		if w < 6 {
+			return
+		}
+		if !strings.HasPrefix(got, "── ") || !strings.Contains(strings.TrimPrefix(got, "──"), "─") {
+			t.Fatalf("the rule %q", got)
+		}
+		whole := strings.Contains(got, "── "+name+" ")
+		if title.rest != "" && strings.Contains(got, strings.Fields(title.rest)[0]+" ") && !whole {
+			t.Fatalf("the rule %q shows what follows the name %q and not the name", got, name)
+		}
+		if whole && title.rest != "" && ansi.StringWidth(name)+ansi.StringWidth(title.rest)+6 <= w && !strings.Contains(got, "── "+name+" "+title.rest+" ─") {
+			t.Fatalf("the rule %q has room for %q after the name", got, title.rest)
+		}
+	})
+}

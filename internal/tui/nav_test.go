@@ -321,15 +321,16 @@ func TestAClickGoesIntoTheList(t *testing.T) {
 func TestThePanesRulesSayWhatRunsThere(t *testing.T) {
 	f := newFakeMux()
 	m := navModel(t, f)
-	if got := f.titles["%0"]; !strings.Contains(got, "◆ ") || !strings.Contains(got, "○ 2") {
-		t.Fatalf("the list's title %q", got)
+	if name, note := f.titles["%0"], f.notes["%0"]; !strings.HasPrefix(name, "◆ ") || !strings.Contains(note, "○ 2") {
+		t.Fatalf("the list's title %q, its note %q", name, note)
 	}
 	stage := m.want()
-	if got := f.titles[stage]; !strings.HasPrefix(got, rows(m)[0].sess.Name) || !strings.Contains(got, "idle") {
-		t.Fatalf("the session's title %q", got)
+	if name, note := f.titles[stage], f.notes[stage]; name != rows(m)[0].sess.Name || !strings.Contains(note, "idle") {
+		t.Fatalf("the session's title %q, its note %q", name, note)
 	}
-	if got := tmuxTitle([]titleSeg{{text: "#6 a"}, {"  b", lipgloss.Color("#abc")}}); got != "##6 a#[fg=#aabbcc nobold]  b" {
-		t.Fatalf("tmuxTitle %q", got)
+	// The name goes on its block, and the note gives up a space to it.
+	if got := tmuxTitle([]titleSeg{{text: "#6 a"}, {"  b#", lipgloss.Color("#abc")}}); got != (paneFrame{"##6 a", "#[fg=#aabbcc] b##"}) {
+		t.Fatalf("tmuxTitle %+v", got)
 	}
 	for c, want := range map[lipgloss.Color]string{"#abc": "#aabbcc", "#a1b2c3": "#a1b2c3", "141": "colour141"} {
 		if got := tmuxColour(c); got != want {

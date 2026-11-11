@@ -141,10 +141,6 @@ func (c card) render(body []string, w, h int, lit bool, cuts ...int) []string {
 	if w < 6 || h < 1 {
 		return blanks(w, h)
 	}
-	name := fg(pal.Text)
-	if lit {
-		name = heading
-	}
 	title := c.title
 	if c.path {
 		// Room beside the note when that leaves a few cells, else the
@@ -155,7 +151,7 @@ func (c card) render(body []string, w, h int, lit bool, cuts ...int) []string {
 		}
 		title = keepEnd(title, room)
 	}
-	out := []string{panelRule(name.Render(title), c.right, w, lit, cuts...)}
+	out := []string{panelRule(ruleTitle{name: title}, c.right, w, lit, cuts...)}
 	for i := 0; i < h-1; i++ {
 		l := ""
 		if i < len(body) {

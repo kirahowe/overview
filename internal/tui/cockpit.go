@@ -237,7 +237,7 @@ func (m model) cockpitBody() []string {
 	secs := m.sections()
 	e, _, _ := m.selected(flatten(secs))
 	col := lm.column(secs, e.key(), h-1)
-	left := append([]string{panelRule(m.titleText(m.listTitle(), m.listHasKeys()), "", lw, m.listHasKeys())}, col.lines...)
+	left := append([]string{panelRule(m.titleText(m.listTitle()), "", lw, m.listHasKeys())}, col.lines...)
 	out := make([]string, h)
 	for i := range out {
 		leftRule := i == 0 || i == col.rule+1

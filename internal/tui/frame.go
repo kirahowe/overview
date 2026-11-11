@@ -14,14 +14,17 @@ import (
 
 // tmux draws the rule along the top of each of its panes, as tmux.Frame
 // sets it up, with a title the view gives each pane of its session: the
-// list's own, a session's name and state, a terminal's command. The view
-// draws the same rule for what it shows itself, the agents and the
-// cockpit's cards, so every panel looks alike. The rule of the panel with
-// the keys is lit, in the accent colour: tmux lights its active pane's by
-// itself, and the view lights the ones it draws.
+// list's own, a session's name and state, a terminal's command. The name
+// that starts a title is set on a block of colour, so a panel's rule
+// stands out from the headings and lines around it. The view draws the
+// same rule for what it shows itself, the agents and the cockpit's cards,
+// so every panel looks alike. The rule of the panel with the keys is lit,
+// in the accent colour: tmux lights its active pane's by itself, and the
+// view lights the ones it draws.
 
-// paneFrame is what a pane's rule shows: its title, in tmux's styles.
-type paneFrame struct{ title string }
+// paneFrame is what a pane's rule shows: its name, which tmux sets on a
+// block of colour, and the note after it, in tmux's styles.
+type paneFrame struct{ title, note string }
 
 // framedMsg answers reframe's Cmd. When it turned the rules of a window on
 // or off, window names it and on says which, so the model knows before the
@@ -47,20 +50,35 @@ func tmuxColour(c lipgloss.Color) string {
 
 // frameColours are the theme's colours for tmux's rules.
 func frameColours(t Theme) tmux.Colours {
-	return tmux.Colours{Accent: tmuxColour(t.Accent), Border: tmuxColour(t.Border), Text: tmuxColour(t.Text), Muted: tmuxColour(t.Muted)}
+	return tmux.Colours{Accent: tmuxColour(t.Accent), Border: tmuxColour(t.Border), Muted: tmuxColour(t.Muted),
+		Block: tmuxColour(t.StatusBg), OnBlock: tmuxColour(t.StatusFg), OnAccent: tmuxColour(t.PillFg)}
 }
 
-// tmuxTitle renders a title for a pane's rule. tmux reads #[...] in it as
-// a style, and ## as a #, so every # of the text is doubled.
-func tmuxTitle(segs []titleSeg) string {
-	var b strings.Builder
-	for _, sg := range segs {
-		if sg.colour != "" {
-			b.WriteString("#[fg=" + tmuxColour(sg.colour) + " nobold]")
-		}
-		b.WriteString(strings.ReplaceAll(sg.text, "#", "##"))
+// tmuxTitle renders a title for a pane's rule: its name, the first run,
+// and the note that follows it, each run in its own colour or else the
+// text's. tmux reads #[...] as a style and ## as a #, so every # of the
+// text is doubled. The name's block ends in a space, so the note gives up
+// one of the spaces it starts with.
+func tmuxTitle(segs []titleSeg) paneFrame {
+	if len(segs) == 0 {
+		return paneFrame{}
 	}
-	return b.String()
+	esc := func(s string) string { return strings.ReplaceAll(s, "#", "##") }
+	f := paneFrame{title: esc(segs[0].text)}
+	var b strings.Builder
+	for i, sg := range segs[1:] {
+		colour := sg.colour
+		if colour == "" {
+			colour = pal.Text
+		}
+		text := sg.text
+		if i == 0 {
+			text = strings.TrimPrefix(text, " ")
+		}
+		b.WriteString("#[fg=" + tmuxColour(colour) + "]" + esc(text))
+	}
+	f.note = b.String()
+	return f
 }
 
 // stateTitle is a session's name and state, as its pane's rule shows it.
@@ -147,7 +165,7 @@ func (m model) frames() map[string]paneFrame {
 	out := map[string]paneFrame{}
 	for _, p := range m.in.Panes {
 		if p.Session == m.session && m.session != "" {
-			out[p.ID] = paneFrame{title: tmuxTitle(m.paneTitle(p, w, byPane))}
+			out[p.ID] = tmuxTitle(m.paneTitle(p, w, byPane))
 		}
 	}
 	return out
@@ -169,6 +187,9 @@ func (m model) reframe() (model, tea.Cmd) {
 		was, ok := m.framed[id]
 		if !ok || was.title != f.title {
 			sets = append(sets, tmux.PaneSet{Pane: id, Name: tmux.TitleOption, Value: f.title})
+		}
+		if !ok || was.note != f.note {
+			sets = append(sets, tmux.PaneSet{Pane: id, Name: tmux.NoteOption, Value: f.note})
 		}
 	}
 	self, ok := m.pane(m.self)
