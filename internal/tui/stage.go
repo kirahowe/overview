@@ -46,6 +46,7 @@ type multiplexer interface {
 	Panes() ([]tmux.Pane, error)
 	Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error)
 	Move(list, target, size string, with tmux.Carried) error
+	FitWindow(pane string) error
 	Under(list string, lines int, command ...string) (tmux.Pane, error)
 	Resize(pane, size string) error
 	Layout(window string) (string, error)
@@ -171,10 +172,11 @@ func readPanes(mux multiplexer, find func(...string) roots) ([]tmux.Pane, roots,
 // shift is a step that puts the list beside the pane it wants: the list
 // goes from window from into the window of pane to, size wide, and takes
 // with it the agents' pane under it. fix says from keeps two or more
-// panes, whose layout is then put right.
+// panes, whose layout is then put right. fit says the window of to is
+// not the size of the list's, and is first given the size it is due.
 type shift struct {
 	to, from, size string
-	fix            bool
+	fix, fit       bool
 	with           tmux.Carried
 }
 
@@ -205,19 +207,27 @@ func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift
 		}
 	}
 	n := panesIn(panes, list.Window)
+	// A window not shown since the terminal changed size still has the
+	// size it had then. The list's window is the one shown, so it has the
+	// terminal's, which the other is due before the list goes into it.
+	winW := target.WinW
+	fit := list.WinW > 0 && target.WinW > 0 && (target.WinW != list.WinW || target.WinH != list.WinH)
+	if fit {
+		winW = list.WinW
+	}
 	// The list keeps its width, fitted to the window it goes to. Until it
 	// has one, it goes as wide as it is, unless it is alone and so as wide
 	// as the whole window.
 	size := listShare
 	switch {
-	case width > 0 && target.WinW > 0:
-		size = strconv.Itoa(fitList(width, target.WinW))
+	case width > 0 && winW > 0:
+		size = strconv.Itoa(fitList(width, winW))
 	case width > 0:
 		size = strconv.Itoa(width)
 	case n > 1 && list.W > 0:
 		size = strconv.Itoa(list.W)
 	}
-	return shift{to: want, from: list.Window, size: size, fix: n > 2, with: with}, true
+	return shift{to: want, from: list.Window, size: size, fix: n > 2, fit: fit, with: with}, true
 }
 
 // listWidth is the width the list keeps, and where it was last seen, which
@@ -294,12 +304,16 @@ func (m model) keepWidth() (model, tea.Cmd) {
 // stageCmd carries out a shift. tmux gives the list's width to the column
 // beside it, so a window left with two or more panes gets its old layout
 // back with the list taken out and its space shared out. That fix-up is
-// cosmetic, so it fails quietly.
+// cosmetic, so it fails quietly, and so does giving the window the list
+// goes to its size beforehand.
 func stageCmd(mux multiplexer, find func(...string) roots, list string, mv shift, gen int) tea.Cmd {
 	return func() tea.Msg {
 		layout, lerr := "", errors.New("no fix-up")
 		if mv.fix {
 			layout, lerr = mux.Layout(mv.from)
+		}
+		if mv.fit {
+			mux.FitWindow(mv.to) //nolint:errcheck
 		}
 		err := mux.Move(list, mv.to, mv.size, mv.with)
 		if err == nil && lerr == nil {
@@ -825,6 +839,9 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 		if inside {
 			if !canMove {
 				return fail(errors.New("the list has nowhere else to go"))
+			}
+			if mv.fit {
+				mux.FitWindow(mv.to) //nolint:errcheck
 			}
 			if err := mux.Move(self, mv.to, mv.size, mv.with); err != nil {
 				return fail(err)

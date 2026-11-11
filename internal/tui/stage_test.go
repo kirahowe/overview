@@ -34,6 +34,8 @@ type fakeMux struct {
 	killed  []string // the windows KillWindow closed
 	spawned []spawnCall
 	moves   []string          // the size each move asked for
+	fits    []string          // the panes FitWindow was asked for, and before which move
+	held    bool              // FitWindow leaves windows as they are, as tmux does with two clients
 	widths  []int             // the widths SetWidth gave the list
 	layouts []string          // the windows whose layout was read
 	set     map[string]string // the layouts set, by window
@@ -333,6 +335,7 @@ func (f *fakeMux) Move(list, target, size string, with tmux.Carried) error {
 	}
 	from := f.panes[i].Window
 	f.panes[i].Session, f.panes[i].Window, f.panes[i].W, f.panes[i].WinW = f.panes[j].Session, f.panes[j].Window, w, f.panes[j].WinW
+	f.panes[i].WinH = f.panes[j].WinH
 	f.current[f.panes[j].Session] = f.panes[j].Window
 	f.focus = list // join-pane makes the list the active pane
 	// The pane it carries goes into the foot of its column, and is the
@@ -340,12 +343,37 @@ func (f *fakeMux) Move(list, target, size string, with tmux.Carried) error {
 	f.carried = append(f.carried, with)
 	if k := f.find(with.Pane); k >= 0 {
 		f.panes[k].Session, f.panes[k].Window, f.panes[k].H, f.panes[k].WinW = f.panes[j].Session, f.panes[j].Window, with.Lines, f.panes[j].WinW
+		f.panes[k].WinH = f.panes[j].WinH
 		if with.Focus {
 			f.focus = with.Pane
 		}
 	}
 	f.lay(from)
 	f.lay(f.panes[j].Window)
+	return nil
+}
+
+// FitWindow gives pane's window the size of the window shown, as tmux
+// does with one client attached.
+func (f *fakeMux) FitWindow(pane string) error {
+	i := f.find(pane)
+	if i < 0 {
+		return errors.New("can't find pane " + pane)
+	}
+	f.fits = append(f.fits, fmt.Sprintf("%s before move %d", pane, len(f.moves)+1))
+	if f.held {
+		return nil
+	}
+	for _, shown := range f.panes {
+		if shown.Window == f.current[f.panes[i].Session] {
+			for j := range f.panes {
+				if f.panes[j].Window == f.panes[i].Window {
+					f.panes[j].WinW, f.panes[j].WinH = shown.WinW, shown.WinH
+				}
+			}
+			break
+		}
+	}
 	return nil
 }
 
@@ -903,13 +931,38 @@ func (f *fakeMux) setWinW(win string, w int) {
 	}
 }
 
+// size makes every window but the one shown w by h, and that one too when
+// shown is set.
+func (f *fakeMux) size(w, h int, shown bool) {
+	for i, p := range f.panes {
+		if shown || p.Window != f.stage() {
+			f.panes[i].WinW, f.panes[i].WinH = w, h
+		}
+	}
+}
+
+// beside is the pane beside the list in the window shown that is not the
+// agents'.
+func (f *fakeMux) beside() string {
+	for _, p := range f.panes {
+		if p.Window == f.stage() && !p.List && !p.Agents {
+			return p.ID
+		}
+	}
+	return ""
+}
+
 // Browsing moves the list into windows left at the width the terminal had
 // when they were last shown. tmux snaps each to the terminal's width, which
 // takes the difference out of the list, and before the view kept its width
 // a few moves took it to a column, where the view panicked and its pane
-// closed. The next listing gives the list its width back.
+// closed. The next listing gives the list its width back. With one client
+// attached the view has tmux size such a window before the list goes in,
+// so this is what is left with two, when tmux leaves the window as the
+// other client had it.
 func TestASqueezedListGetsItsWidthBack(t *testing.T) {
 	f := newFakeMux()
+	f.held = true
 	for _, p := range f.panes {
 		f.setWinW(p.Window, 283)
 	}
@@ -941,6 +994,51 @@ func TestASqueezedListGetsItsWidthBack(t *testing.T) {
 		if w := f.panes[f.find("%0")].W; w != 60 || m.width.want != 60 {
 			t.Fatalf("the list is %d wide, keeping %d, want 60", w, m.width.want)
 		}
+	}
+}
+
+// A window not shown since the terminal changed size is given its size
+// before the list moves into it, so that tmux does not resize it with the
+// list's column inside, and the list goes in at the width it keeps, fitted
+// to the size the window is due. A window of the list's own size is left
+// alone.
+func TestAWindowOfAnotherSizeIsFittedBeforeTheListMovesIn(t *testing.T) {
+	f := newFakeMux()
+	m := stagedModel(t, f, row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12))
+	listed := func() {
+		t.Helper()
+		var cmd tea.Cmd
+		m, cmd = step(m, panesMsg{panes: slices.Clone(f.panes), gen: m.spawns})
+		m = settle(t, m, cmd)
+	}
+	// The terminal is 229 by 60, and the user dragged the list to 60.
+	f.size(229, 60, true)
+	f.panes[f.find("%0")].W = 60
+	listed()
+	fits := len(f.fits)
+	m = pressSettled(t, m, "k")
+	if len(f.fits) != fits || m.width.want != 60 {
+		t.Fatalf("fitted %v among windows of one size, the list keeping %d", f.fits[fits:], m.width.want)
+	}
+	// Every other window was last shown when the terminal was shorter,
+	// and narrower than leaves room for the list's width.
+	f.size(70, 40, false)
+	listed()
+	moves := len(f.moves)
+	m = pressSettled(t, m, "j")
+	to := f.panes[f.find("%0")]
+	if len(f.moves) != moves+1 || f.moves[moves] != "60" || to.WinW != 229 || to.WinH != 60 {
+		t.Fatalf("moves %v into a window %dx%d, want 60 wide into 229x60", f.moves[moves:], to.WinW, to.WinH)
+	}
+	if got, want := f.fits[fits:], []string{fmt.Sprintf("%s before move %d", f.beside(), moves+1)}; !slices.Equal(got, want) {
+		t.Fatalf("fitted %v, want %v", got, want)
+	}
+	// As tall and not as wide is another size too.
+	f.size(200, 60, false)
+	listed()
+	pressSettled(t, m, "k")
+	if len(f.fits) != fits+2 {
+		t.Fatalf("fitted %v, want the narrower window too", f.fits[fits:])
 	}
 }
 

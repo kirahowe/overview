@@ -165,6 +165,18 @@ which of the view's two panes has the keys.
   on, and then passes on only where they ended. So a size that came and
   went shows when moves are a moment apart and not while a key repeats,
   and a test that wants to see every size has to wait the hold out.
+- When the terminal changes size, tmux resizes the window it shows and
+  leaves each of the others until it is shown. A window the list has
+  just moved into is then resized with the column in it, and the column
+  takes its share: the list's width and the agents' pane's height
+  change, and the view puts them back a step at a time. So when the
+  window the list is going to is not the size of the one it is in,
+  `stageCmd` first has `tmux.FitWindow` size it with `resize-window -A`,
+  which takes the size from the session's client, and then takes off
+  the hold that command leaves on the size. tmux does this only with
+  one client attached and no hold there already. With two clients a
+  window has the size of whichever typed in it last, and the list still
+  gets its width back from `keepWidth` afterwards.
 - tmux tells the active pane of a window that the keyboard went and came
   back whenever that pane changes window. `tmux.Move` swaps both panes
   with `-d` and makes active only the one that had the keys, so the

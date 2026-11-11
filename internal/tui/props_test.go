@@ -432,21 +432,25 @@ func TestPropWindow(t *testing.T) {
 // more panes. The list goes at the width it keeps, fitted to the window it
 // goes to. Until it keeps one, it goes as wide as it is when it shared its
 // window, a width the user may have dragged it to, and takes listShare
-// when it was alone, and so as wide as the window.
+// when it was alone, and so as wide as the window. A window of another
+// size than the list's is to be given its size first, and is then as wide
+// as the list's.
 func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var panes []tmux.Pane
-		winW := map[int]int{}
+		winW, winH := map[int]int{}, map[int]int{}
 		for i := range rapid.IntRange(1, 8).Draw(t, "n") {
 			win := rapid.IntRange(0, 3).Draw(t, "win")
 			if _, ok := winW[win]; !ok {
 				winW[win] = rapid.SampledFrom([]int{0, 20, 80, 229, 283}).Draw(t, "winw")
+				winH[win] = rapid.SampledFrom([]int{40, 58}).Draw(t, "winh")
 			}
 			panes = append(panes, tmux.Pane{
 				ID:     fmt.Sprintf("%%%d", i),
 				Window: fmt.Sprintf("@%d", win),
 				W:      rapid.IntRange(1, 200).Draw(t, "w"),
 				WinW:   winW[win],
+				WinH:   winH[win],
 			})
 		}
 		self := rapid.SampledFrom(panes).Draw(t, "self")
@@ -471,17 +475,26 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		if mv.to != want.ID || mv.from != self.Window || mv.fix != (left >= 2) {
 			t.Fatalf("plan %+v for want %s, list %+v, %d left behind", mv, want.ID, self, left)
 		}
+		// Sizes are known for both windows, and they differ.
+		fit := self.WinW > 0 && want.WinW > 0 && (self.WinW != want.WinW || self.WinH != want.WinH)
+		if mv.fit != fit {
+			t.Fatalf("fit %v for a list in %dx%d going to %dx%d", mv.fit, self.WinW, self.WinH, want.WinW, want.WinH)
+		}
+		into := want.WinW
+		if fit {
+			into = self.WinW
+		}
 		size := listShare
 		switch {
-		case width > 0 && want.WinW > 0:
-			size = strconv.Itoa(fitList(width, want.WinW))
+		case width > 0 && into > 0:
+			size = strconv.Itoa(fitList(width, into))
 		case width > 0:
 			size = strconv.Itoa(width)
 		case left > 0:
 			size = strconv.Itoa(self.W)
 		}
 		if mv.size != size {
-			t.Fatalf("the list %d wide, keeping %d, with %d beside it, moves %s wide into %d, want %s", self.W, width, left, mv.size, want.WinW, size)
+			t.Fatalf("the list %d wide, keeping %d, with %d beside it, moves %s wide into %d, want %s", self.W, width, left, mv.size, into, size)
 		}
 		if again, ok := plan(self.ID, want.ID, after, width, false); ok {
 			t.Fatalf("after the move, plan asks for %+v", again)

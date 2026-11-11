@@ -65,14 +65,14 @@ const PanelsTable = "overview-panels"
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
-	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{pane_current_path}"
+	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{window_height}\t#{pane_current_path}"
 
 // clientFormat is how Panes asks for each client: its session, key table
 // and when it was last used, after a word that no pane line starts with.
 const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 23
+const paneFields = 24
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -82,6 +82,7 @@ type Pane struct {
 	Window  string // "@2"
 	W, H    int
 	WinW    int    // the width of the pane's window
+	WinH    int    // and its height
 	List    bool   // the view runs here
 	Command string // what runs in the foreground: "zsh", "node"
 	Path    string // the foreground process's directory
@@ -182,14 +183,15 @@ func ParsePanes(out string) []Pane {
 		ww, err3 := strconv.Atoi(f[6])
 		x, err4 := strconv.Atoi(f[16])
 		y, err5 := strconv.Atoi(f[17])
-		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+		wh, err6 := strconv.Atoi(f[22])
+		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil || err6 != nil {
 			continue
 		}
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
-			W: w, H: h, WinW: ww, List: f[7] == "1",
+			W: w, H: h, WinW: ww, WinH: wh, List: f[7] == "1",
 			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
-			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Path: f[22],
+			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Path: f[23],
 		})
 	}
 	return panes
@@ -657,6 +659,27 @@ func (s Server) Move(list, target, size string, with Carried) error {
 			s.KillPane(id) //nolint:errcheck
 		}
 	}
+	return err
+}
+
+// fitDue is the format that says whether a window is due the size of its
+// session's one client: one client is attached, and the window's size is
+// not held by hand.
+const fitDue = "#{&&:#{==:#{session_attached},1},#{!=:#{window-size},manual}}"
+
+// FitWindow gives pane's window the size its session's client calls for,
+// now. When the terminal changes size, tmux resizes the window it shows
+// and leaves each of the others until it is shown. A window that the
+// list has moved into is then resized with the list's column in it,
+// which takes its share of the change. Sized first, the window has
+// nothing left to change when it is shown. resize-window holds the size
+// by hand from then on, so the hold comes off again and the window goes
+// on following the terminal. With more clients than one, a window has
+// the size of the client that typed in it last, and with a size held by
+// hand it has that one: both are left as they are.
+func (s Server) FitWindow(pane string) error {
+	_, err := s.run("if-shell", "-F", "-t", pane, fitDue,
+		"resize-window -A -t "+pane+" ; set-option -w -u -t "+pane+" window-size")
 	return err
 }
 
