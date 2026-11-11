@@ -119,9 +119,12 @@ pinned project that had nothing in it.
 The agents are a panel of their own, under the list. They hold every
 session in the list once more, in order of priority: those that need you
 first, longest wait first, then the working ones, then the idle ones. A
-session there acts exactly as it does in its project, and its row names
-its project, or the task it works on as `#6`. A long project path keeps
-its end. In a narrow pane a row keeps ten cells of its name: a session
+session there acts exactly as it does in its project. Its row ends with
+where the list has it: the project, and after that the task it works on
+there, as `overview #6`. The agents sit under no project's heading, so a
+number alone would not say whose task it is. A long project path keeps
+its end, and when not even that fits, the number stays without the
+project. In a narrow pane a row keeps ten cells of its name: a session
 drops its age, then its review badge's words, then the badge, then its
 state word before its name is cut further, and a task drops its priority
 and then its status.

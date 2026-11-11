@@ -921,17 +921,26 @@ func (m model) entryLine(e entry, how rowMark) string {
 	var right []seg
 	switch {
 	case e.alias == agentsPrefix:
-		note := m.agentsNote(e, app, away, segsWidth(left))
+		place, ref := agentsNote(e, app)
+		tail := ""
+		if ref != "" {
+			tail = " " + ref
+		}
 		// A project's path keeps its end, as its heading does, beside the
 		// whole name when a few cells of it fit there, else beside the
-		// name cut to nameMin, rather than leaving the row.
-		choices := [][]seg{{{note, dim}}}
-		if e.sess.Primary() == nil && !away {
+		// name cut to nameMin, rather than leaving the row. A task's
+		// number stays whole after it, and is the last to go. The place
+		// is a project's unless another app runs the session on no task.
+		choices := [][]seg{{{place + tail, dim}}}
+		if !away || ref != "" {
 			for _, room := range []int{m.contentWidth() - 1 - segsWidth(left), m.contentWidth() - 1 - nameRoom(left)} {
-				if room >= 6 {
-					choices = append(choices, []seg{{keepEnd(note, room), dim}})
+				if room -= ansi.StringWidth(tail); room >= 6 {
+					choices = append(choices, []seg{{keepEnd(place, room) + tail, dim}})
 				}
 			}
+		}
+		if ref != "" {
+			choices = append(choices, []seg{{ref, dim}})
 		}
 		right = m.fitRight(left, append(choices, nil)...)
 	case away:
@@ -992,21 +1001,19 @@ func (m model) fitRight(left []seg, choices ...[]seg) []seg {
 	return choices[len(choices)-1]
 }
 
-// agentsNote is what the agents list says of a session: the workstream it
-// works on, with its project's name when that is not the session's own
-// and there is room, or else its project, or the app it runs in.
-func (m model) agentsNote(e entry, app string, away bool, used int) string {
+// agentsNote is what the agents list says of a session, which is where
+// the list has it: the project it is listed in, and the task it works on
+// there, as "#6", "" for none. The agents are in no project's section, so
+// a task's number alone would not say whose task it is. A session another
+// app runs on no task has that app for its place, app.
+func agentsNote(e entry, app string) (place, ref string) {
 	switch st := e.sess.Primary(); {
 	case st != nil:
-		ref := "#" + strconv.Itoa(st.ID)
-		if p := st.Project.Name; p != e.sess.Project.Name && used+ansi.StringWidth(p)+len(ref)+2 <= m.contentWidth() {
-			return p + " " + ref
-		}
-		return ref
-	case away:
-		return app
+		return st.Project.Name, "#" + strconv.Itoa(st.ID)
+	case e.sess.Host != nil:
+		return app, ""
 	}
-	return e.sess.Project.Name
+	return e.sess.Project.Name, ""
 }
 
 type detailCache struct {

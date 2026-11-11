@@ -110,10 +110,10 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	}
 	want = append(want,
 		"── agents "+strings.Repeat("─", 44-10-12)+" priority ──",
-		l("? reply on view.go note", "#5"),
+		l("? reply on view.go note", "overview #5"),
 		l("! deploy blog post", "website"),
-		l("⠋ squeeze e2e", "#6"),
-		l("⠋ list squeeze", "#6"),
+		l("⠋ squeeze e2e", "overview #6"),
+		l("⠋ list squeeze", "overview #6"),
 		l("○ rss feed", "website"),
 		l("○ digest prompt tweaks", "overview"),
 		l("orchestrator off  s task • c claude", ""), // no tmux, so enter only says so
@@ -275,20 +275,56 @@ func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 	}
 }
 
-// The agents list names a workstream's project when its width fits, which
-// for wide characters is less than its length in bytes.
-func TestAgentsNoteMeasuresDisplayWidth(t *testing.T) {
-	m := newTestModel(t)
-	m.w, m.user = 22, "/u" // 20 columns of content
-	st := &world.Stream{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
-	s := &world.Session{Row: row("s", "x", "", 1), Project: &world.Project{Name: "/w/x"}, Streams: []*world.Stream{st}}
-	e := entry{kind: sessionEntry, sess: s, alias: agentsPrefix}
-	// 6 used, 10 columns of name (15 bytes), 2 of ref and 2 of spaces.
-	if got := m.agentsNote(e, "", false, 6); got != "日本語日本 #6" {
-		t.Fatalf("note %q, want the project's name too", got)
+// A row of the agents says where the list has its session: the project,
+// and the task it works on there. The project is the task's, which is
+// where the session is listed, and not the one its directory is in.
+func TestAnAgentsRowNamesItsProject(t *testing.T) {
+	app, site := &world.Project{Name: "app"}, &world.Project{Name: "website"}
+	st := &world.Stream{Key: world.Key{Root: "/u/app", ID: 6}, Project: app}
+	zed := &world.Host{Name: "Zed"}
+	for _, c := range []struct {
+		what       string
+		sess       world.Session
+		place, ref string
+	}{
+		{"on no task", world.Session{Project: site}, "website", ""},
+		{"on its project's task", world.Session{Project: app, Streams: []*world.Stream{st}}, "app", "#6"},
+		{"on another project's task", world.Session{Project: site, Streams: []*world.Stream{st}}, "app", "#6"},
+		{"another app's", world.Session{Project: site, Host: zed}, "Zed", ""},
+		{"another app's, on a task", world.Session{Project: site, Host: zed, Streams: []*world.Stream{st}}, "app", "#6"},
+	} {
+		e := entry{kind: sessionEntry, sess: &c.sess, alias: agentsPrefix}
+		if place, ref := agentsNote(e, zed.Label()); place != c.place || ref != c.ref {
+			t.Errorf("a session %s is at %q %q, want %q %q", c.what, place, ref, c.place, c.ref)
+		}
 	}
-	if got := m.agentsNote(e, "", false, 7); got != "#6" {
-		t.Fatalf("note %q with no room, want only the ref", got)
+}
+
+// The project in a row of the agents gives way by its width on the
+// screen, which for wide characters is less than its length in bytes. It
+// shows whole while ten cells of the session's name fit beside it, then
+// by its end, and the task's number is the last of the note to go.
+func TestAnAgentsRowFitsItsProjectByDisplayWidth(t *testing.T) {
+	m := newTestModel(t)
+	st := &world.Stream{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
+	s := &world.Session{Row: row("s", "fix-parser-overflow", "", 1), Project: st.Project, Streams: []*world.Stream{st}}
+	e := entry{kind: sessionEntry, sess: s, alias: agentsPrefix}
+	// The mark and ten cells of the name take 12 columns and the note 13:
+	// ten of project, which are 15 bytes, a space and the number.
+	for _, c := range []struct {
+		w    int
+		want string
+	}{
+		{36, "○ fix-parser-overflow 日本語日本 #6"},
+		{26, "○ fix-parse… 日本語日本 #6"},
+		{25, "○ fix-parse… …本語日本 #6"},
+		{21, "○ fix-parser-over… #6"},
+		{14, "○ fix-parser-…"},
+	} {
+		m.w = c.w + 2
+		if got := strings.Join(strings.Fields(ansi.Strip(m.entryLine(e, unmarked))), " "); got != c.want {
+			t.Errorf("in %d columns %q, want %q", c.w, got, c.want)
+		}
 	}
 }
 
