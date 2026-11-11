@@ -25,7 +25,7 @@ var maxArgs = map[string]int{
 
 // rawCommands read their own arguments, so they are recognised only as the
 // first word and the global flags are not parsed for them.
-var rawCommands = map[string]bool{"hook": true, "stage": true, "review": true}
+var rawCommands = map[string]bool{"hook": true, "stage": true, "agents": true, "review": true}
 
 // cli is a parsed command line: the subcommand, its positional arguments
 // and the global flags.

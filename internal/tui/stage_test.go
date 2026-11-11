@@ -57,6 +57,13 @@ type fakeMux struct {
 
 	moveErr error
 
+	// The agents' pane: the times Under started one and with what, the
+	// heights Resize gave it, and what each move carried with the list.
+	unders   []spawnCall
+	underErr error
+	heights  []int
+	carried  []tmux.Carried
+
 	client int // the pid LatestClient gives
 }
 
@@ -87,14 +94,19 @@ func (f *fakeMux) Panes() ([]tmux.Pane, error) {
 	return out, nil
 }
 
-// lay places the panes of window w as tmux would: the list down the left,
-// and the others beside it, one above another in the order they came.
+// lay places the panes of window w as tmux would: the list down the left
+// with the agents' pane as the foot of its column, and the others beside
+// it, one above another in the order they came.
 func (f *fakeMux) lay(w string) {
-	lw, n := 0, 0
+	lw, n, foot := 0, 0, 0
 	for _, p := range f.panes {
-		if p.Window == w && p.List {
+		switch {
+		case p.Window != w:
+		case p.List:
 			lw = p.W + 1
-		} else if p.Window == w {
+		case p.Agents:
+			foot = p.H + 1
+		default:
 			n++
 		}
 	}
@@ -103,7 +115,9 @@ func (f *fakeMux) lay(w string) {
 		switch {
 		case p.Window != w:
 		case p.List:
-			f.panes[i].X, f.panes[i].Y = 0, 0
+			f.panes[i].X, f.panes[i].Y, f.panes[i].H = 0, 0, 40-foot
+		case p.Agents:
+			f.panes[i].X, f.panes[i].Y, f.panes[i].W = 0, 40-foot+1, lw-1
 		default:
 			f.panes[i].X, f.panes[i].Y, f.panes[i].H = lw, k*(40/n), 40/n-1
 			k++
@@ -266,7 +280,42 @@ func (f *fakeMux) SelectBeside(pane string) error {
 	return errors.New("no pane right of " + pane)
 }
 
-func (f *fakeMux) Move(list, target, size string) error {
+// Under starts the agents' pane under the list, and leaves the keyboard
+// where it is.
+func (f *fakeMux) Under(list string, lines int, command ...string) (tmux.Pane, error) {
+	i := f.find(list)
+	if i < 0 {
+		return tmux.Pane{}, errors.New("can't find pane " + list)
+	}
+	if f.underErr != nil {
+		return tmux.Pane{}, f.underErr
+	}
+	f.unders = append(f.unders, spawnCall{command: command})
+	l := f.panes[i]
+	f.setZoom(l.Window, false)
+	p := tmux.Pane{ID: fmt.Sprintf("%%%d", f.next), TTY: fmt.Sprintf("ttys%d", 700+f.next), Session: l.Session, Window: l.Window,
+		W: l.W, H: lines, WinW: l.WinW, Command: "overview", Agents: true}
+	f.next++
+	f.panes = append(f.panes, p)
+	f.lay(l.Window)
+	return f.panes[len(f.panes)-1], nil
+}
+
+// Resize makes a pane size lines tall, which ends its window's zoom.
+func (f *fakeMux) Resize(pane, size string) error {
+	i := f.find(pane)
+	n, err := strconv.Atoi(size)
+	if i < 0 || err != nil {
+		return errors.New("can't resize " + pane + " to " + size)
+	}
+	f.heights = append(f.heights, n)
+	f.setZoom(f.panes[i].Window, false)
+	f.panes[i].H = n
+	f.lay(f.panes[i].Window)
+	return nil
+}
+
+func (f *fakeMux) Move(list, target, size string, with tmux.Carried) error {
 	if f.moveErr != nil {
 		return f.moveErr
 	}
@@ -282,9 +331,20 @@ func (f *fakeMux) Move(list, target, size string) error {
 	if err != nil {
 		w = 48 // a share of a window 160 wide
 	}
+	from := f.panes[i].Window
 	f.panes[i].Session, f.panes[i].Window, f.panes[i].W, f.panes[i].WinW = f.panes[j].Session, f.panes[j].Window, w, f.panes[j].WinW
 	f.current[f.panes[j].Session] = f.panes[j].Window
 	f.focus = list // join-pane makes the list the active pane
+	// The pane it carries goes into the foot of its column, and is the
+	// active one when it had the keyboard.
+	f.carried = append(f.carried, with)
+	if k := f.find(with.Pane); k >= 0 {
+		f.panes[k].Session, f.panes[k].Window, f.panes[k].H, f.panes[k].WinW = f.panes[j].Session, f.panes[j].Window, with.Lines, f.panes[j].WinW
+		if with.Focus {
+			f.focus = with.Pane
+		}
+	}
+	f.lay(from)
 	f.lay(f.panes[j].Window)
 	return nil
 }
@@ -398,9 +458,14 @@ func (f *fakeMux) Split(target, dir, size string, env []string, command ...strin
 // exit ends a pane's process, which closes it.
 func (f *fakeMux) exit(id string) {
 	if i := f.find(id); i >= 0 {
-		// tmux ends the zoom of a window that loses a pane.
-		f.setZoom(f.panes[i].Window, false)
+		// tmux ends the zoom of a window that loses a pane, and gives
+		// its room to the panes left.
+		w := f.panes[i].Window
+		f.setZoom(w, false)
 		f.panes = slices.Delete(f.panes, i, i+1)
+		if f.inWindow(w) > 0 {
+			f.lay(w)
+		}
 	}
 }
 
@@ -412,7 +477,7 @@ func (f *fakeMux) die(id string) {
 	if i < 0 {
 		return
 	}
-	if w := f.panes[i].Window; w == f.stage() && f.inWindow(w) == 2 {
+	if w := f.panes[i].Window; w == f.stage() && panesIn(f.panes, w) == 2 {
 		f.panes[i].Dead = true
 		return
 	}

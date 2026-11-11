@@ -89,6 +89,16 @@ func main() {
 	case "stage":
 		tui.Stage()
 		return
+	case "agents":
+		// The agents' pane's program, started by the view with the socket
+		// it listens on.
+		if len(rest) != 1 {
+			fail(errors.New("agents is started by the view, with the socket it listens on"))
+		}
+		if err := tui.Relay(rest[0]); err != nil {
+			fail(err)
+		}
+		return
 	case "review":
 		if err := reviewCmd(rest); err != nil {
 			fail(err)

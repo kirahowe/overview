@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -50,6 +51,10 @@ const (
 	NoteOption  = "@overview-note"
 )
 
+// AgentsOption marks the pane under the list that shows the agents. The
+// view draws it and takes its keys, through the program that runs there.
+const AgentsOption = "@overview-agents"
+
 // PanelsTable is the key table of the panels mode: while a client is in
 // it, its keys move the focus between panes and do not reach the program
 // in the focused pane. BindPanels sets it up.
@@ -60,14 +65,14 @@ const PanelsTable = "overview-panels"
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
-	"\t#{pane-border-status}\t#{pane_dead}\t#{pane_current_path}"
+	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{pane_current_path}"
 
 // clientFormat is how Panes asks for each client: its session, key table
 // and when it was last used, after a word that no pane line starts with.
 const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 22
+const paneFields = 23
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -92,6 +97,7 @@ type Pane struct {
 	Framed  bool   // the window draws a rule along the top of each pane
 	Panels  bool   // a client of the pane's session is in the panels mode
 	Dead    bool   // its program has exited, and HoldExits keeps it open
+	Agents  bool   // the pane under the list that shows the agents
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -181,7 +187,7 @@ func ParsePanes(out string) []Pane {
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, List: f[7] == "1",
 			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
-			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Path: f[21],
+			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Path: f[22],
 		})
 	}
 	return panes
@@ -308,6 +314,25 @@ func (s Server) create(args []string, dir string, env, command []string) (Pane, 
 // ID, tty, session and window.
 func (s Server) Split(target, dir, size string, env []string, command ...string) (Pane, error) {
 	return s.create([]string{"split-window", "-v", "-b", "-l", size, "-t", target}, dir, env, command)
+}
+
+// Under runs command in a new pane under list, lines tall, marks it as
+// the agents' pane and leaves the keyboard where it is. The pane closes
+// when its program exits, as the list's does: see HoldExits. The pane
+// returned knows its ID, tty, session and window, and that it is the
+// agents'. One that cannot be marked is closed again.
+func (s Server) Under(list string, lines int, command ...string) (Pane, error) {
+	p, err := s.create([]string{"split-window", "-v", "-d", "-l", strconv.Itoa(lines), "-t", list}, "", nil, command)
+	if err != nil {
+		return Pane{}, err
+	}
+	p.Agents = true
+	if _, err = s.run("set-option", "-p", "-t", p.ID, AgentsOption, "1", ";",
+		"set-option", "-p", "-t", p.ID, "remain-on-exit", "off"); err != nil {
+		// Unmarked, no listing would know it from a terminal, so it goes.
+		return Pane{}, errors.Join(err, s.KillPane(p.ID))
+	}
+	return p, nil
 }
 
 // Resize makes pane size tall, as Split takes it.
@@ -441,8 +466,11 @@ func (s Server) BindPanels() error {
 
 // DiedHook is what HoldExits runs when a pane's program exits: it closes
 // the pane, unless the pane shares its window with the list alone, which
-// would then fill the window until the view moved it on.
-const DiedHook = `if-shell -F "#{||:#{!=:#{window_panes},2},#{!:#{P:#{?#{` + ListOption + `},1,}}}}" kill-pane`
+// would then fill the window until the view moved it on. The agents' pane
+// is part of the list's column, so it does not count as company: the
+// format's first half writes an x for each pane of the window that is
+// neither the list nor the agents', the dead one among them.
+const DiedHook = `if-shell -F "#{||:#{!=:#{P:#{?#{||:#{` + ListOption + `},#{` + AgentsOption + `}},,x}},x},#{!:#{P:#{?#{` + ListOption + `},1,}}}}" kill-pane`
 
 // HoldExits keeps a pane open, blank, once its program exits, and
 // DiedHook closes it straight away unless it is the last pane beside the
@@ -569,11 +597,36 @@ func (s Server) Paste(pane, buffer, text string) error {
 	return err
 }
 
+// Carried is the pane that goes with the list when it moves: the agents'
+// pane under it, Lines tall. Pane is "" when there is none. Focus says the
+// keyboard is in that pane, and stays there.
+type Carried struct {
+	Pane  string
+	Lines int
+	Focus bool
+}
+
 // Move puts pane list in target's window as a full-height column on the
 // left, size wide, and makes that window current and list its active pane.
-// A window that list leaves empty closes.
-func (s Server) Move(list, target, size string) error {
-	_, err := s.run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
+// The pane it carries goes too, into the foot of that column, and is the
+// active pane instead when it has the keyboard. The list is then moved
+// without being made active on the way, or tmux would tell its program
+// the keyboard had come and gone. A window that they leave empty closes.
+// tmux runs both moves as one command, so no client draws the window
+// between them.
+func (s Server) Move(list, target, size string, with Carried) error {
+	args := []string{"join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target}
+	if with.Pane != "" && with.Focus {
+		args = slices.Insert(args, 1, "-d")
+	}
+	if with.Pane != "" {
+		args = append(args, ";", "join-pane", "-v")
+		if !with.Focus {
+			args = append(args, "-d")
+		}
+		args = append(args, "-l", strconv.Itoa(with.Lines), "-s", with.Pane, "-t", list)
+	}
+	_, err := s.run(args...)
 	return err
 }
 

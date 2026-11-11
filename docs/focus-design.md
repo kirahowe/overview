@@ -27,17 +27,57 @@ is not focus is not among them.
 `pane-active-border-style` in the accent, `pane-border-style` in the
 border colour, and `pane-border-indicators off`, so the whole border of
 the active pane is lit and not half of it. The view sets nothing per
-pane to light one. The view's own pane is a tmux pane like the rest.
+pane to light one. The view has two panes of its own, the list's and the
+agents' under it, and both are tmux panes like the rest.
 
-**Inside the view's pane.** The view draws everything there, so it shows
-its own focus there: the projects or the agents, whichever holds the
-cursor, and in the cockpit the list or the issues card, whichever has
-the keys (tab moves between them). The view lights that part's rule
-while its pane has the keys. This level never uses tmux's borders.
+**Inside a pane of the view's.** Where the view draws more than one
+panel in a pane, it shows its own focus there: in the cockpit the list
+or the issues card, whichever has the keys (tab moves between them). The
+view lights that part's rule while its pane has the keys. This level
+never uses tmux's borders.
 
-When the keys are in the agents, tmux lights the view's pane, the rule
-along its top included, and the view lights the agents' rule: the pane
-has the keys, and in it the agents do.
+## The agents' pane
+
+The agents were once a panel drawn at the foot of the list's pane, and
+the cursor walked from the list on into them. That left them out of
+everything that moves tmux's focus: the panels mode and the user's own
+bindings are `select-pane`, which goes from pane to pane and knows
+nothing of what a pane draws inside itself. So the agents have a tmux
+pane, and nothing has to pretend.
+
+- `tmux.Under` splits it off the foot of the list's pane and marks it
+  with `@overview-agents`. `tmux.Move` takes it along when the list
+  changes window, in the same tmux command, and leaves the keyboard in
+  whichever of the two had it. The pane is part of the list's column, so
+  it is not company for the list: `panesIn` and `tmux.DiedHook` leave it
+  out when they ask whether the list is alone.
+- One process still decides what both panes show. The pane runs
+  `overview agents <socket>`, which is `tui.Relay`: it passes each key,
+  click, focus event and its size to the view over a unix socket beside
+  tmux's, a line of JSON each, and shows the screen the view sends back.
+  The view takes them as it takes its own pane's, tagged with the pane
+  they came from, and `apply` stays the one place they change the model.
+- `keepAgents` holds the pane to what the listing calls for, a step at a
+  time, as `agentsPlan` decides: open it when sessions are listed, size
+  it to its lines, close it with the last session, and close any that is
+  not under the list.
+- The footer is the last line of the column, so it is the last line of
+  the agents' pane while that is open, and the list's pane has none.
+- The cursor stays one cursor, which is what the stage follows. j and k
+  stop at the end of the side they are on (`side`). When the keyboard
+  arrives in one of the two panes the cursor goes to that side, to the
+  same session's entry there when it was on a session (`across`), so the
+  stage does not move because the focus did.
+- The list's pane draws the agents itself, as it used to, whenever the
+  pane is not showing them (`apart` is false): before the pane's program
+  has connected, in a window too short for it, and while the cockpit or
+  the task picker has the list zoomed, since a zoom hides every other
+  pane. There the cursor walks on into the agents as before.
+
+Two panes of one program can each tell the view that the keyboard has
+come or gone, and the two reports of one move arrive in either order. So
+a pane's blur counts only while the view thinks the keyboard is in that
+pane.
 
 ## The panels mode
 
@@ -89,11 +129,13 @@ client, is the one place that tells them apart.
 
 ## Where the keys land
 
-The keys start in the list. However they come back into the view's pane,
+The keys start in the list. However they come back into the list's pane,
 by ctrl+[, by tmux's keys or by a click, they land in the list on the
-cursor, so j and k move it at once. A list panel that goes away leaves
-the keys in the projects. With no selection apart from focus, these hold
-without any bookkeeping.
+cursor, so j and k move it at once. In the agents' pane they land on the
+cursor among the agents. If that pane goes while it has the keys, they
+are taken to be outside the view until a pane reports them. With no
+selection apart from focus, these hold with no more bookkeeping than
+which of the view's two panes has the keys.
 
 ## Details that bite
 
@@ -106,6 +148,16 @@ without any bookkeeping.
   reaches the view clears its flag, since the mode keeps every key for
   tmux. The Cmd that enters the mode holds listings off until it lands,
   as a spawn does, so an older listing cannot undo it.
+- A move that carries the agents' pane with the keys in it would make
+  the list active on the way, and tmux would report the keyboard to
+  both programs. `tmux.Move` moves the list with `-d` then. tmux still
+  tells the agents' pane the keyboard went and came back, so while a
+  move is in flight the cursor does not follow the list's window, as it
+  otherwise does while the keyboard is outside the view.
+- A split or a resize ends a window's zoom, and a pane that is being
+  split off is not listed yet. So while a step on the agents' pane is
+  out (`agentsBusy`), the list does not move and the cockpit and the
+  task picker wait to zoom it.
 - ctrl+[ and esc are two keys to tmux only when the terminal sends
   extended keys, so `overview-panels` binds both. Without them ctrl+[
   arrives as esc and leaves the mode in the pane that has the focus.

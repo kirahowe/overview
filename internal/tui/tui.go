@@ -197,6 +197,25 @@ type model struct {
 	framed              map[string]paneFrame
 	framing, frameStale bool
 
+	// The agents' pane, as agents.go describes. agentsSock is the socket
+	// its program reaches the view on, "" when the view starts no such
+	// pane. aw and ah are the pane's size as its program last said, 0
+	// until it has. inAgents is set while the keyboard is in that pane,
+	// and other, on a copy of the model that draws one of the two panes,
+	// while it is in the other one. agentsBusy is set while a Cmd that
+	// starts, sizes or closes the pane is out, and agentsRefused is the last height
+	// asked of tmux for it, which is not asked twice running.
+	// agentsShown is the screen last sent to the pane, and agentsSeq its
+	// number.
+	agentsSock    string
+	aw, ah        int
+	inAgents      bool
+	other         bool
+	agentsBusy    bool
+	agentsRefused agentsAsk
+	agentsShown   string
+	agentsSeq     int
+
 	// pick is the add-project picker, open while it takes the list pane.
 	pick picker
 	// taskPick is the task picker, open while it takes the list pane.
@@ -295,7 +314,23 @@ func Run(v View) error {
 		return err
 	}
 	m = m.setPanes(panes, rs)
-	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus()).Run()
+	// The agents' pane reaches the view here. A pane left by a view that
+	// has just gone may connect before this one's program is made, so
+	// what it passes on waits for that, and Send then waits for the
+	// program to start. A view that cannot listen starts no such pane,
+	// and draws the agents in the list's own.
+	var p *tea.Program
+	made := make(chan struct{})
+	sock := agentsSocket(socket, session)
+	if link, err := listenAgents(sock, func(msg tea.Msg) { <-made; p.Send(msg) }); err != nil {
+		m = m.say("the agents have no pane of their own: " + err.Error())
+	} else {
+		defer link.close()
+		m.agentsSock, m.deps.drawAgents = sock, link.draw
+	}
+	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
+	close(made)
+	_, err = p.Run()
 	return err
 }
 
@@ -313,9 +348,12 @@ type deps struct {
 	psTable  func() ([]byte, error)
 	readDirs func(dir string) ([]string, error)
 	writeTTY func(tty string, b []byte) error
-	exists   func(path string) bool      // whether anything is at path
-	resolve  func(path string) string    // path with its symlinks resolved
-	modTime  func(path string) time.Time // when a file was last written, zero if unknown
+	// drawAgents sends the agents' pane the screen numbered seq, nil
+	// when the view has no such pane.
+	drawAgents func(seq int, screen string) error
+	exists     func(path string) bool      // whether anything is at path
+	resolve    func(path string) string    // path with its symlinks resolved
+	modTime    func(path string) time.Time // when a file was last written, zero if unknown
 	// recentTurns reads the last n turns of a transcript.
 	recentTurns func(path string, n int) []fleet.Turn
 	// reviews reads the reviews of rows' sessions, by session ID.
@@ -830,6 +868,12 @@ func (m model) stick(before model) model {
 // the window it was in when its session ended there.
 func (m model) keepCursor(before model) model {
 	if m.blurred {
+		// While the list is on its way to another window, the one it is
+		// in says nothing of where the cursor belongs. tmux can report
+		// the keyboard gone and back in the middle of such a move.
+		if m.staging {
+			return m
+		}
 		if key, ok := follow(m.placed(m.ordered()), m.windowOf(m.self), m.sel); ok && key != m.sel {
 			m.sel, m.confirm = key, ""
 		}
@@ -936,9 +980,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // needs, and the issues card's cursor on an issue it lists.
 func (m model) settle(before model) model {
 	m = m.keepCursor(before)
-	if m.w > 0 && m.screen == sessionsScreen {
+	switch {
+	case m.w > 0 && m.screen == sessionsScreen:
 		col := m.shownColumn()
 		m.listTop, m.agentsTop = col.projTop, col.agentsTop
+	case m.apart():
+		// The agents' pane shows them whatever the list's pane shows.
+		m.agentsTop = m.shownColumn().agentsTop
 	}
 	if m.help {
 		m.helpTop = max(0, min(m.helpTop, m.helpMax()))
@@ -949,7 +997,8 @@ func (m model) settle(before model) model {
 // effects compares what tmux and the reads should be with what is in
 // flight, and sends the differences as Cmds: the list's place and the
 // holder, the selected session's turns, the cockpit's and the task
-// picker's reads, the trackers after a refresh, and the panes' rules.
+// picker's reads, the trackers after a refresh, the panes' rules, and
+// the agents' pane's screen.
 func (m model) effects() (model, tea.Cmd) {
 	m, stage := m.restage()
 	m, turns := m.askTurns()
@@ -957,7 +1006,8 @@ func (m model) effects() (model, tea.Cmd) {
 	m, taskRead := m.taskReads()
 	m, trackers := m.readTrackers()
 	m, frame := m.reframe()
-	return m, tea.Batch(stage, turns, reads, taskRead, trackers, frame)
+	m, agents := m.redrawAgents()
+	return m, tea.Batch(stage, turns, reads, taskRead, trackers, frame, agents)
 }
 
 func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -970,13 +1020,19 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handle(do(keysLeft))
 	case panesTick, panesMsg, stagedMsg, spawnedMsg, closedMsg, reviewOpenedMsg, widthMsg, zoomedMsg, framedMsg, panelsMsg:
 		return m.stageUpdate(msg)
+	case agentsOpenedMsg, agentsKeptMsg:
+		return m.agentsLanded(msg)
+	case agentsMsg:
+		return m.fromAgents(msg.msg)
+	case agentsGone:
+		return m.lostAgents(), nil
 	case tea.KeyMsg:
 		// A key that reaches the list proves the keyboard is back, whether
 		// or not tmux said so, since a focus event can go missing. It also
 		// proves the client is out of the panels mode, which keeps every
 		// key for itself.
 		m.panels = false
-		return m.input(keysBack, true, func(m model) []action { return m.keyActions(msg) })
+		return m.input(action{do: keysBack}, true, func(m model) []action { return m.keyActions(msg) })
 	case tea.MouseMsg:
 		// tmux's panels mode does not bind the mouse, so a mouse event
 		// that reaches the view has taken the client out of it.
@@ -986,7 +1042,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// time Update read at the door, so apply stays pure.
 		at := m.now
 		wheel := msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
-		return m.input(pointerHere, !wheel, func(m model) []action { return m.mouseActions(msg, at) })
+		return m.input(action{do: pointerHere}, !wheel, func(m model) []action { return m.mouseActions(msg, at, false) })
 	case noteMsg:
 		m = m.say(string(msg))
 	case frameMsg:
@@ -1081,8 +1137,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // results, in order. A key or a click that means something has read the
 // note, so heard clears it first. The wheel only looks, so read is false
 // for it and the note stays.
-func (m model) input(arrival verb, read bool, translate func(model) []action) (tea.Model, tea.Cmd) {
-	m, first := m.apply(action{do: arrival})
+func (m model) input(arrival action, read bool, translate func(model) []action) (tea.Model, tea.Cmd) {
+	m, first := m.apply(arrival)
 	as := translate(m)
 	if read && len(as) > 0 {
 		as = append([]action{{do: heard}}, as...)
@@ -1126,12 +1182,20 @@ func (m model) apply(a action) (model, tea.Cmd) {
 	switch a.do {
 	case heard:
 		m.note = ""
-	case keysBack:
-		return m.unblur(), nil
+	case keysBack, pointerHere:
+		// n says which of the view's panes: 1 for the agents', 0 for the
+		// list's. The cursor goes to that pane's side of the list.
+		m = m.unblur()
+		if a.do == keysBack {
+			m.inAgents = a.n == 1
+		}
+		return m.cross(a.n == 1), nil
 	case keysLeft:
-		m.blurred = true
-	case pointerHere:
-		return m.unblur(), nil
+		// The pane the keyboard went to may have said so first, when it
+		// is the view's other pane, and then this one is old news.
+		if (a.n == 1) == m.inAgents {
+			m.blurred, m.inAgents = true, false
+		}
 	case detach:
 		if m.mux == nil {
 			return m, tea.Quit
@@ -1195,19 +1259,33 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		return m, m.runDigest // the footer says so while it runs
 	case refresh:
 		return m, m.refresh
-	case move:
-		return m.moveTo(es, i+a.n), nil
-	case moveTo:
-		// g goes where the cursor starts, under the top project's rule.
-		if a.n == 0 {
-			a.n = first(es)
+	case move, moveTo:
+		// The cursor stays on its side of the list while the agents have
+		// a pane of their own.
+		lo, hi := side(es, i, m.apart())
+		if hi == lo {
+			return m, nil
 		}
-		return m.moveTo(es, a.n), nil
+		to := i + a.n
+		if a.do == moveTo {
+			to = lo + a.n
+			// g goes where the cursor starts, under the top project's
+			// rule.
+			if a.n == 0 {
+				to = lo + first(es[lo:hi])
+			}
+		}
+		return m.moveTo(es, max(lo, min(to, hi-1))), nil
 	case nextNeedy:
-		// Wraps round the list.
-		for d := 1; d <= len(es); d++ {
-			j := ((i+a.n*d)%len(es) + len(es)) % len(es)
-			if needy(es[j]) {
+		// Wraps round the list, or the cursor's side of it.
+		lo, hi := side(es, i, m.apart())
+		stops := needy
+		if lo > 0 {
+			stops = needs
+		}
+		for d, n := 1, hi-lo; d <= n; d++ {
+			j := lo + ((i-lo+a.n*d)%n+n)%n
+			if stops(es[j]) {
 				return m.moveTo(es, j), nil
 			}
 		}
@@ -1228,10 +1306,16 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		} else if r := []rune(m.filter); len(r) > 0 {
 			m.filter = string(r[:len(r)-1])
 		}
-		// New search text puts the cursor on the first match.
+		// New search text puts the cursor on the first match, among the
+		// agents when it is typed in their pane and one of them matches.
 		if m.filter != before {
+			agents := m.inAgents && m.apart()
 			es := m.ordered()
-			return m.moveTo(es, first(es)), nil
+			to := first(es)
+			if j := slices.IndexFunc(es, func(e entry) bool { return e.alias == agentsPrefix }); agents && j >= 0 {
+				to = j
+			}
+			return m.moveTo(es, to), nil
 		}
 	case cancelSearch:
 		m.filter, m.filtering = "", false

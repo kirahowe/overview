@@ -72,8 +72,9 @@ and the view draws the same rule for the panels it draws itself. A rule
 starts with the panel's name, bold on a block of colour, so it stands out
 from the headings and lines of a long list. The panel that has the
 keyboard has that block and its rule in the accent colour. For a tmux
-pane that is its active pane, whose whole border tmux lights. In the list
-it is the agents' rule while the cursor is in the agents.
+pane that is its active pane, whose whole border tmux lights. The list
+and the agents under it are two tmux panes, so each lights as any pane
+does.
 
 The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list
@@ -115,7 +116,7 @@ left, it goes to the first entry now in the project: the rule of a
 pinned project that has emptied, or the session that started in a
 pinned project that had nothing in it.
 
-The agents are a panel of their own, under the projects. They hold every
+The agents are a panel of their own, under the list. They hold every
 session in the list once more, in order of priority: those that need you
 first, longest wait first, then the working ones, then the idle ones. A
 session there acts exactly as it does in its project, and its row names
@@ -123,9 +124,32 @@ its project, or the task it works on as `#6`. A long project path keeps
 its end. In a narrow pane a row keeps ten cells of its name: a session
 drops its age, then its review badge's words, then the badge, then its
 state word before its name is cut further, and a task drops its priority
-and then its status. When both fit, the agents
-sit at the bottom of the list's pane. Otherwise they take up to two
-fifths of it, and the projects and the agents each scroll on their own.
+and then its status.
+
+The agents' panel is a tmux pane, the foot of the list's column: as wide
+as the list, with a line for each session and one for the footer, which
+is the column's last line. It opens when the first session is listed and
+closes with the last. When the list and the agents do not both fit, the
+agents take up to two fifths of the column, and each scrolls on its own.
+Since it is a pane, whatever moves tmux's focus reaches it: `j` from the
+list in the panels mode, your own tmux key for the pane below (`ctrl+b`
+and the down arrow unless you have bound another), or a click. It goes
+with the list when the list moves beside another session.
+
+There is still one cursor, on the side where the keyboard is, and `j` and
+`k` stop at the end of that side. When the keyboard goes down from the
+list to the agents, the cursor goes to the same session among them, so
+the session shown beside the list stays as it is. From an entry that is
+no session it goes to the first of the agents. Coming back up, it goes to
+that session's row in the list. Every key of the list does in the agents'
+pane what it does in the list. Help, a search and a question such as
+whether to stop a session still show in the list's pane and the footer.
+
+While the cockpit or the task picker is open, the list is zoomed over the
+agents' pane and draws the agents itself, as its last lines under a rule
+of their own, and there `j` and `k` walk on from the list into them. It
+draws them itself in a window too short for the pane as well.
+
 The footer shows the keys for where the keyboard is, or a note when
 overview has something to say. A note stays until the next key or click
 that does something, or for six seconds. The wheel leaves it. A newer
@@ -289,7 +313,8 @@ Escape there, and so does a terminal that cannot send extended keys. The footer 
 `panels`, the cursor's row loses its background, and the focused pane's
 rule says `enter to act` after its title. In the mode `h`, `j`, `k` and
 `l`, or the arrows, move the focus to the pane that way, and the mode
-stays on. `enter` or `esc` leaves it, and the keys then go to what the
+stays on: `j` from the list goes down to the agents, and `k` from there
+back up. `enter` or `esc` leaves it, and the keys then go to what the
 focused pane runs: the list, where they move the cursor, or a session.
 `ctrl+[` goes to the list and leaves the mode. While a client is in the
 mode, whichever pane has the focus, the footer says `panels`, `hjkl move`,
@@ -299,11 +324,14 @@ click or a tmux key does what it always does, and a letter is dropped, so
 nothing typed by mistake reaches a session. The
 cockpit has no panels mode, since it fills the window.
 
-In the list, `j`/`k` move, and walk on from the projects into the agents.
+In the list, `j`/`k` move, as far as its first and last entries: the
+agents have their own pane below it.
 `g` goes to the first entry under the top project's rule, and `G` to the
 last entry. `n` jumps to the next session
 that needs you or workstream in review, `N` to the previous one, and `/`
-searches. Search looks at the project,
+searches. In the agents' pane the same keys move among the agents: `g`
+and `G` go to the first and last of them, and `n` and `N` to the next and
+previous session that needs you. Search looks at the project,
 title, last prompt and name, and the app's name for a session in another
 app, ignoring case. A workstream matches on its reference, such as
 `overview#6` or `#6`, its title and its project, and when it matches,
@@ -398,8 +426,10 @@ another pane, which closes the picker too. In a project without
 `.issues`, `s` says how to start tracking its tasks.
 
 The mouse works too. A click selects a session and puts the keyboard in
-the list, a double click moves the keyboard into the session as `enter`
-does, and the wheel moves through the list and
+the list, or in the agents' pane when the row is there, a double click
+moves the keyboard into the session as `enter`
+does, and the wheel moves through the list, or the agents when it is over
+their pane, and
 scrolls the digests. A click also closes help and cancels a stop. tmux has
 the mouse on, so a click on a pane focuses it, and you can drag the borders
 between panes. The list keeps the width you drag it to, in every window it

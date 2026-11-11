@@ -23,10 +23,13 @@ rule drawn the same way was hard to find among them.
   follows it in `@overview-note`, tmux styles and all, with every `#`
   doubled. The theme's colours are session options, so two homes on one
   server keep their own.
+- The agents are a tmux pane too, under the list's, so tmux draws their
+  rule like any other. focus-design.md says why.
 - The view draws the same rule for the panels it draws itself: the
-  agents, under the projects in the list's pane, and the cockpit's cards.
-  `panelRule` is that rule, and the cockpit joins rules to the lines
-  between panels with `┬ ├ ┤ ┼ ┴`.
+  cockpit's cards, and the agents where the list's pane has to draw
+  them, as it does under the cockpit's zoom. `panelRule` is that rule,
+  and the cockpit joins rules to the lines between panels with
+  `┬ ├ ┤ ┼ ┴`.
 - The cockpit zooms the list's pane and draws the whole window itself,
   so the window's rules go while it is zoomed (`SetZoom` and `SetFrame`),
   and the cockpit draws the list's rule in their place.
@@ -43,11 +46,11 @@ in `status-fg`. The view sets nothing per pane to light one.
 The border between two panes is lit along its whole length. tmux's
 `pane-border-indicators` would light only half of it in a window of two
 panes, so `tmux.Frame` turns them off. tmux then styles a shared border
-from the active pane, and the active pane's rule fill is lit too. Inside the
-view's own pane the view lights what it draws: the agents' rule while the
-cursor is in the agents and the keyboard is in the view, and in the cockpit
-the list's rule or the issues card's, whichever has the keys. Focus and its
-reasons are in focus-design.md.
+from the active pane, and the active pane's rule fill is lit too. Where the
+view draws a rule itself it lights it itself: in the cockpit the list's
+rule or the issues card's, whichever has the keys, and the agents' rule,
+when the list's pane draws it, while the cursor is in the agents. Focus and
+its reasons are in focus-design.md.
 
 `frames` works out every pane's title from the model, and `reframe` sends
 tmux only what changed, one Cmd at a time, as `restage` does for the

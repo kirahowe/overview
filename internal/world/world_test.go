@@ -369,7 +369,9 @@ func TestTerminals(t *testing.T) {
 		{ID: "%8", Session: "ov", Window: "@5", Command: "zsh"}, // the one c opened
 		{ID: "%9", Session: "ov", Window: "@6", Command: "overview"},
 		{ID: "%10", Session: "other", Window: "@7", Command: "zsh"},
-		{ID: "%11", Session: "ov", Window: "@6", Command: ""}, // beside the list
+		{ID: "%11", Session: "ov", Window: "@6", Command: ""},                       // beside the list
+		{ID: "%12", Session: "ov", Window: "@6", Command: "overview", Agents: true}, // under it
+		{ID: "%13", Session: "ov", Window: "@8", Command: "overview", Agents: true}, // left behind
 	}
 	w := Derive(Inputs{
 		Rows: []fleet.Row{cl}, TTYs: map[int]string{7: "ttys007"}, Panes: panes,

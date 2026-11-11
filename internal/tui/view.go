@@ -57,11 +57,17 @@ func pill(text string, bg lipgloss.Color) string {
 
 // Layout. tmux draws the rule along the top of the pane, with the list's
 // title in it, so the list starts on the pane's first line. The last line
-// is the footer. Every line is exactly as wide as the pane: column 0
-// holds the cursor's bar, the content follows, and one blank column ends
-// it.
+// is the footer, unless the agents have their pane under this one: the
+// footer is then that pane's last line, at the foot of the column. Every
+// line is exactly as wide as the pane: column 0 holds the cursor's bar,
+// the content follows, and one blank column ends it.
 
-func (m model) listHeight() int { return max(m.h-1, 1) }
+func (m model) listHeight() int {
+	if m.apart() {
+		return max(m.h, 1)
+	}
+	return max(m.h-1, 1)
+}
 
 // contentWidth is the width of a line's content, between the bar's column
 // and the blank one at the end.
@@ -71,6 +77,9 @@ func (m model) View() string {
 	if m.w <= 0 || m.h <= 0 {
 		return ""
 	}
+	apart := m.apart()
+	// While the keyboard is in the agents' pane, no row here is lit.
+	m.other = apart && m.inAgents
 	var body []string
 	switch {
 	case m.screen == digestScreen:
@@ -92,7 +101,9 @@ func (m model) View() string {
 	case m.verdict.open():
 		screen = centre(screen, m.verdictBox(), m.w)
 	}
-	screen = append(screen, m.footer())
+	if !apart {
+		screen = append(screen, m.footer())
+	}
 	return strings.Join(screen[:min(len(screen), m.h)], "\n")
 }
 
@@ -679,6 +690,8 @@ func agentEntries(secs []section) []entry {
 // part scrolls on its own, as little as its cursor needs, from projTop
 // and agentsTop. owners holds the key of each line's entry, "" for
 // others, and rule the line of the agents panel's rule, -1 for none.
+// While the agents have a pane of their own, the column is the projects
+// alone, and agentsTop says how far that pane has scrolled.
 type column struct {
 	lines, owners      []string
 	projTop, agentsTop int
@@ -689,9 +702,13 @@ type column struct {
 // column lays the list out in h lines, with sel under the cursor.
 func (m model) column(secs []section, sel string, h int) column {
 	plines, powners := m.projectLines(secs, sel)
+	apart := m.apart()
 	var alines, aowners []string
 	for _, e := range agentEntries(secs) {
-		alines, aowners = append(alines, m.entryLine(e, e.key() == sel)), append(aowners, e.key())
+		aowners = append(aowners, e.key())
+		if !apart {
+			alines = append(alines, m.entryLine(e, e.key() == sel))
+		}
 	}
 	c := column{rule: -1}
 	c.projH, c.agentsH = splitList(len(plines), len(alines), h)
@@ -705,6 +722,10 @@ func (m model) column(secs []section, sel string, h int) column {
 		}
 	}
 	show(plines, powners, c.projTop, c.projH)
+	if apart {
+		_, _, c.agentsTop = m.agentsBody(secs, sel)
+		return c
+	}
 	if c.agentsH > 0 {
 		c.rule = len(c.lines)
 		c.lines, c.owners = append(c.lines, panelRule(ruleTitle{name: agentsTitle}, dim.Render("priority"), m.w, m.agentsLit())), append(c.owners, "")

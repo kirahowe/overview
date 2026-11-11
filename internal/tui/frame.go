@@ -130,6 +130,8 @@ func (m model) paneTitle(p tmux.Pane, w *world.World, byPane map[string]*world.S
 			segs = append(segs, titleSeg{"  · digests", pal.Muted})
 		}
 		return segs
+	case p.Agents:
+		return []titleSeg{{text: agentsTitle}, {"  priority", pal.Muted}}
 	case p.Holder:
 		e, _, ok := m.selected(m.ordered())
 		return m.entryTitle(e, ok)

@@ -452,7 +452,7 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		self := rapid.SampledFrom(panes).Draw(t, "self")
 		want := rapid.SampledFrom(append(slices.Clone(panes), tmux.Pane{ID: "%99"})).Draw(t, "want")
 		width := rapid.OneOf(rapid.Just(0), rapid.IntRange(1, 200)).Draw(t, "width")
-		mv, ok := plan(self.ID, want.ID, panes, width)
+		mv, ok := plan(self.ID, want.ID, panes, width, false)
 		if ok != (want.ID != "%99" && want.Window != self.Window) {
 			t.Fatalf("move %v for want %+v, list %+v", ok, want, self)
 		}
@@ -483,7 +483,7 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		if mv.size != size {
 			t.Fatalf("the list %d wide, keeping %d, with %d beside it, moves %s wide into %d, want %s", self.W, width, left, mv.size, want.WinW, size)
 		}
-		if again, ok := plan(self.ID, want.ID, after, width); ok {
+		if again, ok := plan(self.ID, want.ID, after, width, false); ok {
 			t.Fatalf("after the move, plan asks for %+v", again)
 		}
 	})
@@ -2248,6 +2248,221 @@ func TestPropAPanelRuleFitsItsWidth(t *testing.T) {
 		}
 		if whole && title.rest != "" && ansi.StringWidth(name)+ansi.StringWidth(title.rest)+6 <= w && !strings.Contains(got, "── "+name+" "+title.rest+" ─") {
 			t.Fatalf("the rule %q has room for %q after the name", got, title.rest)
+		}
+	})
+}
+
+// The cursor crosses to the side asked for, and to nowhere when it is
+// there already or that side has nothing. From a session it lands on that
+// session's entry there, its own before any under another workstream, so
+// what the stage shows does not change.
+func TestPropAcrossKeepsTheSession(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		es := flatten(present(genListWorld(t), ""))
+		if len(es) == 0 {
+			return
+		}
+		i := rapid.IntRange(0, len(es)-1).Draw(t, "i")
+		agents := rapid.Bool().Draw(t, "agents")
+		onSide := func(e entry) bool { return (e.alias == agentsPrefix) == agents }
+		key, ok := across(es, i, agents)
+		if want := !onSide(es[i]) && slices.ContainsFunc(es, onSide); ok != want {
+			t.Fatalf("across from %s to agents %v: ok %v, want %v", es[i].key(), agents, ok, want)
+		}
+		if !ok {
+			return
+		}
+		j := slices.IndexFunc(es, func(e entry) bool { return e.key() == key })
+		if j < 0 || !onSide(es[j]) {
+			t.Fatalf("across from %s went to %q, which is not on that side", es[i].key(), key)
+		}
+		s, isSession := es[i].session()
+		if !isSession {
+			return
+		}
+		same := func(e entry) bool { return onSide(e) && e.kind == sessionEntry && e.sess.SessionID == s.SessionID }
+		if !slices.ContainsFunc(es, same) {
+			return
+		}
+		if !same(es[j]) {
+			t.Fatalf("across from %s went to %s, which is another session", es[i].key(), key)
+		}
+		own := func(e entry) bool { return same(e) && e.alias == "" }
+		if !agents && slices.ContainsFunc(es, own) && es[j].alias != "" {
+			t.Fatalf("across from %s went to the alias %s, past the session's own entry", es[i].key(), key)
+		}
+	})
+}
+
+// The side the cursor walks holds the cursor's entry, and only entries on
+// its side of the list: the agents, or the rest. With the agents drawn in
+// the list's own pane it is the whole list.
+func TestPropSideIsTheCursorsOwn(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		es := flatten(present(genListWorld(t), ""))
+		if len(es) == 0 {
+			return
+		}
+		i := rapid.IntRange(0, len(es)-1).Draw(t, "i")
+		if lo, hi := side(es, i, false); lo != 0 || hi != len(es) {
+			t.Fatalf("with the agents in the list the side is [%d, %d) of %d", lo, hi, len(es))
+		}
+		lo, hi := side(es, i, true)
+		if i < lo || i >= hi {
+			t.Fatalf("the side [%d, %d) does not hold the cursor at %d", lo, hi, i)
+		}
+		for j, e := range es {
+			if in, same := j >= lo && j < hi, (e.alias == agentsPrefix) == (es[i].alias == agentsPrefix); in != same {
+				t.Fatalf("entry %d %s: in the side %v, on the cursor's side %v", j, e.key(), in, same)
+			}
+		}
+	})
+}
+
+// The agents' pane and the list above it fill their column: the pane has
+// a line for each of the agents it shows and one for the footer, the list
+// keeps a line at least, and tmux's rule is the line between them. With
+// room for every line the agents have theirs, and with no agents, or no
+// room, there is no pane.
+func TestPropAgentsHeight(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		p, a, total := rapid.IntRange(0, 80).Draw(t, "p"), rapid.IntRange(0, 40).Draw(t, "a"), rapid.IntRange(1, 80).Draw(t, "total")
+		h := agentsHeight(p, a, total)
+		if h == 0 {
+			if a > 0 && total >= 4 {
+				t.Fatalf("agentsHeight(%d, %d, %d) leaves the agents with no pane", p, a, total)
+			}
+			return
+		}
+		if a == 0 || h < 2 || h-1 > a || total-h-1 < 1 {
+			t.Fatalf("agentsHeight(%d, %d, %d) = %d", p, a, total, h)
+		}
+		if max(p, 1)+1+a+1 <= total && h != a+1 {
+			t.Fatalf("agentsHeight(%d, %d, %d) = %d: every line fits", p, a, total, h)
+		}
+	})
+}
+
+// agentsPlan closes every agents' pane but the one under the list before
+// anything else. Then it opens one only when there is none and one is
+// due, never touches a pane already as tall as it should be, and does not
+// ask tmux twice running for what it refused.
+func TestPropAgentsPlan(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		list := tmux.Pane{ID: "%0", Session: "ov", Window: "@1", H: rapid.IntRange(1, 60).Draw(t, "h"), List: true}
+		panes := []tmux.Pane{list, {ID: "%1", Session: "ov", Window: "@1", H: 20}}
+		var want []string
+		under := tmux.Pane{}
+		for i := range rapid.IntRange(0, 3).Draw(t, "panes") {
+			p := tmux.Pane{ID: fmt.Sprintf("%%%d", i+2), Agents: true, H: rapid.IntRange(1, 20).Draw(t, "ah"),
+				Session: rapid.SampledFrom([]string{"ov", "ov", "other"}).Draw(t, "session"),
+				Window:  rapid.SampledFrom([]string{"@1", "@1", "@2"}).Draw(t, "window")}
+			panes = append(panes, p)
+			switch {
+			case p.Session != "ov":
+			case p.Window == "@1" && under.ID == "":
+				under = p
+			default:
+				want = append(want, p.ID)
+			}
+		}
+		projects, agents := rapid.IntRange(0, 40).Draw(t, "projects"), rapid.IntRange(0, 20).Draw(t, "agents")
+		step, ids, ask := agentsPlan(panes, "ov", list, projects, agents, agentsAsk{})
+		if len(want) > 0 {
+			if step != agentsClose || !slices.Equal(ids, want) {
+				t.Fatalf("with strays %v: step %d on %v", want, step, ids)
+			}
+			return
+		}
+		total := list.H
+		if under.ID != "" {
+			total += 1 + under.H
+		}
+		due := agentsHeight(projects, agents, total)
+		wantStep := agentsStay
+		switch {
+		case under.ID == "" && due > 0:
+			wantStep = agentsOpen
+		case under.ID != "" && due == 0:
+			wantStep = agentsClose
+		case under.ID != "" && under.H != due:
+			wantStep = agentsSize
+		}
+		if step != wantStep || (step != agentsStay && ask != (agentsAsk{total, due, under.H})) {
+			t.Fatalf("under %+v, %d lines due of %d: step %d, ask %+v, want step %d", under, due, total, step, ask, wantStep)
+		}
+		if step == agentsSize || step == agentsClose {
+			if !slices.Equal(ids, []string{under.ID}) {
+				t.Fatalf("step %d names %v, want the pane under the list %s", step, ids, under.ID)
+			}
+		}
+		if again, _, _ := agentsPlan(panes, "ov", list, projects, agents, ask); step != agentsStay && again != agentsStay {
+			t.Fatalf("what tmux refused, %+v, is asked again: step %d", ask, again)
+		}
+	})
+}
+
+// With the agents in a pane of their own, a key typed in either pane
+// leaves the cursor on that pane's side of the list whenever that side
+// has an entry, and no key but the ones that search moves it across.
+func TestPropAKeyKeepsTheCursorWhereItIsTyped(t *testing.T) {
+	root := t.TempDir()
+	typed := 0
+	defer func() {
+		if typed == 0 && !t.Failed() {
+			t.Fatal("no case had a session to list, so no key was typed")
+		}
+	}()
+	rapid.Check(t, func(t *rapid.T) {
+		f := newFakeMux()
+		m := newModel(caseHome(t, root), "")
+		m.mux, m.self, m.session, m.exe = f, "%0", "ov", "overview"
+		m.deps = fakeDeps(f)
+		m.agentsSock = "/tmp/ov-test.sock"
+		m.deps.drawAgents = func(int, string) error { return nil }
+		rows, ttys, ts := workRows(t)
+		for _, r := range rows {
+			if tty := ttys[r.PID]; tty != "" {
+				f.add("ov", tty)
+			}
+		}
+		m.trackers = ts
+		m = m.setInputs(nil).setPanes(f.panes, nil)
+		m, cmd := step(m, tea.WindowSizeMsg{Width: 50, Height: 40})
+		m = settle(t, m, cmd)
+		m, cmd = step(m, rowsMsg{rows: rows, ttys: ttys})
+		m = settle(t, m, cmd)
+		m = relist(t, m, f)
+		p := agentsPaneOf(f)
+		if p.ID == "" {
+			if len(agentEntries(m.sections())) > 0 {
+				t.Fatalf("sessions are listed and no agents' pane was started: %+v", f.panes)
+			}
+			return
+		}
+		m = relist(t, fromPane(t, m, tea.WindowSizeMsg{Width: p.W, Height: p.H}), f)
+		for range rapid.IntRange(1, 12).Draw(t, "keys") {
+			inPane := rapid.Bool().Draw(t, "pane")
+			key := rapid.SampledFrom([]string{"j", "k", "g", "G", "n", "N", "down", "up", "r", "y"}).Draw(t, "key")
+			if inPane {
+				m = fromPane(t, m, keyMsg(key))
+			} else {
+				m = pressSettled(t, m, key)
+			}
+			typed++
+			if !m.apart() {
+				t.Fatalf("after %s the agents are no longer apart", key)
+			}
+			e, _, ok := m.selected(m.ordered())
+			if !ok {
+				t.Fatalf("after %s nothing is selected", key)
+			}
+			if has := slices.ContainsFunc(m.ordered(), func(e entry) bool { return (e.alias == agentsPrefix) == inPane }); has && (e.alias == agentsPrefix) != inPane {
+				t.Fatalf("%s typed in the agents' pane (%v) left the cursor on %s", key, inPane, e.key())
+			}
+			if m.inAgents != inPane || m.blurred {
+				t.Fatalf("after %s typed in the agents' pane (%v): inAgents %v blurred %v", key, inPane, m.inAgents, m.blurred)
+			}
 		}
 	})
 }

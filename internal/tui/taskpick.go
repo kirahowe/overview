@@ -148,9 +148,9 @@ func (m model) openTasks(root string) (model, tea.Cmd) {
 	}
 	// From the cockpit the zoom it holds stays for the picker.
 	m.cockpit, m.cockpitSoon = cockpit{}, false
-	m.taskPick, m.zoomPanes = taskPick{open: true, root: root}, m.inStage()
-	if m.staging {
-		return m, nil // the zoom waits for the move to land
+	m.taskPick, m.zoomPanes = taskPick{open: true, root: root}, m.inWindow()
+	if m.staging || m.agentsBusy {
+		return m, nil // the zoom waits for the move, or the agents' pane, to land
 	}
 	return m.syncZoom()
 }

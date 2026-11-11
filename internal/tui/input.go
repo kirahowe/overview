@@ -20,9 +20,9 @@ import (
 type verb int
 
 const (
-	keysBack    verb = iota // the keyboard is back in the view, from the pane it was in
-	keysLeft                // the keyboard has gone to another pane
-	pointerHere             // the mouse is over the view, wherever the keyboard is
+	keysBack    verb = iota // the keyboard is back in the view, from the pane it was in: n 1 in the agents' pane, 0 in the list's
+	keysLeft                // the keyboard has gone from that pane to another
+	pointerHere             // the mouse is over that pane, wherever the keyboard is
 	heard                   // a key or click that means something: the note it follows has been read
 	detach                  // leave the view running in tmux and close this terminal's view of it
 	openHelp
@@ -330,8 +330,9 @@ func (m model) cockpitKeys(k string) []action {
 // mouseActions translates a mouse event that happened at time at. A click
 // selects a row, and two on one row open it. The wheel moves the cursor over
 // the list and scrolls the digests. A click closes an overlay, as any key
-// does.
-func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
+// does. agents says the event is from the agents' pane, where a click
+// selects one of the agents and the wheel moves the cursor among them.
+func (m model) mouseActions(msg tea.MouseMsg, at time.Time, agents bool) []action {
 	step := 0
 	switch {
 	case msg.Action != tea.MouseActionPress:
@@ -369,6 +370,9 @@ func (m model) mouseActions(msg tea.MouseMsg, at time.Time) []action {
 			return []action{{do: taskClick, n: owners[line], at: at}}
 		}
 		return nil
+	}
+	if agents {
+		return m.agentsMouse(msg, step, at)
 	}
 	if m.screen == digestScreen {
 		if step == 0 {

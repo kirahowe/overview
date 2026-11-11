@@ -20,13 +20,17 @@ import (
 // pane is one line of the private server's pane listing.
 type pane struct {
 	id, window, session, command string
-	list, holder                 bool
+	list, holder, agents         bool
 	left, top, w, h, winH, pid   int
 }
 
+// ours says whether the pane is one of the view's own two: the list's, or
+// the agents' pane under it.
+func (p pane) ours() bool { return p.list || p.agents }
+
 // The pid comes last: run trims the output, and with it an empty last field.
 const paneFormat = "#{pane_id}\t#{window_id}\t#{session_name}\t#{pane_current_command}\t#{@overview-list}\t#{@overview-holder}\t" +
-	"#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_height}\t#{pane_pid}"
+	"#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_height}\t#{@overview-agents}\t#{pane_pid}"
 
 // server is a private tmux server, addressed by a name that is never
 // overview's own.
@@ -74,12 +78,12 @@ func (s server) panes() []pane {
 	var ps []pane
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 12 {
+		if len(f) != 13 {
 			continue
 		}
 		n := func(i int) int { v, _ := strconv.Atoi(f[i]); return v }
 		ps = append(ps, pane{id: f[0], window: f[1], session: f[2], command: f[3], list: f[4] == "1", holder: f[5] == "1",
-			left: n(6), top: n(7), w: n(8), h: n(9), winH: n(10), pid: n(11)})
+			left: n(6), top: n(7), w: n(8), h: n(9), winH: n(10), agents: f[11] == "1", pid: n(12)})
 	}
 	return ps
 }
@@ -103,9 +107,11 @@ func waitFor(t *testing.T, what string, cond func() (bool, string)) {
 }
 
 // beside reports whether the list sits in the window of pane id, leftmost,
-// full height under the rule along its top, w wide (w 0 for any width).
+// under the rule along its top, w wide (w 0 for any width), its column
+// the window's full height: the list alone, or the list over the agents'
+// pane, which is then in that window too and as wide.
 func beside(ps []pane, id string, w int) (bool, string) {
-	var list, with pane
+	var list, with, agents pane
 	for _, p := range ps {
 		if p.list {
 			list = p
@@ -113,10 +119,30 @@ func beside(ps []pane, id string, w int) (bool, string) {
 		if p.id == id {
 			with = p
 		}
+		if p.agents {
+			agents = p
+		}
+	}
+	foot := list.top + list.h
+	if agents.id != "" {
+		foot = agents.top + agents.h
+		if agents.window != list.window || agents.left != 0 || agents.w != list.w || agents.top != list.top+list.h+1 {
+			return false, fmt.Sprintf("list %+v over agents %+v", list, agents)
+		}
 	}
 	ok := list.id != "" && with.id != "" && list.window == with.window &&
-		list.left == 0 && list.top <= 1 && list.top+list.h == list.winH && (w == 0 || list.w == w)
-	return ok, fmt.Sprintf("list %+v, %s %+v", list, id, with)
+		list.left == 0 && list.top <= 1 && foot == list.winH && (w == 0 || list.w == w)
+	return ok, fmt.Sprintf("list %+v, agents %+v, %s %+v", list, agents, id, with)
+}
+
+// agentsPane is the agents' pane, its id "" when there is none.
+func agentsPane(ps []pane) pane {
+	for _, p := range ps {
+		if p.agents {
+			return p
+		}
+	}
+	return pane{}
 }
 
 func listPane(ps []pane) pane {
@@ -285,7 +311,8 @@ func TestOverviewInTmux(t *testing.T) {
 	waitFor(t, "the panes' rules", func() (bool, string) {
 		status := ov.must("display-message", "-p", "-t", list.id, "#{pane-border-status}")
 		mine := ov.must("show-options", "-pqv", "-t", list.id, "@overview-title")
-		theirs := ov.must("show-options", "-pqv", "-t", sessions[0].id, "@overview-title")
+		theirs := ov.must("show-options", "-pqv", "-t", sessions[0].id, "@overview-title") +
+			ov.must("show-options", "-pqv", "-t", sessions[0].id, "@overview-note")
 		return strings.TrimSpace(status) == "top" && strings.Contains(mine, "◆ ") && strings.Contains(theirs, "e2e-") && strings.Contains(theirs, "idle"),
 			fmt.Sprintf("status %q, list %q, session %q", status, mine, theirs)
 	})
@@ -381,9 +408,20 @@ func TestOverviewInTmux(t *testing.T) {
 	restarted("the view with the file's new theme", "--theme one-dark ")
 }
 
-// screen is what the list pane shows.
+// screen is what the list's column shows: the list's pane and, under it,
+// the agents' pane when there is one, whose last line is then the footer.
 func (r *rig) screen() string {
 	out, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+	return out + r.agentsScreen()
+}
+
+// agentsScreen is what the agents' pane shows, "" when there is none.
+func (r *rig) agentsScreen() string {
+	a := agentsPane(r.ov.panes())
+	if a.id == "" {
+		return ""
+	}
+	out, _ := r.ov.run("capture-pane", "-p", "-t", a.id)
 	return out
 }
 
@@ -461,8 +499,10 @@ func (r *rig) active() string {
 // placeholder, and c there starts a session in it.
 func TestTerminalsAndProjects(t *testing.T) {
 	r := launch(t, "t")
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
-	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	isShell := func(p pane) bool {
+		return p.command != "sleep" && p.command != "overview" && !p.ours() && p.id != r.holder
+	}
 
 	// A session in work, listed.
 	before := r.ov.panes()
@@ -604,8 +644,10 @@ func TestTerminalsAndProjects(t *testing.T) {
 // the cursor's rules would move it to the session before.
 func TestTheListStaysWhileYouType(t *testing.T) {
 	r := launch(t, "k")
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
-	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	isShell := func(p pane) bool {
+		return p.command != "sleep" && p.command != "overview" && !p.ours() && p.id != r.holder
+	}
 
 	before := r.ov.panes()
 	r.press("c")
@@ -723,8 +765,10 @@ func TestWorkstreams(t *testing.T) {
 		}
 		return "issues = " + fake + "\n"
 	})
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
-	isShell := func(p pane) bool { return p.command != "sleep" && !p.list && p.id != r.holder }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	isShell := func(p pane) bool {
+		return p.command != "sleep" && p.command != "overview" && !p.ours() && p.id != r.holder
+	}
 
 	before := r.ov.panes()
 	r.press("c")
@@ -878,7 +922,7 @@ func (r *rig) transcript(t *testing.T, session string, lines ...map[string]any) 
 // beside the session as it was.
 func TestCockpit(t *testing.T) {
 	r := launch(t, "o")
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
 	before := r.ov.panes()
 	r.press("c")
 	session := r.fresh(t, "a session window", before, isSleep)
@@ -942,7 +986,7 @@ func (r *rig) cursor() string {
 // session or by enter in the mode, j and k move its cursor at once.
 func TestPanelsMode(t *testing.T) {
 	r := launch(t, "p")
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
 	before := r.ov.panes()
 	r.press("c")
 	one := r.fresh(t, "a session window", before, isSleep)
@@ -953,7 +997,7 @@ func TestPanelsMode(t *testing.T) {
 	})
 	session := func() string { // the pane beside the list
 		for _, p := range r.ov.panes() {
-			if !p.list && !p.holder && p.window == r.windowOf(r.list.id) {
+			if !p.ours() && !p.holder && p.window == r.windowOf(r.list.id) {
 				return p.id
 			}
 		}
@@ -966,15 +1010,16 @@ func TestPanelsMode(t *testing.T) {
 	focused := func() bool { return r.active() == r.list.id }
 	waitFor(t, "the keys in the list", func() (bool, string) { return focused(), r.active() })
 
-	// moves checks that j and k move the list's cursor now, on the screen.
+	// moves checks that k and j move the list's cursor now, on the screen:
+	// up to the project's rule, and back down to its one session.
 	moves := func(what string) {
 		t.Helper()
 		was := r.cursor()
-		r.typed("j")
-		waitFor(t, what+": j to move the cursor", func() (bool, string) { return r.cursor() != was, was + " -> " + r.cursor() })
-		now := r.cursor()
 		r.typed("k")
-		waitFor(t, what+": k to move it back", func() (bool, string) { return r.cursor() != now, now + " -> " + r.cursor() })
+		waitFor(t, what+": k to move the cursor", func() (bool, string) { return r.cursor() != was, was + " -> " + r.cursor() })
+		now := r.cursor()
+		r.typed("j")
+		waitFor(t, what+": j to move it back", func() (bool, string) { return r.cursor() != now, now + " -> " + r.cursor() })
 	}
 
 	// esc in the list: the mode, which the footer shows. l moves the
@@ -1035,7 +1080,7 @@ func TestCockpitIssuesCard(t *testing.T) {
 		}
 		return "issues = " + fake + "\n"
 	})
-	isSleep := func(p pane) bool { return p.command == "sleep" && !p.list }
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
 	before := r.ov.panes()
 	r.press("c")
 	session := r.fresh(t, "a session window", before, isSleep)
@@ -1117,7 +1162,7 @@ func TestAnEndedSessionLeavesTheListItsWidth(t *testing.T) {
 	r := launch(t, "x")
 	before := r.ov.panes()
 	r.press("c")
-	session := r.fresh(t, "a session window", before, func(p pane) bool { return p.command == "sleep" && !p.list })
+	session := r.fresh(t, "a session window", before, func(p pane) bool { return p.command == "sleep" && !p.ours() })
 	waitFor(t, "the list beside the session, the keyboard in it", func() (bool, string) {
 		ok, say := beside(r.ov.panes(), session.id, 0)
 		return ok && r.active() == session.id, say + ", active " + r.active()
@@ -1132,7 +1177,7 @@ func TestAnEndedSessionLeavesTheListItsWidth(t *testing.T) {
 		ps := r.ov.panes()
 		list, shared := listPane(ps), 0
 		for _, p := range ps {
-			if p.window == list.window && !p.list {
+			if p.window == list.window && !p.ours() {
 				shared++
 			}
 		}
@@ -1151,4 +1196,159 @@ func TestAnEndedSessionLeavesTheListItsWidth(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// The agents' pane, end to end, typed at the terminal the view is attached
+// in. With sessions listed, the agents have a tmux pane of their own under
+// the list, with the footer on its last line. tmux's own keys move the
+// keyboard into it and back, and so does the panels mode. In it j and k
+// move the cursor among the agents, the list's column follows the cursor
+// into another session's window with the keyboard still in that pane, and
+// going back up leaves the cursor on the same session. The cockpit zooms
+// the list over it and gives it back. It closes with the last session.
+func TestTheAgentsPane(t *testing.T) {
+	r := launch(t, "a")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	var sessions []pane
+	for i := 0; i < 2; i++ {
+		before := r.ov.panes()
+		r.ov.must("select-pane", "-t", r.list.id)
+		r.press("c")
+		sessions = append(sessions, r.fresh(t, "a session window", before, isSleep))
+		r.lists(t, r.work, sessions...)
+		name := fmt.Sprintf("e2e-%d", i)
+		waitFor(t, name+" in the list", func() (bool, string) { s := r.screen(); return strings.Contains(s, name), s })
+	}
+	r.ov.must("select-pane", "-t", r.list.id)
+
+	// The pane opens under the list, a line for each session and one for
+	// the footer, and the list's own pane has no footer.
+	var agents pane
+	waitFor(t, "the agents' pane under the list, showing both sessions", func() (bool, string) {
+		ps := r.ov.panes()
+		agents = agentsPane(ps)
+		s := r.agentsScreen()
+		lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+		ok, say := beside(ps, sessionBeside(ps), 0)
+		return ok && agents.id != "" && agents.h == 3 && strings.Contains(s, "e2e-0") && strings.Contains(s, "e2e-1") &&
+			strings.Contains(lines[len(lines)-1], "c claude"), say + "\n" + s
+	})
+	if own, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id); strings.Contains(own, "c claude") {
+		t.Fatalf("the list's pane has a footer of its own:\n%s", own)
+	}
+	if title := r.ov.must("show-options", "-pqv", "-t", agents.id, "@overview-title"); title != "agents" {
+		t.Fatalf("the agents' pane is titled %q", title)
+	}
+	// row is the agents' pane's line under the cursor, "" for none.
+	row := func() string {
+		for _, l := range strings.Split(r.agentsScreen(), "\n") {
+			if strings.Contains(l, "▌") {
+				return strings.TrimSpace(l)
+			}
+		}
+		return ""
+	}
+	// shown is the session whose window the list's column is in.
+	shown := func() string { return sessionBeside(r.ov.panes()) }
+	waitFor(t, "the keys in the list, and no cursor among the agents", func() (bool, string) {
+		return r.active() == r.list.id && row() == "", r.active() + " " + row()
+	})
+	was := shown()
+
+	// tmux's own key for the pane below: the keyboard goes to the
+	// agents, and the cursor to the same session there, so nothing
+	// moves beside the list.
+	r.typed("C-b", "Down")
+	waitFor(t, "the keys in the agents' pane, the cursor there", func() (bool, string) {
+		return r.active() == agents.id && row() != "", r.active() + " " + row()
+	})
+	if got := shown(); got != was {
+		t.Fatalf("going down to the agents moved the list from %s to %s", was, got)
+	}
+
+	// j and k move the cursor among the agents. The column follows it to
+	// the other session's window, and the keyboard stays in the pane.
+	other := sessions[0].id
+	if was == other {
+		other = sessions[1].id
+	}
+	// The cursor is on one of two rows, so one of j and k moves it.
+	on, key := row(), "j"
+	r.typed("j")
+	time.Sleep(300 * time.Millisecond)
+	if row() == on {
+		key = "k"
+		r.typed("k")
+	}
+	waitFor(t, key+" to move the cursor among the agents and the column with it", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), other, 0)
+		return ok && row() != on && r.active() == agents.id, say + ", active " + r.active() + ", row " + row()
+	})
+	// At the end of the agents the cursor stops: it does not walk on
+	// into the list.
+	r.typed(key, key, key)
+	time.Sleep(500 * time.Millisecond)
+	if row() == "" || r.active() != agents.id {
+		t.Fatalf("the cursor left the agents: row %q, active %s", row(), r.active())
+	}
+
+	// The panels mode moves between the two as between any panes.
+	r.typed("Escape")
+	waitFor(t, "the panels mode from the agents' pane", func() (bool, string) {
+		return r.table() == "overview-panels" && r.inPanels(), r.table() + "\n" + r.screen()
+	})
+	r.typed("k")
+	waitFor(t, "k in the mode to reach the list", func() (bool, string) { return r.active() == r.list.id, r.active() })
+	r.typed("j")
+	waitFor(t, "j in the mode to reach the agents", func() (bool, string) { return r.active() == agents.id, r.active() })
+	r.typed("Enter")
+	waitFor(t, "the mode left", func() (bool, string) { return r.table() == "root" && !r.inPanels(), r.table() })
+
+	// Up to the list: the cursor is on the same session there, and the
+	// agents' pane shows none.
+	r.typed("C-b", "Up")
+	waitFor(t, "the keys back in the list, the cursor with them", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), other, 0)
+		return ok && r.active() == r.list.id && row() == "" && r.cursor() != "", say + ", active " + r.active() + ", cursor " + r.cursor()
+	})
+
+	// The cockpit zooms the list over the agents' pane and draws them
+	// itself, and closing it gives the pane back.
+	r.typed("o")
+	waitFor(t, "the cockpit, zoomed, with the agents drawn in it", func() (bool, string) {
+		z := r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag}")
+		own, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+		return z == "1" && strings.Contains(own, "── agents ") && strings.Contains(own, "o close"), z + "\n" + own
+	})
+	r.typed("o")
+	waitFor(t, "the cockpit closed and the agents' pane back", func() (bool, string) {
+		z := r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag}")
+		ok, say := beside(r.ov.panes(), other, 0)
+		own, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+		return ok && z == "0" && agentsPane(r.ov.panes()).id == agents.id && !strings.Contains(own, "── agents ") &&
+			strings.Contains(r.agentsScreen(), "c claude"), z + " " + say + "\n" + own
+	})
+
+	// With no session left the pane closes, and the footer is the list's
+	// last line again.
+	r.lists(t, r.work)
+	waitFor(t, "the agents' pane to close with the last session", func() (bool, string) {
+		ps := r.ov.panes()
+		own, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+		lines := strings.Split(strings.TrimRight(own, "\n"), "\n")
+		l := listPane(ps)
+		return agentsPane(ps).id == "" && l.top+l.h == l.winH && strings.Contains(lines[len(lines)-1], "c claude"), fmt.Sprintf("%+v\n%s", ps, own)
+	})
+}
+
+// sessionBeside is the pane beside the list's column that is neither the
+// view's own nor the holder, "" for none.
+func sessionBeside(ps []pane) string {
+	l := listPane(ps)
+	for _, p := range ps {
+		if !p.ours() && !p.holder && p.window == l.window {
+			return p.id
+		}
+	}
+	return ""
 }

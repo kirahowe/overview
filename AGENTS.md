@@ -38,8 +38,13 @@ See README.md for behaviour and docs/ for design notes.
   it done, `h` returning to the list and `esc` closing the cockpit; and the panels mode, typed at the outer terminal: `esc` in the
   list entering it with the footer saying so, `l` moving the focus to the
   session, and `ctrl+[` from there and `enter` on the list each leaving
-  `j` and `k` moving the list's cursor. The key table itself is tested in
-  `internal/tmux`. It builds only
+  `j` and `k` moving the list's cursor; and the agents' pane, from its
+  opening under the list with the footer on its last line, through
+  tmux's own key for the pane below, `j` and `k` among the agents with
+  the list's column following the cursor and the keyboard staying in
+  that pane, the panels mode moving between the two, and the cockpit
+  zoomed over it, to its closing with the last session. The key table
+  itself is tested in `internal/tmux`. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.
 - Never point a test or a trial run at the `overview` socket, not even to

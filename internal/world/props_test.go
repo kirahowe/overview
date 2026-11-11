@@ -776,8 +776,8 @@ func genTermPanes(t *rapid.T) []tmux.Pane {
 }
 
 // terminals lists exactly the windows of the view's session that hold a
-// pane besides the list and none of the holder, an attach, a listed
-// claude, or the pane c just opened. Each comes once, in window order,
+// pane besides the list and the agents' pane, and none of the holder, an
+// attach, a listed claude, or the pane c just opened. Each comes once, in window order,
 // named after its first such pane.
 func TestPropTerminals(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
@@ -788,9 +788,10 @@ func TestPropTerminals(t *testing.T) {
 			}
 			return rapid.SampledFrom(panes).Draw(t, label).ID
 		}
-		self, holder, opened := pick("self"), pick("holder"), pick("opened")
+		self, holder, opened, agents := pick("self"), pick("holder"), pick("opened"), pick("agents")
 		for i := range panes {
 			panes[i].Holder = panes[i].ID == holder
+			panes[i].Agents = panes[i].ID == agents
 		}
 		claude := map[string]bool{}
 		for _, p := range panes {
@@ -804,7 +805,7 @@ func TestPropTerminals(t *testing.T) {
 		want := map[string][]tmux.Pane{}
 		bad := map[string]bool{}
 		for _, p := range panes {
-			if p.Session != "ov" || p.ID == self {
+			if p.Session != "ov" || p.ID == self || p.ID == agents {
 				continue
 			}
 			want[p.Window] = append(want[p.Window], p)

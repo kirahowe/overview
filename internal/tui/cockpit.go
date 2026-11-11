@@ -71,17 +71,18 @@ func (m model) syncZoom() (model, tea.Cmd) {
 
 // openCockpit opens the cockpit, zooming the list inside tmux. While the
 // list is moving between windows it would zoom the window it is leaving,
-// so the cockpit opens once the move lands.
+// so the cockpit opens once the move lands. It waits in the same way for
+// a split or a resize of the agents' pane, which would end the zoom.
 func (m model) openCockpit() (model, tea.Cmd) {
 	if m.cockpit.open {
 		return m, nil
 	}
-	if m.staging {
+	if m.staging || m.agentsBusy {
 		m.cockpitSoon = true
 		return m, nil
 	}
 	m.cockpitSoon = false
-	m.cockpit, m.zoomPanes = cockpit{open: true}, m.inStage()
+	m.cockpit, m.zoomPanes = cockpit{open: true}, m.inWindow()
 	m.changeReads = stale(m.changeReads)
 	return m.syncZoom()
 }
@@ -113,7 +114,7 @@ func (m model) zoomLost() (model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	n := m.inStage()
+	n := m.inWindow()
 	switch {
 	case p.Zoomed || n == 1:
 		m.zoomPanes = n

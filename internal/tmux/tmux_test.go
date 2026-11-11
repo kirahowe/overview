@@ -34,11 +34,11 @@ func TestPanelsSessionsFollowsTheLatestClient(t *testing.T) {
 }
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t1\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t/\n" +
-		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t/\n" +
+		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		"\n"
 	got := ParsePanes(out)
@@ -46,7 +46,7 @@ func TestParsePanes(t *testing.T) {
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, List: true, Command: "overview",
 			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80,
-			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Dead: true, Path: "/w/app/odd\tdir"},
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Dead: true, Agents: true, Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -79,6 +79,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Active:  rapid.Bool().Draw(t, "active"),
 				Framed:  rapid.Bool().Draw(t, "framed"),
 				Dead:    rapid.Bool().Draw(t, "dead"),
+				Agents:  rapid.Bool().Draw(t, "agents"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -94,9 +95,9 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 			if p.Framed {
 				status = "top"
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
 				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed),
-				p.X, p.Y, flag(p.Active), status, flag(p.Dead), p.Path)
+				p.X, p.Y, flag(p.Active), status, flag(p.Dead), flag(p.Agents), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -137,7 +138,7 @@ func TestAgainstRealTmux(t *testing.T) {
 		t.Fatal(err)
 	}
 	split = strings.TrimSpace(split)
-	if err := s.Move(list.ID, b.ID, "30"); err != nil {
+	if err := s.Move(list.ID, b.ID, "30", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	panes, err := s.Panes()
@@ -170,7 +171,7 @@ func TestAgainstRealTmux(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Moving on to a closes nothing that is left in b's window.
-	if err := s.Move(list.ID, a.ID, "30"); err != nil {
+	if err := s.Move(list.ID, a.ID, "30", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	if panes, _ = s.Panes(); len(panes) != 4 {
@@ -233,7 +234,7 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 			t.Fatalf("list %v beside %s %v", lf, with, wf)
 		}
 	}
-	if err := s.Move(list, deep, "40"); err != nil {
+	if err := s.Move(list, deep, "40", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	at(a.ID)
@@ -241,7 +242,7 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 		t.Fatalf("the empty window %s is still there: %s", first, wins)
 	}
 	win := strings.Fields(where()[a.ID])[0]
-	if err := s.Move(list, b.ID, "40"); err != nil {
+	if err := s.Move(list, b.ID, "40", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	at(b.ID)
@@ -250,7 +251,7 @@ func TestMoveTakesTheListAcrossWindows(t *testing.T) {
 			t.Fatalf("%s left its window for %s", id, got)
 		}
 	}
-	if err := s.Move(list, split, "40"); err != nil {
+	if err := s.Move(list, split, "40", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	at(deep)
@@ -515,7 +516,7 @@ func TestMoveTakesAPercentOfTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Move(list, target.ID, "30%"); err != nil {
+	if err := s.Move(list, target.ID, "30%", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	p := byID(t, s)[list]
@@ -534,7 +535,7 @@ func TestANarrowingWindowSqueezesTheList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Move(list, target.ID, "60"); err != nil {
+	if err := s.Move(list, target.ID, "60", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	must(t)(s.run("resize-window", "-t", target.Window, "-x", "150"))
@@ -1171,7 +1172,7 @@ func TestHoldExitsKeepsOnlyThePaneBesideAListAlone(t *testing.T) {
 	}
 	beside, split, alone := spawn(), spawn(), spawn()
 	run(s.run("split-window", "-d", "-t", split.ID, "sleep 300"))
-	if err := s.Move(list, beside.ID, "40"); err != nil {
+	if err := s.Move(list, beside.ID, "40", Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []Pane{beside, split, alone} {
@@ -1193,5 +1194,182 @@ func TestHoldExitsKeepsOnlyThePaneBesideAListAlone(t *testing.T) {
 	}
 	if got := strings.TrimSpace(run(s.run("display-message", "-p", "-t", list, "#{remain-on-exit}"))); got != "off" {
 		t.Fatalf("the list's own pane has remain-on-exit %q", got)
+	}
+}
+
+// The agents' pane is a pane of its own under the list, so tmux's own keys
+// move the focus into it and back. It goes where the list goes, into the
+// foot of the list's column at the height it had, and the keyboard stays
+// in whichever of the two had it. The list's width is the column's, so
+// resizing the list resizes both.
+func TestTheAgentsPaneGoesWithTheList(t *testing.T) {
+	s := testServer(t)
+	run := must(t)
+	list := strings.TrimSpace(run(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")))
+	if err := s.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Frame("ov", Colours{}); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.Under(list, 6, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func() string {
+		t.Helper()
+		return strings.TrimSpace(run(s.run("display-message", "-p", "-t", "ov:", "#{pane_id}")))
+	}
+	// under checks that the agents' pane is the foot of the list's column
+	// in the window of pane with, 6 lines tall.
+	under := func(step, with string, width int) {
+		t.Helper()
+		ps := byID(t, s)
+		l, a, w := ps[list], ps[agents.ID], ps[with]
+		winH, err := strconv.Atoi(strings.TrimSpace(run(s.run("display-message", "-p", "-t", list, "#{window_height}"))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !a.Agents || l.Agents || l.Window != w.Window || a.Window != w.Window {
+			t.Fatalf("%s: list %+v, agents %+v, beside %+v", step, l, a, w)
+		}
+		if l.X != 0 || a.X != 0 || l.W != width || a.W != width || a.H != 6 || a.Y != l.Y+l.H+1 || a.Y+a.H != winH {
+			t.Fatalf("%s: the column is list %+v over agents %+v in a window %d high", step, l, a, winH)
+		}
+	}
+	if got := active(); got != list {
+		t.Fatalf("starting the agents' pane moved the keyboard to %s", got)
+	}
+
+	// tmux's own keys reach it: down from the list, and up again.
+	run(s.run("select-pane", "-D", "-t", list))
+	if got := active(); got != agents.ID {
+		t.Fatalf("down from the list is %s, not the agents' pane", got)
+	}
+	run(s.run("select-pane", "-U", "-t", agents.ID))
+	if got := active(); got != list {
+		t.Fatalf("up from the agents' pane is %s, not the list", got)
+	}
+
+	a, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(s.run("split-window", "-d", "-v", "-t", b.ID, "sleep 300"))
+	first := byID(t, s)[list].Window
+
+	// The keyboard in the list stays in the list.
+	if err := s.Move(list, a.ID, "40", Carried{Pane: agents.ID, Lines: 6}); err != nil {
+		t.Fatal(err)
+	}
+	under("moved beside a", a.ID, 40)
+	if got := active(); got != list {
+		t.Fatalf("the keyboard went to %s, not the list", got)
+	}
+	if wins := strings.Fields(run(s.run("list-windows", "-a", "-F", "#{window_id}"))); slices.Contains(wins, first) {
+		t.Fatalf("the window %s the two left is still there: %v", first, wins)
+	}
+	// From the agents' pane, right is the session beside the column.
+	run(s.run("select-pane", "-t", agents.ID))
+	run(s.run("select-pane", "-R"))
+	if got := active(); got != a.ID {
+		t.Fatalf("right of the agents' pane is %s, not %s", got, a.ID)
+	}
+
+	// The keyboard in the agents' pane stays there.
+	if err := s.Move(list, b.ID, "40", Carried{Pane: agents.ID, Lines: 6, Focus: true}); err != nil {
+		t.Fatal(err)
+	}
+	under("moved beside b and its split", b.ID, 40)
+	if got := active(); got != agents.ID {
+		t.Fatalf("the keyboard went to %s, not the agents' pane", got)
+	}
+
+	// The list is still the top-left pane, where ctrl+[ goes.
+	run(s.run("select-pane", "-t", "{top-left}"))
+	if got := active(); got != list {
+		t.Fatalf("the top-left pane is %s, not the list", got)
+	}
+	if err := s.SetWidth(list, 55); err != nil {
+		t.Fatal(err)
+	}
+	under("the list resized", b.ID, 55)
+	if err := s.Resize(agents.ID, "9"); err != nil {
+		t.Fatal(err)
+	}
+	if got := byID(t, s)[agents.ID].H; got != 9 {
+		t.Fatalf("the agents' pane is %d lines tall, want 9", got)
+	}
+}
+
+// The agents' pane is no company for the list: a pane that exits beside
+// the two of them is kept, so the column keeps its width, and one that
+// exits with another pane beside it closes. The agents' pane itself
+// closes when its program ends.
+func TestHoldExitsDoesNotCountTheAgentsPane(t *testing.T) {
+	s := testServer(t)
+	run := must(t)
+	list := strings.TrimSpace(run(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")))
+	if err := s.MarkList(list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HoldExits(list); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.Under(list, 6, "sh", "-c", "read x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beside, err := s.Spawn("ov", "", nil, "sh", "-c", "read x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Move(list, beside.ID, "40", Carried{Pane: agents.ID, Lines: 6}); err != nil {
+		t.Fatal(err)
+	}
+	split := strings.TrimSpace(run(s.run("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", beside.ID, "sh -c 'read x'")))
+	run(s.run("send-keys", "-t", split, "Enter"))
+	tmuxtest.Wait(t, "the split to close, with the pane beside it still running", func() (bool, string) {
+		ps := byID(t, s)
+		_, open := ps[split]
+		return !open, fmt.Sprint(ps)
+	})
+	run(s.run("send-keys", "-t", beside.ID, "Enter"))
+	tmuxtest.Wait(t, "the pane beside the list and the agents to exit and stay", func() (bool, string) {
+		ps := byID(t, s)
+		return ps[beside.ID].Dead, fmt.Sprint(ps)
+	})
+	if ps := byID(t, s); ps[list].W != 40 || ps[agents.ID].W != 40 || ps[agents.ID].Dead {
+		t.Fatalf("the column is list %+v over agents %+v", ps[list], ps[agents.ID])
+	}
+	run(s.run("send-keys", "-t", agents.ID, "Enter"))
+	tmuxtest.Wait(t, "the agents' pane to close with its program", func() (bool, string) {
+		ps := byID(t, s)
+		_, open := ps[agents.ID]
+		return !open, fmt.Sprint(ps)
+	})
+}
+
+// A move that carries the agents' pane with the keyboard in it moves the
+// list without making it active, so tmux reports no keyboard to the
+// list's program on the way. Any other move makes the list active.
+func TestMoveKeepsTheListInactiveWhenThePaneItCarriesHasTheKeys(t *testing.T) {
+	var got []string
+	s := Server{run: func(args ...string) (string, error) { got = args; return "", nil }}
+	for _, c := range []struct {
+		with Carried
+		want string
+	}{
+		{Carried{}, "join-pane -h -b -f -l 40 -s %0 -t %5"},
+		{Carried{Pane: "%2", Lines: 6}, "join-pane -h -b -f -l 40 -s %0 -t %5 ; join-pane -v -d -l 6 -s %2 -t %0"},
+		{Carried{Pane: "%2", Lines: 6, Focus: true}, "join-pane -d -h -b -f -l 40 -s %0 -t %5 ; join-pane -v -l 6 -s %2 -t %0"},
+	} {
+		if err := s.Move("%0", "%5", "40", c.with); err != nil || strings.Join(got, " ") != c.want {
+			t.Errorf("Move with %+v ran %q, %v, want %q", c.with, strings.Join(got, " "), err, c.want)
+		}
 	}
 }

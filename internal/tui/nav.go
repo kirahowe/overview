@@ -1,13 +1,15 @@
 package tui
 
-// Focus is tmux's. The window is a set of panels: the projects and the
-// agents down the left, in the view's own pane, and beside them the tmux
-// panes of the window, or in the cockpit the cards. Each has a rule along
-// its top with its title in it. tmux draws the rule of each of its panes,
-// lit in the accent colour for the active one, which is the one pane that
-// has the keyboard. The view lights what it draws itself: the agents'
-// rule while the cursor is in the agents, and in the cockpit the list's
-// rule or the issues card's, whichever has the keys.
+// Focus is tmux's. The window is a set of panels: the list and, under it,
+// the agents down the left, each in a pane of the view's, and beside them
+// the other tmux panes of the window, or in the cockpit the cards. Each
+// has a rule along its top with its title in it. tmux draws the rule of
+// each of its panes, lit in the accent colour for the active one, which
+// is the one pane that has the keyboard. The view lights what it draws
+// itself: in the cockpit the list's rule or the issues card's, whichever
+// has the keys, and the agents' rule where the list's pane draws the
+// agents, as agents.go says it sometimes does, while the cursor is in
+// them.
 //
 // The keyboard starts in the list, where the keys move the cursor and act
 // on its entry, and comes back to it from a tmux pane however it comes
@@ -51,7 +53,9 @@ func (m model) inPanels() bool { return m.panels }
 
 // listHasKeys says whether the keys move the list's cursor: the keyboard
 // is in the view and not in the panels mode or the cockpit's issues card.
-func (m model) listHasKeys() bool { return !m.blurred && !m.panels && !m.inIssues() }
+// For a copy of the model that draws one of the view's two panes, it is
+// in that pane and not the other.
+func (m model) listHasKeys() bool { return !m.blurred && !m.panels && !m.inIssues() && !m.other }
 
 // inIssues says whether the keys move the cockpit's issues card's cursor.
 func (m model) inIssues() bool { return m.cockpit.open && m.cockpit.issues }

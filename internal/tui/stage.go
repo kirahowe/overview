@@ -45,7 +45,9 @@ const (
 type multiplexer interface {
 	Panes() ([]tmux.Pane, error)
 	Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error)
-	Move(list, target, size string) error
+	Move(list, target, size string, with tmux.Carried) error
+	Under(list string, lines int, command ...string) (tmux.Pane, error)
+	Resize(pane, size string) error
 	Layout(window string) (string, error)
 	SetLayout(window, layout string) error
 	Select(pane string) error
@@ -167,18 +169,22 @@ func readPanes(mux multiplexer, find func(...string) roots) ([]tmux.Pane, roots,
 }
 
 // shift is a step that puts the list beside the pane it wants: the list
-// goes from window from into the window of pane to, size wide. fix says
-// from keeps two or more panes, whose layout is then put right.
+// goes from window from into the window of pane to, size wide, and takes
+// with it the agents' pane under it. fix says from keeps two or more
+// panes, whose layout is then put right.
 type shift struct {
 	to, from, size string
 	fix            bool
+	with           tmux.Carried
 }
 
 // plan decides how the list, pane self, gets beside pane want, given every
 // pane on the server and the width the list keeps, 0 when it has none yet.
 // It reports false when no move is needed, because want is already in the
-// list's window, or is not listed.
-func plan(self, want string, panes []tmux.Pane, width int) (shift, bool) {
+// list's window, or is not listed. The agents' pane in the list's window
+// goes too, at the height it has, and keeps the keyboard when inAgents
+// says it has it.
+func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift, bool) {
 	var list, target tmux.Pane
 	for _, p := range panes {
 		switch p.ID {
@@ -190,6 +196,13 @@ func plan(self, want string, panes []tmux.Pane, width int) (shift, bool) {
 	}
 	if list.ID == "" || target.ID == "" || target.Window == list.Window {
 		return shift{}, false
+	}
+	var with tmux.Carried
+	for _, p := range panes {
+		if p.Agents && p.Window == list.Window && p.ID != want {
+			with = tmux.Carried{Pane: p.ID, Lines: p.H, Focus: inAgents}
+			break
+		}
 	}
 	n := panesIn(panes, list.Window)
 	// The list keeps its width, fitted to the window it goes to. Until it
@@ -204,7 +217,7 @@ func plan(self, want string, panes []tmux.Pane, width int) (shift, bool) {
 	case n > 1 && list.W > 0:
 		size = strconv.Itoa(list.W)
 	}
-	return shift{to: want, from: list.Window, size: size, fix: n > 2}, true
+	return shift{to: want, from: list.Window, size: size, fix: n > 2, with: with}, true
 }
 
 // listWidth is the width the list keeps, and where it was last seen, which
@@ -288,9 +301,13 @@ func stageCmd(mux multiplexer, find func(...string) roots, list string, mv shift
 		if mv.fix {
 			layout, lerr = mux.Layout(mv.from)
 		}
-		err := mux.Move(list, mv.to, mv.size)
+		err := mux.Move(list, mv.to, mv.size, mv.with)
 		if err == nil && lerr == nil {
-			if fixed, err := tmux.Without(layout, list); err == nil {
+			fixed, err := tmux.Without(layout, list)
+			if err == nil && mv.with.Pane != "" {
+				fixed, err = tmux.Without(fixed, mv.with.Pane)
+			}
+			if err == nil {
 				mux.SetLayout(mv.from, fixed) //nolint:errcheck
 			}
 		}
@@ -375,19 +392,33 @@ func (m model) holder() string {
 	return ""
 }
 
-// panesIn counts the panes of panes in window, 0 for no window.
+// panesIn counts the panes of panes in window, 0 for no window. The
+// agents' pane is part of the list's column and is not counted, so a list
+// with only that pane under it is alone in its window.
 func panesIn(panes []tmux.Pane, window string) int {
 	n := 0
 	for _, p := range panes {
-		if p.Window == window && window != "" {
+		if p.Window == window && window != "" && !p.Agents {
 			n++
 		}
 	}
 	return n
 }
 
-// inStage counts the panes in the list's window.
+// inStage counts the panes in the list's window, the list among them and
+// the agents' pane left out.
 func (m model) inStage() int { return panesIn(m.in.Panes, m.windowOf(m.self)) }
+
+// inWindow counts every pane tmux has in the list's window, the agents'
+// pane too: what a zoom of the list hides, and what tmux needs one more
+// than the list of to zoom it at all.
+func (m model) inWindow() int {
+	n := m.inStage()
+	if _, ok := m.agentsPane(); ok {
+		n++
+	}
+	return n
+}
 
 // windowOf is the window pane id is in, "" when it is not listed.
 func (m model) windowOf(id string) string {
@@ -453,7 +484,11 @@ func (m model) setPanes(panes []tmux.Pane, rs roots) model {
 	m.panels = slices.ContainsFunc(panes, func(p tmux.Pane) bool { return p.Panels && p.Session == m.session })
 	m.dead = slices.DeleteFunc(slices.Clone(panes), func(p tmux.Pane) bool { return !p.Dead || p.Session != m.session })
 	live := slices.DeleteFunc(slices.Clone(panes), func(p tmux.Pane) bool { return p.Dead })
-	return m.setInputs(func(in *world.Inputs) { in.Panes = live })
+	m = m.setInputs(func(in *world.Inputs) { in.Panes = live })
+	if _, ok := m.agentsPane(); !ok {
+		m = m.lostAgents()
+	}
+	return m
 }
 
 // reap closes the dead panes that tmux.DiedHook kept, or missed, once the
@@ -466,7 +501,9 @@ func (m model) reap() (model, tea.Cmd) {
 	var kill []string
 	take := false
 	for _, d := range m.dead {
-		if d.Window != m.windowOf(m.self) || m.inStage() > 1 {
+		// An agents' pane whose program ended before tmux was told to
+		// close it with its program is no use to anyone.
+		if d.Agents || d.Window != m.windowOf(m.self) || m.inStage() > 1 {
 			kill = append(kill, d.ID)
 		} else if d.Active && m.blurred {
 			take = true
@@ -508,12 +545,14 @@ func (m model) restage() (model, tea.Cmd) {
 	want := m.want()
 	// The cockpit and the task picker hold the list in its window, zoomed,
 	// until they close and the zoom has gone.
-	if m.mux == nil || m.staging || m.zooming || m.zoomWant() || want == "" || want == m.failed {
+	// A pane of the agents' that is on its way is not listed yet, and a
+	// move now would leave it behind, so the list waits for it.
+	if m.mux == nil || m.staging || m.agentsBusy || m.zooming || m.zoomWant() || want == "" || want == m.failed {
 		return m, nil
 	}
 	// With the keyboard outside the list, the list stays beside the pane
 	// the user is in, unless an action asked to go somewhere.
-	if mv, ok := plan(m.self, want, m.in.Panes, m.width.want); ok && (!m.blurred || m.entering != "") {
+	if mv, ok := plan(m.self, want, m.in.Panes, m.width.want, m.inAgents); ok && (!m.blurred || m.entering != "") {
 		m.staging = true
 		return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.landed)
 	}
@@ -548,15 +587,18 @@ func (m model) restage() (model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// movedSelf is panes with the list's own pane as listing has it.
+// movedSelf is panes with the list's own pane as listing has it, and the
+// agents' pane, which moves with it.
 func movedSelf(panes, listing []tmux.Pane, self string) []tmux.Pane {
-	i := slices.IndexFunc(panes, func(p tmux.Pane) bool { return p.ID == self })
-	j := slices.IndexFunc(listing, func(p tmux.Pane) bool { return p.ID == self })
-	if i < 0 || j < 0 {
-		return panes
-	}
 	out := slices.Clone(panes)
-	out[i] = listing[j]
+	for i, p := range out {
+		if p.ID != self && !p.Agents {
+			continue
+		}
+		if j := slices.IndexFunc(listing, func(l tmux.Pane) bool { return l.ID == p.ID }); j >= 0 {
+			out[i] = listing[j]
+		}
+	}
 	return out
 }
 
@@ -583,7 +625,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.spawningHolder = true
 			m, cmd = m.startPane(spawn{kind: spawnHolder, name: "the details pane", session: m.session, command: []string{m.exe, "stage"}})
 		} else {
-			m, cmd = m.keepWidth()
+			m, cmd = m.keepColumn()
 		}
 		return m, tea.Batch(zoom, reap, cmd)
 	case panelsMsg:
@@ -604,7 +646,7 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if m.taskPick.open {
 			// s came while the list was moving: its zoom waited for this.
 			m, cmd := m.stageLanded(msg)
-			m.zoomPanes = m.inStage()
+			m.zoomPanes = m.inWindow()
 			m, zoom := m.syncZoom()
 			return m, tea.Batch(cmd, zoom)
 		}
@@ -690,11 +732,11 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		m = m.say(msg.note)
 		if m.current(msg.gen) {
-			return m.setPanes(msg.panes, msg.roots).keepWidth()
+			return m.setPanes(msg.panes, msg.roots).keepColumn()
 		}
 		// The rest may be stale, but the window is gone and the list is
 		// where it went, so no move aims at a closed pane.
-		gone := slices.DeleteFunc(slices.Clone(m.in.Panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self })
+		gone := slices.DeleteFunc(slices.Clone(m.in.Panes), func(p tmux.Pane) bool { return p.Window == msg.window && p.ID != m.self && !p.Agents })
 		m = m.keepPanes(movedSelf(gone, msg.panes, m.self))
 	}
 	return m, nil
@@ -711,7 +753,7 @@ func (m model) stageLanded(msg stagedMsg) (model, tea.Cmd) {
 	switch {
 	case msg.panes == nil:
 	case m.current(msg.gen):
-		return m.setPanes(msg.panes, msg.roots).keepWidth()
+		return m.setPanes(msg.panes, msg.roots).keepColumn()
 	default:
 		// The rest may be stale, but where the list went is not.
 		m = m.keepPanes(movedSelf(m.in.Panes, msg.panes, m.self))
@@ -732,6 +774,10 @@ func (m model) adopt() model {
 			if m.filter != "" && !m.shown(r.SessionID) {
 				m.filter, m.filtering = "", false
 			}
+			// Started from the agents' pane, it is under the cursor there.
+			if m.inAgents {
+				m = m.cross(true)
+			}
 			return m
 		}
 	}
@@ -750,7 +796,7 @@ func (m model) shown(key string) bool {
 // closeTerminal closes a terminal's window, as closeCmd does it, with the
 // list's place planned from the panes listed now.
 func (m model) closeTerminal(t *world.Terminal) tea.Cmd {
-	return closeCmd(m.mux, m.deps.roots, m.self, m.holder(), t, m.in.Panes, m.width.want, m.landed)
+	return closeCmd(m.mux, m.deps.roots, m.self, m.holder(), t, m.in.Panes, m.width.want, m.inAgents, m.landed)
 }
 
 // closedMsg answers closeCmd with the panes after the window closed.
@@ -766,12 +812,12 @@ type closedMsg struct {
 // closeCmd closes a terminal's window, and everything that runs in it.
 // When the list is in that window it first goes beside the holder, since
 // closing the window with the list in it would end the view.
-func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t *world.Terminal, panes []tmux.Pane, width, gen int) tea.Cmd {
+func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, t *world.Terminal, panes []tmux.Pane, width int, inAgents bool, gen int) tea.Cmd {
 	inside := false
 	for _, p := range panes {
 		inside = inside || (p.ID == self && p.Window == t.Window)
 	}
-	mv, canMove := plan(self, holder, panes, width)
+	mv, canMove := plan(self, holder, panes, width, inAgents)
 	return func() tea.Msg {
 		fail := func(err error) tea.Msg {
 			return closedMsg{err: errors.New("could not close " + t.Title + ": " + err.Error())}
@@ -780,7 +826,7 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 			if !canMove {
 				return fail(errors.New("the list has nowhere else to go"))
 			}
-			if err := mux.Move(self, mv.to, mv.size); err != nil {
+			if err := mux.Move(self, mv.to, mv.size, mv.with); err != nil {
 				return fail(err)
 			}
 		}

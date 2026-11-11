@@ -401,15 +401,16 @@ var shells = map[string]bool{
 // terminals finds the terminals among the panes. A window of the view's
 // session is one unless it holds the holder, an attach, a pane on the tty
 // of a listed Claude session (claude), or the pane c just opened and the
-// list has yet to adopt. The list's own pane is left out, so a window with
-// only the list is no terminal. A terminal's root is its window's project
+// list has yet to adopt. The list's own pane is left out, and so is the
+// agents' pane under it, so a window with only the list's column is no
+// terminal. A terminal's root is its window's project
 // option, or else the root of its first pane's directory.
 func terminals(panes []tmux.Pane, session, self, opened string, claude map[string]bool, root func(string) string) []*term {
 	byWindow := map[string][]tmux.Pane{}
 	skip := map[string]bool{}
 	var order []string
 	for _, p := range panes {
-		if p.Session != session || p.ID == self || p.Window == "" {
+		if p.Session != session || p.ID == self || p.Agents || p.Window == "" {
 			continue
 		}
 		if _, ok := byWindow[p.Window]; !ok {

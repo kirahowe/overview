@@ -211,7 +211,7 @@ func TestCtrlBracketFindsTheListFromAnySplit(t *testing.T) {
 	a := run("new-window", "-d", "-t", "=ov:", "-P", "-F", "#{pane_id}", "sleep 300")
 	b := run("split-window", "-d", "-h", "-t", a, "-P", "-F", "#{pane_id}", "sleep 300")
 	deep := run("split-window", "-d", "-v", "-t", b, "-P", "-F", "#{pane_id}", "sleep 300")
-	if err := srv.Move(list, deep, "60"); err != nil {
+	if err := srv.Move(list, deep, "60", tmux.Carried{}); err != nil {
 		t.Fatal(err)
 	}
 	focused := func() string { return run("display-message", "-p", "-t", "=ov:", "#{pane_id}") }
@@ -256,7 +256,7 @@ func TestStageCmdLeavesTheOldWindowProportional(t *testing.T) {
 		return out
 	}
 	before := width()
-	mv, ok := plan(list, target.ID, slices.Collect(maps.Values(before)), 0)
+	mv, ok := plan(list, target.ID, slices.Collect(maps.Values(before)), 0, false)
 	if !ok || !mv.fix {
 		t.Fatalf("plan %+v, %v", mv, ok)
 	}
