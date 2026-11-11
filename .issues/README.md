@@ -8,6 +8,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [1](1-resume-a-session-from-overview.md) | Resume a session from overview | feature | P2 |
+| [4](4-remove-the-socket-files-the-e2e-suite-leaves-behind.md) | Remove the socket files the e2e suite leaves behind | bug | P3 |
 
 ## Done
 

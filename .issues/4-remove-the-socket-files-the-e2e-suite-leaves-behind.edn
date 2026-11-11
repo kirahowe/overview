@@ -1,0 +1,11 @@
+{:id 4
+ :title "Remove the socket files the e2e suite leaves behind"
+ :status :inbox
+ :type :bug
+ :priority :p3
+ :created "2026-11-11"
+ :updated "2026-11-11"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "4-remove-the-socket-files-the-e2e-suite-leaves-behind.md"}
