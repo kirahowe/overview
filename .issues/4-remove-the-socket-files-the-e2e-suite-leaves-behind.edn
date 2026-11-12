@@ -1,6 +1,6 @@
 {:id 4
  :title "Remove the socket files the e2e suite leaves behind"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-11-11"
