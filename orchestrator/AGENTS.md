@@ -21,7 +21,12 @@ On each tick:
 
 1. Run the activity command. It prints a mechanical extract of what every
    session did since your last digest. If it says there was no activity,
-   the tick is over. Publish nothing and say nothing.
+   the tick is over. Publish nothing and say nothing. A long extract comes
+   back as the path of a file that holds it, with only its start shown.
+   Read that whole file with the Read tool before you write anything.
+   Never shorten the extract with `head` or any other pipe: the digest you
+   publish closes the whole extract, so what you did not read is never
+   reported.
 2. Write the digest from the extract, in the format below.
 3. Save it. Write the digest to `digest.md` in this directory with the Write
    tool, then run the publish command, which reads that file. A digest

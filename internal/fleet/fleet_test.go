@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,7 +203,10 @@ func TestOrchestratorCommandLine(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"--bg", "--name overview-orchestrator", "--permission-mode dontAsk",
 		`"Bash(/b/overview activity --home /h/.claude-kira)"`, `"Bash(/b/overview publish --home /h/.claude-kira digest.md)"`,
-		`"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`", `"Edit(//p/orchestrator/digest.md)"`} {
+		`"Read(//h/.claude-kira/projects/**)"`, "`7 * * * *`", `"Edit(//p/orchestrator/digest.md)"`,
+		// Without this Claude Code moves the session into a worktree
+		// before its first write, and the draft never reaches publish.
+		`"worktree":{"bgIsolation":"none"}`} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command line lacks %s:\n%s", want, joined)
 		}
@@ -256,6 +260,136 @@ func TestHealthTellsASilentOrchestratorFromAHealthyOne(t *testing.T) {
 	args, _ := home.orchestratorArgs(time.Hour, "sonnet", "abc-1")
 	if j := strings.Join(args, " "); !strings.Contains(j, "--bg --resume abc-1") || !strings.Contains(j, "erased your tick schedule") {
 		t.Fatalf("resume command line: %s", j)
+	}
+}
+
+// A session that looks at the fleet on time and publishes nothing is
+// behind, which a silent one is not: its trouble is that it does not look.
+func TestHealthTellsTicksThatPublishNothing(t *testing.T) {
+	home := Home{Dir: t.TempDir()}
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	started := now.Add(-5 * time.Hour)
+	live := []Live{{PID: 7, Name: OrchestratorName, SessionID: "abc-1", Status: "idle", StartedAt: started.UnixMilli()}}
+	home.saveOrchestratorState(orchestratorState{SessionID: "abc-1", Every: time.Hour, StartedAt: started})
+
+	// It ticked ten minutes ago, and no tick has finished at all.
+	writeTime(home.heartbeatFile(), now.Add(-10*time.Minute))
+	if h := home.health(live, now); h.Stale || !h.Behind || !h.LastDigest.IsZero() {
+		t.Fatalf("five hours of ticks and no digest: %+v", h)
+	}
+	// The last one to finish looked three hours ago.
+	home.saveCursor(now.Add(-3 * time.Hour))
+	if h := home.health(live, now); h.Stale || !h.Behind || !h.LastDigest.Equal(now.Add(-3*time.Hour)) {
+		t.Fatalf("last finished three hours ago: %+v", h)
+	}
+	// One that finished within two intervals is in time: a tick may run
+	// late, and the next may still be writing.
+	home.saveCursor(now.Add(-2 * time.Hour))
+	if h := home.health(live, now); h.Stale || h.Behind {
+		t.Fatalf("last finished two hours ago: %+v", h)
+	}
+	// A session that does not look is silent, and that is all it is.
+	home.saveCursor(now.Add(-3 * time.Hour))
+	writeTime(home.heartbeatFile(), now.Add(-3*time.Hour))
+	if h := home.health(live, now); !h.Stale || h.Behind {
+		t.Fatalf("no look for three hours: %+v", h)
+	}
+	// One restarted a minute ago has had no time to finish a tick.
+	live[0].StartedAt = now.Add(-time.Minute).UnixMilli()
+	if h := home.health(live, now); h.Stale || h.Behind {
+		t.Fatalf("just restarted: %+v", h)
+	}
+}
+
+// Claude Code goes on listing a background session whose process has
+// gone, with no pid and no status. That is no orchestrator, whichever
+// way round the listing has it and a live one of the same name.
+func TestASessionWithNoProcessIsNoOrchestrator(t *testing.T) {
+	dead := Live{ID: "5717e9de", Name: OrchestratorName, SessionID: "old-1", Kind: "background", BgState: "blocked"}
+	alive := Live{PID: 35238, ID: "7b3e62fe", Name: OrchestratorName, SessionID: "new-1", Kind: "background", Status: "idle", BgState: "done"}
+	other := Live{PID: 9, Name: "app-1a", SessionID: "app-1", Status: "busy"}
+	if l, ok := orchestratorOf([]Live{other, dead}); ok {
+		t.Fatalf("a session with no process is the orchestrator: %+v", l)
+	}
+	for _, live := range [][]Live{{dead, other, alive}, {alive, dead}} {
+		if l, ok := orchestratorOf(live); !ok || l.SessionID != "new-1" {
+			t.Fatalf("the orchestrator of %+v is %+v, %v", live, l, ok)
+		}
+	}
+	home := Home{Dir: t.TempDir()}
+	if h := home.health([]Live{dead}, time.Now()); h.Running || h.Stale || h.Behind {
+		t.Fatalf("health with only a session that has no process: %+v", h)
+	}
+}
+
+// The watchdog's decisions, against a claude that lists what the case
+// says and records what it is asked to do.
+func TestEnsureOrchestrator(t *testing.T) {
+	const (
+		dead  = `{"id":"old","kind":"background","startedAt":1,"sessionId":"old-1","name":"overview-orchestrator","state":"blocked"}`
+		idle  = `{"pid":7,"id":"old","kind":"background","startedAt":1,"sessionId":"old-1","name":"overview-orchestrator","status":"idle","state":"idle"}`
+		busy  = `{"pid":7,"id":"old","kind":"background","startedAt":1,"sessionId":"old-1","name":"overview-orchestrator","status":"busy","state":"working"}`
+		hour  = time.Hour
+		fresh = 10 * time.Minute
+	)
+	for _, c := range []struct {
+		name            string
+		listing         string
+		known           bool
+		looked, digest  time.Duration // how long ago, 0 for never
+		want            string        // what ensure says, by its start
+		stops, restarts bool
+	}{
+		{"never started", `[]`, false, 0, 0, "not set up", false, false},
+		// stop took its record away: a session of that name with no
+		// process is not one to adopt.
+		{"stood down, a dead session listed", "[" + dead + "]", false, 0, 0, "not set up", false, false},
+		{"started by hand before the record", "[" + idle + "]", false, fresh, fresh, "adopted", false, false},
+		{"in time", "[" + idle + "]", true, fresh, fresh, "ok", false, false},
+		{"exited", `[]`, true, 3 * hour, 3 * hour, "restarted: it was not running", false, true},
+		// claude cannot stop a session with no process, and its refusal
+		// must not end the run before the restart.
+		{"its process gone", "[" + dead + "]", true, 3 * hour, 3 * hour, "restarted: it was not running", false, true},
+		{"silent and idle", "[" + idle + "]", true, 3 * hour, 3 * hour, "restarted: it had not looked", true, true},
+		{"silent and busy", "[" + busy + "]", true, 3 * hour, 3 * hour, "overdue but busy", false, false},
+		{"ticking, publishing nothing", "[" + idle + "]", true, fresh, 3 * hour, "ticking, but no tick has finished since", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log, orch := filepath.Join(dir, "log"), filepath.Join(dir, "orchestrator")
+			fake := filepath.Join(dir, "claude")
+			script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \"$1\" in\nagents) cat %q;;\nstop) if grep -q '\"pid\"' %q; then exit 0; fi; echo \"couldn't confirm it was stopped\" >&2; exit 1;;\n*) echo backgrounded;;\nesac\n",
+				log, filepath.Join(dir, "listing.json"), filepath.Join(dir, "listing.json"))
+			for path, text := range map[string]string{fake: script, filepath.Join(dir, "listing.json"): c.listing, filepath.Join(orch, "AGENTS.md"): "x"} {
+				os.MkdirAll(filepath.Dir(path), 0o755)
+				if err := os.WriteFile(path, []byte(text), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			home := Home{Dir: filepath.Join(dir, "home"), Claude: fake, OrchestratorDir: orch, Exe: "/b/overview"}
+			now := time.Now()
+			if c.known {
+				home.saveOrchestratorState(orchestratorState{SessionID: "old-1", Every: hour, Model: "sonnet", StartedAt: now.Add(-48 * hour)})
+			}
+			if c.looked > 0 {
+				writeTime(home.heartbeatFile(), now.Add(-c.looked))
+			}
+			if c.digest > 0 {
+				home.saveCursor(now.Add(-c.digest))
+			}
+			out, err := home.EnsureOrchestrator(hour, "sonnet")
+			if err != nil || !strings.HasPrefix(out, c.want) {
+				t.Fatalf("ensure said %q, %v, want %q", out, err, c.want)
+			}
+			b, _ := os.ReadFile(log)
+			calls := string(b)
+			if got := strings.Contains(calls, "stop old"); got != c.stops {
+				t.Errorf("stopped %v, want %v:\n%s", got, c.stops, calls)
+			}
+			if got := strings.Contains(calls, "--bg --resume old-1"); got != c.restarts {
+				t.Errorf("restarted %v, want %v:\n%s", got, c.restarts, calls)
+			}
+		})
 	}
 }
 

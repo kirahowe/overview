@@ -172,8 +172,8 @@ The footer shows the keys for where the keyboard is, or a note when
 overview has something to say. A note stays until the next key or click
 that does something, or for six seconds. The wheel leaves it. A newer
 note replaces it. The footer starts with what runs in the background:
-the orchestrator when it is off or silent, and a digest while one is
-being written. When the line is short these give way first, the digest
+the orchestrator when it is off, silent or not publishing, and a digest
+while one is being written. When the line is short these give way first, the digest
 before the orchestrator, then the end of a note. The first two keys
 always keep their room, a search keeps its input, and a long path is
 cut from the left.
@@ -663,6 +663,27 @@ scripts/launchd install work    # or remove, or print to see the agent first
 The agent runs the `overview` and `claude` that are on your PATH when you
 install it, by their full paths, so it needs no PATH of its own. It logs
 to `~/Library/Logs/overview/`.
+
+`overview orchestrator status` says how it is doing: not running, silent,
+or running but not publishing. Silent means it has not looked at the
+sessions for longer than its interval. Not publishing means it looks on
+time and no tick has finished for more than two intervals: each found
+something to report and no digest came of it. The footer shows either in
+red. `ensure` restarts a silent orchestrator that is idle. One that is not
+publishing it leaves alone and logs, since a restart does not make a
+digest land and each one costs a first tick.
+
+Claude Code goes on listing a background session whose process has gone,
+as after a restart of the machine. overview does not count that as the
+orchestrator: the footer says it is off, and `ensure` resumes its
+conversation.
+
+The orchestrator writes its draft to `orchestrator/digest.md`, which git
+ignores, and publishes from there. Claude Code otherwise moves a
+background session inside a git repository into a worktree of its own
+before its first edit, where the orchestrator may not write and publish
+does not look. So overview starts it with that isolation off, by setting
+`worktree.bgIsolation` to `none` for this session alone.
 
 ## From another machine
 

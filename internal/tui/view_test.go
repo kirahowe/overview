@@ -476,6 +476,30 @@ func TestTheTaskPickersFooterFitsANarrowPane(t *testing.T) {
 	}
 }
 
+// The footer says how the orchestrator is failing: off, silent since it
+// last looked, or looking on time and publishing nothing since the last
+// tick that finished.
+func TestTheFooterSaysHowTheOrchestratorFails(t *testing.T) {
+	m := newTestModel(t, row("s1", "red", "auth", 11))
+	for want, h := range map[string]fleet.Health{
+		"orchestrator off":               {},
+		"orchestrator silent 3h":         {Running: true, Stale: true, LastCheck: m.now.Add(-3 * time.Hour)},
+		"orchestrator not publishing 3d": {Running: true, Behind: true, LastDigest: m.now.Add(-72 * time.Hour)},
+		"orchestrator not publishing  ":  {Running: true, Behind: true},
+	} {
+		m := update(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs, health: h})
+		lines := screenText(m)
+		if foot := lines[len(lines)-1]; !strings.Contains(foot, want) {
+			t.Errorf("the footer is %q, want %q in it", foot, want)
+		}
+	}
+	m = update(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs, health: fleet.Health{Running: true}})
+	lines := screenText(m)
+	if foot := lines[len(lines)-1]; strings.Contains(foot, "orchestrator") {
+		t.Errorf("the footer of a healthy orchestrator is %q", foot)
+	}
+}
+
 // A note on the digests screen shows alone: the list's search and the
 // panels mode belong to the sessions screen.
 func TestADigestNoteLeavesTheListsSearchOut(t *testing.T) {

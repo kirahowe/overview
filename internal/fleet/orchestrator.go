@@ -35,12 +35,24 @@ func (h Home) Orchestrator() (Live, bool, error) {
 	if err != nil {
 		return Live{}, false, err
 	}
+	l, ok := orchestratorOf(live)
+	return l, ok, nil
+}
+
+// orchestratorOf is the orchestrator among the sessions listed: the one
+// by its name that has a process. Claude Code goes on listing a
+// background session whose process has gone, as after a restart of the
+// machine, with no pid and no status. That one never ticks again, and
+// neither `claude stop` nor `claude rm` reaches it while no background
+// session is up, so it counts as no orchestrator: start may start one
+// beside it, and ensure brings its conversation back.
+func orchestratorOf(live []Live) (Live, bool) {
 	for _, l := range live {
-		if l.Name == OrchestratorName {
-			return l, true, nil
+		if l.Name == OrchestratorName && (l.PID != 0 || l.Status != "") {
+			return l, true
 		}
 	}
-	return Live{}, false, nil
+	return Live{}, false
 }
 
 // orchestratorState is what start records so that a later ensure can tell a
@@ -80,7 +92,13 @@ type Health struct {
 	// interval, plus some slack, without looking at the fleet.
 	Stale     bool
 	LastCheck time.Time
-	Live      Live
+	// Behind is set when the session looks at the fleet on time and yet no
+	// tick has finished for more than two intervals: each found something
+	// to report, and no digest came of it. LastDigest is when the last
+	// tick that finished looked, zero when none has.
+	Behind     bool
+	LastDigest time.Time
+	Live       Live
 }
 
 // staleSlack covers a tick that starts late or takes a while to finish.
@@ -88,12 +106,8 @@ const staleSlack = 15 * time.Minute
 
 func (h Home) health(live []Live, now time.Time) Health {
 	var out Health
-	for _, l := range live {
-		if l.Name == OrchestratorName {
-			out.Running, out.Live = true, l
-		}
-	}
-	out.LastCheck = readTime(h.heartbeatFile())
+	out.Live, out.Running = orchestratorOf(live)
+	out.LastCheck, out.LastDigest = readTime(h.heartbeatFile()), h.LastDigestAt()
 	if !out.Running {
 		return out
 	}
@@ -102,13 +116,21 @@ func (h Home) health(live []Live, now time.Time) Health {
 		st.Every = time.Hour
 	}
 	// Before the first tick, count from when the session started.
-	last := out.LastCheck
-	for _, t := range []time.Time{st.StartedAt, time.UnixMilli(out.Live.StartedAt)} {
-		if t.After(last) {
-			last = t
-		}
+	started := st.StartedAt
+	if t := time.UnixMilli(out.Live.StartedAt); t.After(started) {
+		started = t
 	}
-	out.Stale = now.Sub(last) > st.Every+staleSlack
+	latest := func(t time.Time) time.Time {
+		if started.After(t) {
+			return started
+		}
+		return t
+	}
+	out.Stale = now.Sub(latest(out.LastCheck)) > st.Every+staleSlack
+	// A tick that finds nothing finishes too, and moves the cursor as a
+	// published digest does. So a cursor two intervals old under a fresh
+	// heartbeat means ticks that found work and published none of it.
+	out.Behind = !out.Stale && now.Sub(latest(out.LastDigest)) > 2*st.Every+staleSlack
 	return out
 }
 
@@ -182,18 +204,28 @@ func shellQuote(s string) string {
 // its own ticks, read this home's transcripts and write its draft digest.
 // With dontAsk as the permission mode, anything else is refused without a
 // prompt, since nobody is attached to answer one.
+//
+// Claude Code moves a background session that starts inside a git
+// repository into a worktree of its own before it lets it edit a file
+// there. The draft would then be somewhere the one path it may write does
+// not cover, and where the publish command does not look, so no digest
+// would ever be published. The draft is the only file the session
+// writes, and git ignores it, so the session is told to write in place.
 func (h Home) orchestratorArgs(every time.Duration, model, resume string) ([]string, error) {
 	cron, err := cronFor(every)
 	if err != nil {
 		return nil, err
 	}
 	activity, publish, sessions := h.overviewCmd("activity"), h.overviewCmd("publish", "digest.md"), h.overviewCmd("sessions")
-	settings, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": []string{
-		"Bash(" + activity + ")", "Bash(" + publish + ")", "Bash(" + sessions + ")",
-		"CronCreate", "CronList", "CronDelete",
-		"Read(/" + h.Dir + "/projects/**)", "Read(/" + h.Dir + "/overview/**)",
-		"Edit(/" + h.OrchestratorDir + "/digest.md)",
-	}}})
+	settings, _ := json.Marshal(map[string]any{
+		"permissions": map[string]any{"allow": []string{
+			"Bash(" + activity + ")", "Bash(" + publish + ")", "Bash(" + sessions + ")",
+			"CronCreate", "CronList", "CronDelete",
+			"Read(/" + h.Dir + "/projects/**)", "Read(/" + h.Dir + "/overview/**)",
+			"Edit(/" + h.OrchestratorDir + "/digest.md)",
+		}},
+		"worktree": map[string]any{"bgIsolation": "none"},
+	})
 	commands := fmt.Sprintf(" Your overview commands, to run exactly as written: `%s` prints the activity extract, "+
 		"`%s` publishes digest.md, and `%s` lists the sessions.", activity, publish, sessions)
 	prompt := fmt.Sprintf("Start orchestrating. Your tick schedule is the cron expression `%s`. "+
@@ -253,7 +285,9 @@ func (h Home) StartOrchestrator(every time.Duration, model string) (string, erro
 // outside Claude Code. It restarts an orchestrator that has exited or gone
 // silent, resuming the same conversation so that it keeps its memory of
 // earlier digests. It never starts one that was not started by hand first,
-// and stop makes it stand down.
+// and stop makes it stand down. One that ticks and publishes nothing it
+// leaves alone and says so: a restart would not make a digest land, and
+// each one costs a first tick.
 func (h Home) EnsureOrchestrator(every time.Duration, model string) (string, error) {
 	hl, err := h.OrchestratorHealth()
 	if err != nil {
@@ -268,6 +302,8 @@ func (h Home) EnsureOrchestrator(every time.Duration, model string) (string, err
 		st = orchestratorState{SessionID: hl.Live.SessionID, Every: every, Model: model,
 			StartedAt: time.UnixMilli(hl.Live.StartedAt)}
 		return "adopted the running orchestrator", h.saveOrchestratorState(st)
+	case hl.Running && hl.Behind:
+		return "ticking, but no tick has finished since " + stamp(hl.LastDigest), nil
 	case hl.Running && !hl.Stale:
 		return "ok", nil
 	case hl.Running && hl.Live.Status != "idle":
@@ -281,9 +317,18 @@ func (h Home) EnsureOrchestrator(every time.Duration, model string) (string, err
 		return "", err
 	}
 	if hl.Running {
-		return "restarted: it had not looked at the fleet since " + hl.LastCheck.Local().Format("Mon 15:04"), nil
+		return "restarted: it had not looked at the fleet since " + stamp(hl.LastCheck), nil
 	}
 	return "restarted: it was not running", nil
+}
+
+// stamp is a moment as the orchestrator's commands print it, "never" for
+// one that has not come.
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.Local().Format("Mon 2 Jan 15:04")
 }
 
 func (h Home) stopSession(l Live) error {

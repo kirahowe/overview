@@ -236,6 +236,12 @@ func orchestrator(home fleet.Home, rest []string, every time.Duration, model str
 			fmt.Println("not running, last looked at the fleet:", last)
 		case h.Stale:
 			fmt.Println("running but silent, last looked at the fleet:", last)
+		case h.Behind:
+			done := "never"
+			if !h.LastDigest.IsZero() {
+				done = h.LastDigest.Local().Format("Mon 2 Jan 15:04")
+			}
+			fmt.Printf("running but not publishing, last looked at the fleet: %s, last finished a tick: %s\n", last, done)
 		default:
 			fmt.Printf("running, %s, last looked at the fleet: %s\n", h.Live.Status, last)
 		}

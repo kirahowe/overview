@@ -1541,6 +1541,9 @@ func (m model) footer() string {
 			f.status = append(f.status, part{"orchestrator off", red})
 		case h.Stale:
 			f.status = append(f.status, part{"orchestrator silent " + m.ago(h.LastCheck), red})
+		case h.Behind:
+			// It ticks, and no digest comes of it.
+			f.status = append(f.status, part{strings.TrimSpace("orchestrator not publishing " + m.ago(h.LastDigest)), red})
 		}
 	}
 	if m.digesting {
