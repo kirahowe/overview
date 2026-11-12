@@ -355,7 +355,7 @@ func (m model) agentsLanded(msg tea.Msg) (model, tea.Cmd) {
 	case m.staging:
 	case m.cockpitSoon:
 		return m.openCockpit()
-	case m.taskPick.open:
+	case m.zoomWaits():
 		m.zoomPanes = m.inWindow()
 		return m.syncZoom()
 	}

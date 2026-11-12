@@ -1155,24 +1155,6 @@ func rule(label string, w int) string {
 		fg(pal.Border).Render(strings.Repeat("─", max(w-ansi.StringWidth(label)-4, 0)))
 }
 
-func (m model) digestLines() []string {
-	if m.digest == "" {
-		return wrap(dim.Render("No digest yet. Press D to write one, or start the orchestrator."), m.contentWidth())
-	}
-	return wrapMarkdown(m.digest, min(m.contentWidth(), 100), styleDigest)
-}
-
-func (m model) digestView() []string {
-	lines := m.digestLines()
-	h := m.listHeight()
-	start := max(0, min(m.digestScroll, len(lines)-h))
-	var out []string
-	for _, l := range lines[start:min(start+h, len(lines))] {
-		out = append(out, m.plain(l))
-	}
-	return out
-}
-
 // titleSeg is a run of a panel's title in one colour, "" for the colour
 // of the title itself, which is the accent while the panel is lit.
 type titleSeg struct {
@@ -1593,12 +1575,10 @@ func (m model) footer() string {
 		}
 		f.hints = append(f.hints, hint{"↑↓", "move"}, hint{"esc", "clear"})
 	case m.screen == digestScreen && m.note == "":
-		info := "no digest yet"
-		if len(m.digests) > 0 {
-			info = fmt.Sprintf("%s · %d of %d", m.digestAt.Format("Mon 15:04"), m.digestIdx+1, len(m.digests))
+		if place := m.digestPlace(); place != "" {
+			f.mode = []part{{place, dim}}
 		}
-		f.mode = []part{{info, dim}}
-		f.hints = []hint{{"[ ]", "older/newer"}, {"D", "write"}, {"d", "sessions"}, {"?", "help"}}
+		f.hints = []hint{{"esc", "list"}, {"j k", "scroll"}, {"[ ]", "older/newer"}, {"D", "write"}, {"?", "help"}}
 	case m.screen != sessionsScreen:
 		// A note on the digests: the list's search and panels are not here.
 	default:
@@ -1696,7 +1676,9 @@ func helpSections() (left, right []helpSection) {
 	}
 	right = []helpSection{
 		{"digest", []helpEntry{
-			e("d", "show / hide digests"),
+			e("d", "open the digests"),
+			in(digestMode, "d esc", "back to the list"),
+			in(digestMode, "j k", "scroll"),
 			in(digestMode, "[ ]", "older / newer"),
 			e("D", "write one now"),
 		}},
@@ -2365,18 +2347,4 @@ func wrapMarkdown(md string, w int, style func(string) string) []string {
 		}
 	}
 	return out
-}
-
-// styleDigest renders a digest: the shared Markdown, with the section that
-// needs attention in red.
-func styleDigest(md string) string {
-	lines := strings.Split(strings.TrimSpace(md), "\n")
-	for i, l := range lines {
-		if strings.HasPrefix(l, "## Needs") {
-			lines[i] = red.Render(strings.TrimPrefix(l, "## "))
-		} else {
-			lines[i] = styleMarkdown(l)
-		}
-	}
-	return strings.Join(lines, "\n")
 }

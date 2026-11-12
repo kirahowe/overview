@@ -2082,7 +2082,7 @@ func TestPropMarkdownHangsListItems(t *testing.T) {
 		words := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,12}`), 1, 40).Draw(t, "words")
 		more := strings.Repeat(" ", len(indent)+len(marker)) + strings.Join(words, " ")
 		md := "intro\n" + indent + marker + strings.Join(words, " ") + "\n" + more
-		lines := wrapMarkdown(md, w, styleDigest)
+		lines := wrapMarkdown(md, w, styleMarkdown)
 		for i, l := range lines {
 			if ansi.StringWidth(l) > w {
 				t.Fatalf("line %d is %d wide in %d: %q", i, ansi.StringWidth(l), w, ansi.Strip(l))
@@ -2092,7 +2092,7 @@ func TestPropMarkdownHangsListItems(t *testing.T) {
 		if hang > w/2 {
 			return
 		}
-		item := len(wrapMarkdown("intro", w, styleDigest))
+		item := len(wrapMarkdown("intro", w, styleMarkdown))
 		for _, l := range lines[item+1:] {
 			if s := ansi.Strip(l); strings.TrimSpace(s) != "" && !strings.HasPrefix(s, strings.Repeat(" ", hang)) {
 				t.Fatalf("a continuation %q does not hang %d under %q", s, hang, marker)
@@ -2101,8 +2101,8 @@ func TestPropMarkdownHangsListItems(t *testing.T) {
 	})
 }
 
-func TestADigestBulletHangsItsContinuation(t *testing.T) {
-	lines := wrapMarkdown("## Done\n- relay#54 landed the parser fix and its regression tests", 24, styleDigest)
+func TestABulletHangsItsContinuation(t *testing.T) {
+	lines := wrapMarkdown("## Done\n- relay#54 landed the parser fix and its regression tests", 24, styleMarkdown)
 	got := make([]string, len(lines))
 	for i, l := range lines {
 		got[i] = strings.TrimRight(ansi.Strip(l), " ")
@@ -2592,6 +2592,85 @@ func TestPropAKeyKeepsTheCursorWhereItIsTyped(t *testing.T) {
 			}
 			if m.inAgents != inPane || m.blurred {
 				t.Fatalf("after %s typed in the agents' pane (%v): inAgents %v blurred %v", key, inPane, m.inAgents, m.blurred)
+			}
+		}
+	})
+}
+
+// genDigestDoc draws a digest of words that are awkward to lay out: long
+// paths, text in other scripts, and fields that are missing.
+func genDigestDoc() *rapid.Generator[fleet.DigestDoc] {
+	word := rapid.OneOf(
+		rapid.StringMatching(`[a-zA-Z0-9.,:?!&~/-]{1,14}`),
+		rapid.SampledFrom([]string{"héllo", "日本語", "→", "/private/tmp/claude-501/-Users-kira-code-projects/scratchpad/a.md", "since", "·"}),
+	)
+	words := func(lo, hi int) *rapid.Generator[string] {
+		return rapid.Custom(func(t *rapid.T) string {
+			return strings.Join(rapid.SliceOfN(word, lo, hi).Draw(t, "words"), " ")
+		})
+	}
+	item := rapid.Custom(func(t *rapid.T) fleet.DigestItem {
+		if rapid.IntRange(0, 5).Draw(t, "plain") == 0 {
+			return fleet.DigestItem{Issue: words(1, 30).Draw(t, "text")}
+		}
+		return fleet.DigestItem{
+			Names:   rapid.SliceOfN(words(1, 1), 1, 3).Draw(t, "names"),
+			Project: words(0, 2).Draw(t, "project"),
+			Issue:   words(0, 14).Draw(t, "issue"),
+			Do:      words(0, 30).Draw(t, "do"),
+			Why:     words(0, 30).Draw(t, "why"),
+			Since:   words(0, 3).Draw(t, "since"),
+			Notes:   rapid.SliceOfN(words(1, 40), 0, 2).Draw(t, "notes"),
+		}
+	})
+	return rapid.Custom(func(t *rapid.T) fleet.DigestDoc {
+		var doc fleet.DigestDoc
+		for range rapid.IntRange(0, 4).Draw(t, "sections") {
+			title := rapid.OneOf(words(0, 4), rapid.SampledFrom([]string{"Needs your attention", "Finished", "In progress"})).Draw(t, "title")
+			doc.Sections = append(doc.Sections, fleet.DigestSection{Title: title, Items: rapid.SliceOfN(item, 0, 5).Draw(t, "items")})
+		}
+		return doc
+	})
+}
+
+// A digest's page is exactly as wide as asked on every line, however
+// narrow that is, and everything the digest says is on it, in the order
+// the digest has it. Wrapping breaks lines and may break a long word, so
+// the text is compared without its spaces.
+func TestPropDigestPageFitsAndKeepsItsText(t *testing.T) {
+	squash := func(s string) string { return strings.Join(strings.Fields(s), "") }
+	rapid.Check(t, func(t *rapid.T) {
+		doc := genDigestDoc().Draw(t, "doc")
+		w := rapid.IntRange(2, 160).Draw(t, "w")
+		lines := digestPage(doc, w)
+		var page strings.Builder
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got != w {
+				t.Fatalf("line %d is %d cells wide, want %d: %q", i, got, w, ansi.Strip(l))
+			}
+			page.WriteString(squash(ansi.Strip(l)))
+		}
+		rest := page.String()
+		find := func(what, s string) {
+			s = squash(s)
+			i := strings.Index(rest, s)
+			if i < 0 {
+				t.Fatalf("%s %q is not on the page at width %d, or not in its place:\n%s", what, s, w, strings.Join(lines, "\n"))
+			}
+			rest = rest[i+len(s):]
+		}
+		for _, s := range doc.Sections {
+			find("the title", s.Title)
+			for _, it := range s.Items {
+				find("the names", strings.Join(it.Names, ","))
+				find("the project", it.Project)
+				find("the wait", it.Since)
+				find("the issue", it.Issue)
+				find("what to do", it.Do)
+				find("the reason", it.Why)
+				for _, n := range it.Notes {
+					find("a note", n)
+				}
 			}
 		}
 	})

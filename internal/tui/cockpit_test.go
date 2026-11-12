@@ -215,7 +215,7 @@ func TestAListingFromBeforeTheZoomDoesNotCloseTheCockpit(t *testing.T) {
 }
 
 func TestActionsThatShowAPaneCloseTheCockpit(t *testing.T) {
-	for _, k := range []string{"enter", "c", "t", "d", "v"} {
+	for _, k := range []string{"enter", "c", "t", "v"} {
 		f := newFakeMux()
 		m := stagedModel(t, f, row("s1", "red", "auth", 11))
 		m = pressSettled(t, m, "o")
@@ -452,19 +452,21 @@ func TestTheCockpitSaysWhatEnterDoesAsTheListDoes(t *testing.T) {
 
 // An o that waits for the list's move is cancelled by whatever would close
 // an open cockpit, so it cannot open one afterwards. Pressing o again, or
-// esc, cancels it too.
+// esc, cancels it too. The digests zoom the list for themselves once the
+// move lands, and open no cockpit.
 func TestAPendingOIsCancelled(t *testing.T) {
 	second := func(f *fakeMux, m model) string { return paneWithTTY(f, m.in.TTYs[rows(m)[1].sess.PID]) }
 	for _, c := range []struct {
 		name  string
 		keys  []string
 		focus bool // enter moves the focus into the pane
+		zoom  bool // the list ends zoomed, for what the keys opened
 	}{
-		{"enter", []string{"enter"}, true},
-		{"o again", []string{"o"}, false},
-		{"esc", []string{"esc"}, false},
-		{"new terminal", []string{"t"}, false},
-		{"digest screen", []string{"d"}, false},
+		{"enter", []string{"enter"}, true, false},
+		{"o again", []string{"o"}, false, false},
+		{"esc", []string{"esc"}, false, false},
+		{"new terminal", []string{"t"}, false, false},
+		{"digest screen", []string{"d"}, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeMux()
@@ -483,7 +485,7 @@ func TestAPendingOIsCancelled(t *testing.T) {
 			}
 			m = settle(t, m, cmd)
 			m = feed(t, m, cmdMsgs(move))
-			if m.cockpit.open || f.zoomed("%0") || m.zooming || len(f.zooms) != 0 {
+			if m.cockpit.open || f.zoomed("%0") != c.zoom || m.zooming || (len(f.zooms) != 0) != c.zoom {
 				t.Fatalf("open %v zoomed %v zooms %v", m.cockpit.open, f.zoomed("%0"), f.zooms)
 			}
 			if want := second(f, m); c.focus && (len(f.selects) == 0 || f.focus != want) {

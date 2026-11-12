@@ -665,8 +665,9 @@ func (m model) stageUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m, open := m.openCockpit()
 			return m, tea.Batch(cmd, open)
 		}
-		if m.taskPick.open {
-			// s came while the list was moving: its zoom waited for this.
+		if m.zoomWaits() {
+			// s or d came while the list was moving: its zoom waited for
+			// this.
 			m, cmd := m.stageLanded(msg)
 			m.zoomPanes = m.inWindow()
 			m, zoom := m.syncZoom()

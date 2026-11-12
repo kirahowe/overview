@@ -49,8 +49,16 @@ func zoomCmd(mux multiplexer, self string, on bool) tea.Cmd {
 }
 
 // zoomWant says whether the list's pane should be zoomed: while the
-// cockpit or the task picker is open, as both want the whole window.
-func (m model) zoomWant() bool { return m.cockpit.open || m.taskPick.open }
+// cockpit or the task picker is open, or the digests show, as each wants
+// the whole window.
+func (m model) zoomWant() bool {
+	return m.cockpit.open || m.taskPick.open || m.screen == digestScreen
+}
+
+// zoomWaits says whether a zoom is owed that waited for the list's move,
+// or for the agents' pane, to land: the task picker's and the digests',
+// which open at once and are zoomed when they can be.
+func (m model) zoomWaits() bool { return m.taskPick.open || m.screen == digestScreen }
 
 // syncZoom asks tmux for the zoom zoomWant says. One zoom is out at a time, so two never race in tmux. A wish made while
 // one is out waits for it to land, and then the latest wish goes. The
@@ -99,9 +107,9 @@ func (m model) closeCockpit() (model, tea.Cmd) {
 }
 
 // zoomLost reads a current listing for what became of the list's zoom,
-// for the cockpit or the task picker. tmux ends a zoom when the user goes
-// to another pane of the window, and also when a pane of it closes or
-// opens. Only the first is the user leaving, and what wanted the zoom
+// for the cockpit, the task picker or the digests. tmux ends a zoom when
+// the user goes to another pane of the window, and also when a pane of
+// it closes or opens. Only the first is the user leaving, and what wanted the zoom
 // closes, without touching tmux: the list's window has the panes it had,
 // unzoomed. When a pane has gone the zoom is asked for again if the list
 // has company. A list alone in its window fills it unzoomed, as tmux
@@ -122,7 +130,7 @@ func (m model) zoomLost() (model, tea.Cmd) {
 		m.zoomPanes = n
 		return m.syncZoom()
 	default:
-		m.cockpit, m.taskPick = cockpit{}, taskPick{}
+		m.cockpit, m.taskPick, m.screen = cockpit{}, taskPick{}, sessionsScreen
 	}
 	return m, nil
 }

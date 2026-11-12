@@ -44,7 +44,10 @@ See README.md for behaviour and docs/ for design notes.
   the list's column following the cursor and the keyboard staying in
   that pane, the pane without the cursor marking its session's row, the
   panels mode moving between the two, and the cockpit
-  zoomed over it, to its closing with the last session. The key table
+  zoomed over it, to its closing with the last session; and the digests,
+  `d` zooming the list with the newest digest drawn as a page, each item's
+  issue and what to do under its session, and `esc` putting the list
+  back. The key table
   itself is tested in `internal/tmux`. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.

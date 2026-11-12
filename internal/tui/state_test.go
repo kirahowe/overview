@@ -53,6 +53,11 @@ func checkInvariants(t *rapid.T, m model) {
 	if m.cockpit.issues && !m.cockpit.open {
 		t.Fatal("the keys are in the issues card, with no cockpit")
 	}
+	// The digests and the cockpit each take the whole window, so one
+	// closes for the other.
+	if m.cockpit.open && m.screen == digestScreen {
+		t.Fatal("the cockpit is open under the digests")
+	}
 	// The keys are in the issues card only while it is there.
 	if m.inIssues() {
 		if _, tracked := m.world().Tracker(m.target().root); !tracked || !m.issuesShown() {

@@ -986,6 +986,61 @@ func TestCockpit(t *testing.T) {
 	})
 }
 
+// The digests, end to end: d zooms the list's pane to fill its window and
+// draws the newest digest as a page under a rule of its own, each item
+// with its issue and what to do about it, and esc ends the zoom, leaving
+// the list beside the session as it was.
+func TestDigests(t *testing.T) {
+	r := launchWith(t, "d", func(r *rig) string {
+		dir := filepath.Join(r.home, "overview", "digests")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		digest := "# Thu 12 Nov 09:22\n\n## Needs your attention\n\n" +
+			"- **relay-20** (relay): The live relay can leak\n  - Do: Deploy the fix with `jj new lwnyosru`\n  - Since: Wed 20:05\n\n" +
+			"## Finished\n\n- **slk-12** (slk): Released 0.29.0\n"
+		if err := os.WriteFile(filepath.Join(dir, "20261112-092200.md"), []byte(digest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return ""
+	})
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	before := r.ov.panes()
+	r.press("c")
+	session := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, session)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the list beside the session", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, 0)
+		return ok && strings.Contains(r.screen(), "e2e-0"), say
+	})
+	width := listPane(r.ov.panes()).w
+	zoomed := func() string {
+		return r.ov.must("display-message", "-p", "-t", r.list.id, "#{window_zoomed_flag} #{pane_width} #{window_width}")
+	}
+
+	r.press("d")
+	waitFor(t, "the digests, zoomed", func() (bool, string) {
+		z, s := zoomed(), r.screen()
+		f := strings.Fields(z)
+		ok := len(f) == 3 && f[0] == "1" && f[1] == f[2]
+		for _, want := range []string{"digest", "Thu 12 Nov 09:22", "1 of 1", "Needs your attention · 1", "! relay-20  relay", "since Wed 20:05",
+			"The live relay can leak", "→ Deploy the fix with jj new lwnyosru", "Finished · 1", "✓ slk-12  slk", "esc list"} {
+			ok = ok && strings.Contains(s, want)
+		}
+		return ok, z + "\n" + s
+	})
+	if w := r.windowOf(session.id); w != r.windowOf(r.list.id) {
+		t.Fatalf("the session left the list's window: %s, list in %s", w, r.windowOf(r.list.id))
+	}
+	r.press("Escape")
+	waitFor(t, "the list beside the session again", func() (bool, string) {
+		ok, say := beside(r.ov.panes(), session.id, width)
+		f := strings.Fields(zoomed())
+		return ok && len(f) == 3 && f[0] == "0" && !strings.Contains(r.screen(), "Needs your attention"), zoomed() + " " + say
+	})
+}
+
 // typed sends keys to the terminal the view is attached in, as a user's
 // are: through the attached client and its key tables, which send-keys at
 // a pane would skip.

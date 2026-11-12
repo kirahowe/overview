@@ -141,6 +141,9 @@ type model struct {
 	// The details are rebuilt only when what they show changes, not on
 	// every spinner frame. A pointer, because the model is passed by value.
 	cache *detailCache
+	// page is the digest's page as last laid out, a pointer for the same
+	// reason.
+	page *pageCache
 	// transcripts keeps what the refreshes have read of the transcripts. A
 	// pointer, because the model is passed by value.
 	transcripts *fleet.Transcripts
@@ -343,7 +346,7 @@ func Run(v View) error {
 
 func newModel(home fleet.Home, llm string) model {
 	d := systemDeps()
-	return model{home: home, llm: llm, cache: &detailCache{}, memo: &memo{}, transcripts: fleet.NewTranscripts(), deps: d, now: d.now()}
+	return model{home: home, llm: llm, cache: &detailCache{}, page: &pageCache{}, memo: &memo{}, transcripts: fleet.NewTranscripts(), deps: d, now: d.now()}
 }
 
 // deps are the model's ways out to the system. Each runs inside a Cmd,
@@ -1209,7 +1212,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		}
 	}
 	// enter on an idle workstream opens the cockpit, so it stays open.
-	if m.cockpit.open && closesCockpit(a.do) && (a.do != open || !m.idleSelected()) {
+	// Going to another screen closes it too, in show, which asks tmux
+	// once for the zoom the screen wants.
+	if m.cockpit.open && closesCockpit(a.do) && a.do != showScreen && a.do != toggleScreen && (a.do != open || !m.idleSelected()) {
 		m, out := m.closeCockpit()
 		m, cmd := m.apply(a)
 		return m, tea.Batch(out, cmd)
@@ -1286,9 +1291,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		}
 		return m.say("left it running"), nil
 	case showScreen:
-		m.screen = screen(a.n)
+		return m.show(screen(a.n))
 	case toggleScreen:
-		m.screen = 1 - m.screen
+		return m.show(1 - m.screen)
 	case writeDigest:
 		if m.digesting {
 			return m, nil
@@ -1332,7 +1337,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		if a.do == scrollDigest {
 			a.n += m.digestScroll
 		}
-		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.listHeight()))
+		m.digestScroll = max(0, min(a.n, len(m.digestLines())-m.digestRows()))
 	case stepDigest:
 		return m, m.showDigest(m.digestIdx + a.n)
 	case search:

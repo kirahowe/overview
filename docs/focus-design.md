@@ -84,7 +84,8 @@ pane, and nothing has to pretend.
   pane is not showing them (`apart` is false): before the pane's program
   has connected, in a window too short for it, and while the cockpit or
   the task picker has the list zoomed, since a zoom hides every other
-  pane. There the cursor walks on into the agents as before.
+  pane. There the cursor walks on into the agents as before. The digests
+  zoom the list too, and show neither the list nor the agents.
 
 Two panes of one program can each tell the view that the keyboard has
 come or gone, and the two reports of one move arrive in either order. So
@@ -199,8 +200,8 @@ which of the view's two panes has the keys.
   the keyboard is outside the view.
 - A split or a resize ends a window's zoom, and a pane that is being
   split off is not listed yet. So while a step on the agents' pane is
-  out (`agentsBusy`), the list does not move and the cockpit and the
-  task picker wait to zoom it.
+  out (`agentsBusy`), the list does not move and the cockpit, the task
+  picker and the digests wait to zoom it.
 - ctrl+[ and esc are two keys to tmux only when the terminal sends
   extended keys, so `overview-panels` binds both. Without them ctrl+[
   arrives as esc and leaves the mode in the pane that has the focus.

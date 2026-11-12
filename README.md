@@ -219,7 +219,7 @@ and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
 first, then do what they always do. The exception is `enter` on a
 workstream that no session works on: the cockpit stays open and says
 how to start one. `s` replaces it with the task picker, which keeps
-the zoom.
+the zoom, and `d` with the digests, which keep it too.
 
 A workstream's cockpit starts with a header: the issue's reference,
 title, status and priority, how long ago it was taken on, and
@@ -386,9 +386,8 @@ it. On a workstream, or on anything under one, the new session's first
 prompt is `Work on <project>#<n>: <title>`, so it works on that issue.
 On the project's rule it has no prompt and works on no task. `t`
 does the same with a terminal, and a terminal opened on a workstream is
-listed under it. `d` shows the digests, and `1` and `2` go to the list and the digests
-directly. There `[` and `]`, or `h` and `l`, step through older ones,
-`j`, `k`, `g` and `G` scroll, `esc` goes back, and `D` writes a new one.
+listed under it. `d` opens the digests, as described below, and `1` and `2` go to the list and the digests
+directly. `D` writes a new digest from either.
 `r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, and `m`
 gives a workstream's issue a verdict, as described above. `q` detaches, leaving the view and its
 sessions running. No key quits the view, since it is the point of the
@@ -443,6 +442,24 @@ the list. A click selects an issue, a double click acts on it, and `esc`
 closes the picker. Closing it ends the zoom, and so does going to
 another pane, which closes the picker too. In a project without
 `.issues`, `s` says how to start tracking its tasks.
+
+`d` opens the digests as a page. Like the cockpit, it zooms the list's
+pane to fill its window, and it draws the newest digest in a column in
+the middle of it, at most 96 cells wide. The rule along the top says when
+the digest looked at the sessions, how long ago it was written, and its
+place among the digests kept. Each section starts with a rule of its own
+that has its title and how many items it holds. An item starts with a
+mark, `!` for one that needs you, `✓` for one that is finished and `●`
+for one in progress, then its session and project, with how long it has
+waited at the right. The issue is on the next line. What you are asked to
+do follows an arrow, in bold, and the reason and any other lines come
+under it. A digest written before items had a `Do:` line shows each
+session's paragraph apart, its first sentence on a line of its own.
+`j` and `k` scroll, `g` and `G` go to the top and the end, and `ctrl+d`,
+`ctrl+u` and the wheel move faster. The footer says how many lines are
+below. `[` and `]`, or `h` and `l`, step through older digests. `d` or
+`esc` goes back to the list and ends the zoom, and so does going to
+another pane.
 
 The mouse works too. A click selects a session and puts the keyboard in
 the list, or in the agents' pane when the row is there, a double click
