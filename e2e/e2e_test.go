@@ -15,7 +15,12 @@ import (
 	"time"
 
 	"overview/internal/tmuxtest"
+	"overview/internal/tui"
 )
+
+// viewSession is the tmux session the rig's view runs in, named after its
+// home, .claude-e2e.
+const viewSession = "overview-e2e"
 
 // pane is one line of the private server's pane listing.
 type pane struct {
@@ -39,18 +44,27 @@ type server struct {
 	name string
 }
 
-func private(t *testing.T, name string) server {
+// private is the server named name, which the test's cleanup kills. views
+// are the sessions on it that a view will run in.
+func private(t *testing.T, name string, views ...string) server {
 	t.Helper()
 	if name == "overview" || !strings.HasPrefix(name, "ovtest-e2e-") {
 		t.Fatalf("refusing to use the tmux socket %q", name)
 	}
 	s := server{t, name}
 	t.Cleanup(func() {
-		// tmux leaves the socket file behind, so it goes too.
+		// tmux leaves its socket file behind, and a view the socket it
+		// listened on for its agents' pane, so both go too. The view's is
+		// removed by its exact name and never by pattern: the live view's
+		// socket is in the same directory and is named the same way.
 		path, _ := s.run("-f", "/dev/null", "start-server", ";", "display-message", "-p", "#{socket_path}")
 		exec.Command("tmux", "-L", name, "kill-server").Run() //nolint:errcheck
-		if filepath.Base(path) == name {
-			os.Remove(path)
+		if filepath.Base(path) != name {
+			return
+		}
+		os.Remove(path)
+		for _, session := range views {
+			os.Remove(tui.AgentsSocket(path, session))
 		}
 	})
 	return s
@@ -181,7 +195,7 @@ func launchWith(t *testing.T, tag string, setup func(r *rig) string) *rig {
 		t.Skip("tmux is not installed")
 	}
 	r := &rig{
-		ov:   private(t, fmt.Sprintf("ovtest-e2e-%s%d", tag, os.Getpid())),
+		ov:   private(t, fmt.Sprintf("ovtest-e2e-%s%d", tag, os.Getpid()), viewSession),
 		term: private(t, fmt.Sprintf("ovtest-e2e-term-%s%d", tag, os.Getpid())),
 	}
 	r.dir = t.TempDir()
@@ -228,7 +242,7 @@ func launchWith(t *testing.T, tag string, setup func(r *rig) string) *rig {
 		ps := r.ov.panes()
 		r.holder = ""
 		for _, p := range ps {
-			if p.holder && p.session == "overview-e2e" {
+			if p.holder && p.session == viewSession {
 				r.holder = p.id
 			}
 		}
@@ -236,6 +250,14 @@ func launchWith(t *testing.T, tag string, setup func(r *rig) string) *rig {
 		return ok && r.holder != "", "holder " + r.holder + ": " + say
 	})
 	r.list = listPane(r.ov.panes())
+	// The view's socket has to be where the cleanup will look for it. If
+	// its name or its place ever changes, every run would leave one
+	// behind, and this fails the run first.
+	sock := tui.AgentsSocket(r.ov.must("display-message", "-p", "#{socket_path}"), viewSession)
+	waitFor(t, "the view's socket for its agents' pane", func() (bool, string) {
+		info, err := os.Stat(sock)
+		return err == nil && info.Mode()&os.ModeSocket != 0, fmt.Sprintf("%s: %v", sock, err)
+	})
 	return r
 }
 

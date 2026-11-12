@@ -328,7 +328,7 @@ func Run(v View) error {
 	// and draws the agents in the list's own.
 	var p *tea.Program
 	made := make(chan struct{})
-	sock := agentsSocket(socket, session)
+	sock := AgentsSocket(socket, session)
 	if link, err := listenAgents(sock, func(msg tea.Msg) { <-made; p.Send(msg) }); err != nil {
 		m = m.say("the agents have no pane of their own: " + err.Error())
 	} else {

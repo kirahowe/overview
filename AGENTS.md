@@ -72,6 +72,10 @@ See README.md for behaviour and docs/ for design notes.
 - A test that needs a real tmux gets a private server from
   `internal/tmuxtest`, which puts the socket in a short directory under
   `/tmp` and removes it afterwards. tmux never deletes its socket files.
+- A view does not delete the socket it listens on for its agents' pane
+  either. A test that starts a view removes that file by the name
+  `tui.AgentsSocket` gives, never by the `ov-*.sock` pattern, which the
+  live view's socket matches too.
 
 ## Hook rules
 

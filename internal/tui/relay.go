@@ -79,11 +79,13 @@ func fromWire(w wire) (tea.Msg, bool) {
 	return nil, false
 }
 
-// agentsSocket is where the view of session, on the tmux server at
+// AgentsSocket is where the view of session, on the tmux server at
 // socket, listens for its agents' pane. It sits beside tmux's socket, so
 // it is as private as that one, and its name is short, since a unix
-// socket's path has about a hundred bytes.
-func agentsSocket(socket, session string) string {
+// socket's path has about a hundred bytes. The file outlives its view, as
+// listenAgents explains, so a test that starts a server of its own
+// removes the file by this name when it is done.
+func AgentsSocket(socket, session string) string {
 	sum := sha256.Sum256([]byte(socket + "\x00" + session))
 	return filepath.Join(filepath.Dir(socket), fmt.Sprintf("ov-%x.sock", sum[:6]))
 }

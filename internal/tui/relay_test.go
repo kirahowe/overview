@@ -79,11 +79,11 @@ func TestThePanePassesOnOnlyWhatTheViewUses(t *testing.T) {
 // session is called, sits beside tmux's, and differs between sessions.
 func TestAgentsSocketIsShortAndPerSession(t *testing.T) {
 	long := "overview-" + strings.Repeat("x", 200)
-	a, b := agentsSocket("/private/tmp/tmux-501/overview", long), agentsSocket("/private/tmp/tmux-501/overview", "overview-other")
+	a, b := AgentsSocket("/private/tmp/tmux-501/overview", long), AgentsSocket("/private/tmp/tmux-501/overview", "overview-other")
 	if a == b || filepath.Dir(a) != "/private/tmp/tmux-501" || len(a) > 60 {
 		t.Fatalf("sockets %q and %q", a, b)
 	}
-	if c := agentsSocket("/private/tmp/tmux-501/other", long); c == a {
+	if c := AgentsSocket("/private/tmp/tmux-501/other", long); c == a {
 		t.Fatalf("two servers share %q", c)
 	}
 }
