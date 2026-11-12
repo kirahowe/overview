@@ -46,20 +46,43 @@ be empty.
 ## In progress
 ```
 
-- One bullet per session. Start with the session name in bold, then its
-  project in parentheses.
-- At most 30 words per bullet. Say concretely what was done or what is
-  being asked.
+Each session is one item. An item that needs attention has this shape:
+
+```
+- **session-name** (project): the issue in one line
+  - Do: what the user has to do
+  - Why: the reason, in one sentence
+  - Since: when it started waiting
+```
+
+An item under "Finished" or "In progress" is its first line alone. Give a
+finished item a `Do:` line only when the session left the user a step to
+take, such as a draft to read or a command to run. The view reads these
+lines by their labels and shows the issue, what to do and the wait apart
+from each other, so keep to the shape.
+
+- The first line starts with the session name in bold and its project in
+  parentheses. After the colon it says the issue in at most 12 words: what
+  is wrong, what is waiting, what was done or what is being done. It gives
+  no instructions.
+- `Do:` is one instruction of at most 25 words that starts with a verb and
+  says exactly what the user has to do. Put a command, a path or a key to
+  press in backticks, copied from the extract as it is. When the session
+  asks a question, `Do:` is that question.
+- `Why:` is one sentence of at most 25 words. Leave it out unless the issue
+  line does not give the reason, or there is a deadline or a risk to name.
+- `Since:` is for something you flagged in an earlier digest that is still
+  waiting. Keep the item under "Needs your attention" and give the day and
+  time you first flagged it, such as `Since: Wed 20:05`.
 - A session needs attention when its state is blocked, or when its last
-  reply ends by asking the user a question or for a decision. Say what it is
-  asking.
+  reply ends by asking the user a question or for a decision.
 - A session is finished when its last reply reports completed work and its
   state is idle or not running.
+- Put what needs attention in order of urgency: a blocked session, a
+  deadline or a risk first, and what has waited longest last.
 - Report only what the extract shows. If an outcome is unclear, say so in a
   few words.
-- If something you flagged in an earlier digest is still waiting, keep it
-  under "Needs your attention" and say how long it has waited.
-- No introduction and no closing line.
+- No introduction, no closing line and no text outside the items.
 
 ## When the user asks you something
 

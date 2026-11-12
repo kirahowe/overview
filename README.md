@@ -46,7 +46,11 @@ the list's title says "hook not installed".
 
 The digest reads the transcripts changed since the last digest, extracts each
 session's prompts and final replies, and asks a model to sort them into
-"needs your attention", "finished" and "in progress". The model runs through
+"needs your attention", "finished" and "in progress". Each session is one
+item: its name and project, and the issue in a line. An item that needs you
+also has a `Do:` line that says what you are asked to do, with the command
+to run when there is one, and where they help a `Why:` line and a `Since:`
+line for when it started waiting. The model runs through
 `claude -p` with no tools and receives only that extract, so a digest cannot
 change anything. When nothing happened, no model is called. Digests are kept
 in `<home>/overview/digests/`.

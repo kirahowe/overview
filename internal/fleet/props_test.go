@@ -745,3 +745,165 @@ func TestPropSubagentPromptsNeverLink(t *testing.T) {
 		}
 	})
 }
+
+// digestWords are the runs of letters and digits in s.
+func digestWords(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// digestText is everything a parsed digest holds, a field to a line.
+func digestText(doc DigestDoc) string {
+	parts := []string{doc.Stamp}
+	for _, s := range doc.Sections {
+		parts = append(parts, s.Title)
+		for _, it := range s.Items {
+			parts = append(parts, it.Names...)
+			parts = append(parts, it.Project, it.Issue, it.Do, it.Why, it.Since)
+			parts = append(parts, it.Notes...)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// genDigestSource draws text shaped like a digest and unlike one: lines
+// with the markers, labels and names a digest has, in any order and at
+// any indent, and now and then any text at all.
+func genDigestSource() *rapid.Generator[string] {
+	word := rapid.OneOf(
+		rapid.SampledFrom([]string{"do", "Do:", "why:", "Since:", "since", "waiting", "and", "**a-1**", "(p)",
+			"`x. Y`", "Done.", "Then", "#", "-", "*", "**", ":", "héllo", "日本語"}),
+		rapid.StringMatching(`[a-zA-Z0-9.:?!]{1,8}`),
+	)
+	line := rapid.Custom(func(t *rapid.T) string {
+		lead := rapid.SampledFrom([]string{"", "", "- ", "* ", "  - ", "    ", "# ", "## ", "### ", "\t- ", "• "}).Draw(t, "lead")
+		head := rapid.SampledFrom([]string{"", "", "**n-1** (proj): ", "**a**, **b** and **c** (p q): ", "**n**: ",
+			"Do: ", "**Do:** ", "Why: ", "Since: ", "Waiting since "}).Draw(t, "head")
+		return lead + head + strings.Join(rapid.SliceOfN(word, 0, 8).Draw(t, "words"), " ")
+	})
+	lines := rapid.Custom(func(t *rapid.T) string {
+		return strings.Join(rapid.SliceOfN(line, 0, 12).Draw(t, "lines"), "\n")
+	})
+	return rapid.OneOf(lines, lines, text())
+}
+
+// Parsing a digest loses nothing and makes nothing up. Every word of the
+// result is a word of the source, and the only words of the source that
+// are missing from it are the labels a field starts with and the "and"
+// between an item's names.
+func TestPropParseDigestKeepsEveryWord(t *testing.T) {
+	dropped := []string{"do", "why", "since", "waiting", "and"}
+	rapid.Check(t, func(t *rapid.T) {
+		md := genDigestSource().Draw(t, "md")
+		left := map[string]int{}
+		for _, w := range digestWords(md) {
+			left[w]++
+		}
+		for _, w := range digestWords(digestText(ParseDigest(md))) {
+			if left[w]--; left[w] < 0 {
+				t.Fatalf("the digest has %q more often than its source %q", w, md)
+			}
+		}
+		for w, n := range left {
+			if n > 0 && !slices.Contains(dropped, strings.ToLower(w)) {
+				t.Fatalf("%q is in the source %q and not in the digest", w, md)
+			}
+		}
+	})
+}
+
+// formatDigest writes doc as the instructions ask a digest to be
+// written: a bullet to an item, with its fields in indented bullets
+// under it, and a paragraph for text that belongs to no session.
+func formatDigest(doc DigestDoc) string {
+	var b strings.Builder
+	if doc.Stamp != "" {
+		fmt.Fprintf(&b, "# %s\n\n", doc.Stamp)
+	}
+	for _, s := range doc.Sections {
+		if s.Title != "" {
+			fmt.Fprintf(&b, "## %s\n", s.Title)
+		}
+		for _, it := range s.Items {
+			if len(it.Names) == 0 {
+				fmt.Fprintf(&b, "\n%s\n\n", it.Issue)
+				continue
+			}
+			b.WriteString("- **" + strings.Join(it.Names, "**, **") + "**")
+			if it.Project != "" {
+				b.WriteString(" (" + it.Project + ")")
+			}
+			b.WriteString(": " + it.Issue + "\n")
+			for _, f := range [][2]string{{"Do", it.Do}, {"Why", it.Why}, {"Since", it.Since}} {
+				if f[1] != "" {
+					fmt.Fprintf(&b, "  - %s: %s\n", f[0], f[1])
+				}
+			}
+			for _, n := range it.Notes {
+				b.WriteString("  - " + n + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// genDigestDoc draws a digest of plain words, which read the same
+// however they are laid out.
+func genDigestDoc() *rapid.Generator[DigestDoc] {
+	// No sentence ends in these, and none is the label of a field.
+	words := func(lo, hi int) *rapid.Generator[string] {
+		return rapid.Custom(func(t *rapid.T) string {
+			ws := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,8}`), lo, hi).Draw(t, "words")
+			if len(ws) > 0 && ws[0] == "waiting" {
+				ws[0] = "waited"
+			}
+			return strings.Join(ws, " ")
+		})
+	}
+	item := rapid.Custom(func(t *rapid.T) DigestItem {
+		if rapid.IntRange(0, 5).Draw(t, "plain") == 0 {
+			return DigestItem{Issue: words(1, 6).Draw(t, "text")}
+		}
+		it := DigestItem{
+			Names:   rapid.SliceOfN(rapid.StringMatching(`[a-z0-9][a-z0-9-]{0,7}`), 1, 3).Draw(t, "names"),
+			Project: words(0, 2).Draw(t, "project"),
+			Issue:   words(0, 8).Draw(t, "issue"),
+			Do:      words(0, 6).Draw(t, "do"),
+			Why:     words(0, 6).Draw(t, "why"),
+			Since:   words(0, 3).Draw(t, "since"),
+		}
+		if notes := rapid.SliceOfN(words(1, 5), 0, 2).Draw(t, "notes"); len(notes) > 0 {
+			it.Notes = notes
+		}
+		return it
+	})
+	return rapid.Custom(func(t *rapid.T) DigestDoc {
+		doc := DigestDoc{Stamp: words(0, 4).Draw(t, "stamp")}
+		for i, n := 0, rapid.IntRange(0, 4).Draw(t, "sections"); i < n; i++ {
+			s := DigestSection{Title: words(1, 3).Draw(t, "title")}
+			if i == 0 && rapid.Bool().Draw(t, "untitled") {
+				s.Title = ""
+			}
+			if items := rapid.SliceOfN(item, 0, 5).Draw(t, "items"); len(items) > 0 {
+				s.Items = items
+			}
+			// Text before the first heading has no section without it.
+			if s.Title != "" || len(s.Items) > 0 {
+				doc.Sections = append(doc.Sections, s)
+			}
+		}
+		return doc
+	})
+}
+
+// A digest written as the instructions ask reads back as it was: every
+// name, project, issue, field and note where it was put.
+func TestPropParseDigestReadsWhatTheInstructionsAskFor(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		doc := genDigestDoc().Draw(t, "doc")
+		md := formatDigest(doc)
+		if got := ParseDigest(md); !reflect.DeepEqual(got, doc) {
+			t.Fatalf("wrote\n%s\nread  %+v\nwant  %+v", md, got, doc)
+		}
+	})
+}
