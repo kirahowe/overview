@@ -35,20 +35,23 @@ func TestPanelsSessionsFollowsTheLatestClient(t *testing.T) {
 }
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t\t50\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t1\t24\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t\t50\t1\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t1\t24\t0\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t/\n" +
-		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t24\t/\n" +
-		"%8\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\ttall\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t/\n" +
+		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t24\t1\t/\n" +
+		"%8\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\ttall\t1\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
+		// A line one field short, as the listing was before it said which
+		// window its session shows.
+		"%9\t/dev/ttys012\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t/\n" +
 		// An empty pane, which runs nothing and so has no tty.
-		"%7\t\ts\t@3\t60\t24\t80\t\t''\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t\n" +
+		"%7\t\ts\t@3\t60\t24\t80\t\t''\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, WinH: 50, List: true, Command: "overview",
-			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Path: "/w"},
+			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Current: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80, WinH: 24,
 			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Dead: true, Agents: true, Path: "/w/app/odd\tdir"},
 	}
@@ -85,6 +88,7 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Framed:  rapid.Bool().Draw(t, "framed"),
 				Dead:    rapid.Bool().Draw(t, "dead"),
 				Agents:  rapid.Bool().Draw(t, "agents"),
+				Current: rapid.Bool().Draw(t, "current"),
 				Path:    rapid.SampledFrom([]string{"", "/", "/w/app", "/w/a b", "/w/tab\there"}).Draw(t, "path"),
 			}
 		})).Draw(t, "panes")
@@ -100,9 +104,9 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 			if p.Framed {
 				status = "top"
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed),
-				p.X, p.Y, flag(p.Active), status, flag(p.Dead), flag(p.Agents), p.WinH, p.Path)
+				p.X, p.Y, flag(p.Active), status, flag(p.Dead), flag(p.Agents), p.WinH, flag(p.Current), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
 			t.Fatalf("got %+v\nwant %+v", got, panes)
@@ -605,6 +609,44 @@ func TestFocused(t *testing.T) {
 	want(other, true)
 	sock.Must("new-window", "-t", "=ov:", "sleep", "300")
 	want(other, false) // its window is no longer the current one
+}
+
+// The listing says which window each session shows: every pane of that
+// window and of no other, whatever window was made or selected last.
+func TestTheListingSaysWhichWindowIsShown(t *testing.T) {
+	sock := tmuxtest.New(t, "")
+	s := At(sock.Path, "/dev/null")
+	first := sock.Must("new-session", "-d", "-s", "ov", "-x", "80", "-y", "24", "-P", "-F", "#{pane_id}", "sleep", "300")
+	split := sock.Must("split-window", "-d", "-t", first, "-P", "-F", "#{pane_id}", "sleep", "300")
+	other, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere, err := s.Spawn("ov2", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := func(step string, want ...string) {
+		t.Helper()
+		var got []string
+		for id, p := range byID(t, s) {
+			if p.Current {
+				got = append(got, id)
+			}
+		}
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: the panes shown are %v, want %v", step, got, want)
+		}
+	}
+	// A window made in the background is not shown, and each session
+	// shows a window of its own.
+	shown("at first", first, split, elsewhere.ID)
+	sock.Must("select-window", "-t", other.ID)
+	shown("with the other window selected", other.ID, elsewhere.ID)
+	sock.Must("select-window", "-t", first)
+	shown("back in the first", first, split, elsewhere.ID)
 }
 
 // A review opens in a split above its session's pane, and the paste of a
@@ -1510,6 +1552,107 @@ func TestAMoveReportsNoSizeThePanesDoNotKeep(t *testing.T) {
 	c.quiet("keyboard in the agents' pane", at, "b")
 }
 
+// shows is the window the session shows, and the pane with the keyboard
+// there.
+func (c *column) shows() (window, active string) {
+	c.t.Helper()
+	f := strings.Fields(c.sock.Must("display-message", "-p", "-t", "=ov:", "#{window_id} #{pane_id}"))
+	if len(f) != 2 {
+		c.t.Fatalf("the session shows %v", f)
+	}
+	return f[0], f[1]
+}
+
+// Follow takes the column into a window the client went to by itself, and
+// changes nothing else: that window stays the one shown, and its pane keeps
+// the keyboard without hearing that it went and came back, so nothing typed
+// meanwhile goes astray. The column's two programs hear nothing of the
+// keyboard either, and of no size they do not keep. The window the column
+// left keeps its pane.
+func TestFollowLeavesTheKeyboardWhereItIs(t *testing.T) {
+	c := newColumn(t)
+	c.lastWidth = 40
+	c.move(c.a, false)
+	c.settle()
+	h := byID(t, c.s)[c.list].H
+
+	// A key of tmux's own takes the client to b's window, with the column
+	// left behind in a's.
+	c.sock.Must("select-window", "-t", c.b.ID)
+	tmuxtest.Wait(t, "b to hear the keyboard has come", func() (bool, string) {
+		got := told(t, c.log("b"))
+		return slices.Contains(got, "focus-in"), fmt.Sprint(got)
+	})
+	at := c.settle()
+	time.Sleep(400 * time.Millisecond) // the hold on resizes, as in move
+	if err := c.s.Follow(c.list, c.b.ID, strconv.Itoa(c.lastWidth), Carried{Pane: c.agents.ID, Lines: 6}); err != nil {
+		t.Fatal(err)
+	}
+	ps := byID(t, c.s)
+	if ps[c.list].Window != c.b.Window || ps[c.agents.ID].Window != c.b.Window || ps[c.a.ID].Window != c.a.Window {
+		t.Fatalf("the column is list %+v over agents %+v, want it beside %s, with %s left in its window", ps[c.list], ps[c.agents.ID], c.b.ID, c.a.ID)
+	}
+	if l, g := ps[c.list], ps[c.agents.ID]; l.X != 0 || l.Y > 1 || l.W != c.lastWidth || l.H != h || g.X != 0 || g.W != c.lastWidth || g.H != 6 || g.Y != l.Y+l.H+1 {
+		t.Fatalf("the column is list %+v over agents %+v, want it %d wide down the left, the list %d high", l, g, c.lastWidth, h)
+	}
+	if len(ps) != 4 {
+		t.Fatalf("an empty pane was left behind: %+v", ps)
+	}
+	if w, active := c.shows(); w != c.b.Window || active != c.b.ID {
+		t.Fatalf("the session shows %s with the keyboard in %s, want %s and %s", w, active, c.b.Window, c.b.ID)
+	}
+	c.settle()
+	c.since("followed", at, "list", fmt.Sprintf("size-%dx%d", c.lastWidth, h))
+	c.since("followed", at, "agents", fmt.Sprintf("size-%dx6", c.lastWidth))
+	c.quiet("followed", at, "a")
+	c.quiet("followed", at, "b")
+
+	// A client that has gone on meanwhile is not brought back: the column
+	// goes where it was sent and the session shows what it showed.
+	c.sock.Must("select-window", "-t", c.a.ID)
+	if err := c.s.Follow(c.list, c.b.ID, strconv.Itoa(c.lastWidth), Carried{Pane: c.agents.ID, Lines: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if w, active := c.shows(); w != c.a.Window || active != c.a.ID {
+		t.Fatalf("the session shows %s with the keyboard in %s, want %s and %s", w, active, c.a.Window, c.a.ID)
+	}
+}
+
+// With no pane to carry, Follow joins the list into its place without
+// taking the keyboard or selecting the window.
+func TestFollowWithNothingToCarry(t *testing.T) {
+	s := testServer(t)
+	run := must(t)
+	list := strings.TrimSpace(run(s.run("new-session", "-d", "-s", "ov", "-x", "200", "-y", "50", "-P", "-F", "#{pane_id}", "sleep 300")))
+	a, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	split := strings.TrimSpace(run(s.run("split-window", "-v", "-t", a.ID, "-P", "-F", "#{pane_id}", "sleep 300")))
+	b, err := s.Spawn("ov", "", nil, "sleep", "300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(s.run("select-window", "-t", a.ID))
+	if err := s.Follow(list, a.ID, "40", Carried{}); err != nil {
+		t.Fatal(err)
+	}
+	ps := byID(t, s)
+	if l := ps[list]; l.Window != a.Window || l.X != 0 || l.W != 40 || l.H != l.WinH || !l.Current || l.Active {
+		t.Fatalf("the list is %+v, want it 40 wide down the left of %s, without the keyboard", l, a.Window)
+	}
+	if !ps[split].Active || ps[a.ID].Active {
+		t.Fatalf("the keyboard left the split it was in: %+v", ps)
+	}
+	// Into a window that is not shown, it stays not shown.
+	if err := s.Follow(list, b.ID, "40", Carried{}); err != nil {
+		t.Fatal(err)
+	}
+	if ps := byID(t, s); ps[list].Window != b.Window || ps[list].Current || !ps[b.ID].Active || !ps[a.ID].Current {
+		t.Fatalf("the list is %+v beside %+v, and %s is %+v", ps[list], ps[b.ID], a.ID, ps[a.ID])
+	}
+}
+
 // windowSize is the size of pane's window, "200x49".
 func windowSize(t *testing.T, s Server, pane string) string {
 	t.Helper()
@@ -1659,6 +1802,21 @@ func TestAMoveThatFailsLeavesNoEmptyPane(t *testing.T) {
 	if after := all(); after != before {
 		t.Fatalf("the second split failed: the panes were %s, and are %s", before, after)
 	}
+	// Follow makes the same two panes, and leaves none either.
+	if err := s.Follow(list, target.ID, "40", Carried{Pane: agents.ID, Lines: 6}); err == nil {
+		t.Fatal("following into a window with no room for the carried pane succeeded")
+	}
+	if after := all(); after != before {
+		t.Fatalf("following, the second split failed: the panes were %s, and are %s", before, after)
+	}
+	run(s.run("resize-window", "-t", target.Window, "-y", "50"))
+	before = all()
+	if err := s.Follow(list, target.ID, "40", Carried{Pane: "%999", Lines: 6}); err == nil {
+		t.Fatal("following with a pane that is not there succeeded")
+	}
+	if after := all(); after != before {
+		t.Fatalf("following, the swap failed: the panes were %s, and are %s", before, after)
+	}
 }
 
 // With no pane to carry, the list is joined into its place in one tmux
@@ -1689,6 +1847,39 @@ func TestMoveRunsTheSwapsAsOneCommand(t *testing.T) {
 		got = nil
 		if err := s.Move("%0", "%5", "40", c.with); err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("Move with %+v ran %q, %v, want %q", c.with, got, err, c.want)
+		}
+	}
+}
+
+// Follow selects no pane and no window, and neither of its empty panes
+// takes the focus. So each split is a command of its own, the second
+// naming the pane the first made, and the swaps are one more, which closes
+// the empty panes. Whether the carried pane had the keyboard changes
+// nothing.
+func TestFollowSelectsNothing(t *testing.T) {
+	var got []string
+	next := 8
+	s := Server{run: func(args ...string) (string, error) {
+		got = append(got, strings.Join(args, " "))
+		if args[0] == "split-window" {
+			next++
+			return fmt.Sprintf("%%%d\n", next-1), nil
+		}
+		return "", nil
+	}}
+	cells := []string{"split-window -d -h -b -f -l 40 -t %5 -P -F #{pane_id} ", "split-window -d -v -l 6 -t %8 -P -F #{pane_id} ",
+		"swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; kill-pane -t %8 ; kill-pane -t %9"}
+	for _, c := range []struct {
+		with Carried
+		want []string
+	}{
+		{Carried{}, []string{"join-pane -d -h -b -f -l 40 -s %0 -t %5"}},
+		{Carried{Pane: "%2", Lines: 6}, cells},
+		{Carried{Pane: "%2", Lines: 6, Focus: true}, cells},
+	} {
+		got, next = nil, 8
+		if err := s.Follow("%0", "%5", "40", c.with); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("Follow with %+v ran %q, %v, want %q", c.with, got, err, c.want)
 		}
 	}
 }

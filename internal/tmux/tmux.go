@@ -65,14 +65,14 @@ const PanelsTable = "overview-panels"
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
 	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
-	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{window_height}\t#{pane_current_path}"
+	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{window_height}\t#{window_active}\t#{pane_current_path}"
 
 // clientFormat is how Panes asks for each client: its session, key table
 // and when it was last used, after a word that no pane line starts with.
 const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 24
+const paneFields = 25
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -99,6 +99,7 @@ type Pane struct {
 	Panels  bool   // a client of the pane's session is in the panels mode
 	Dead    bool   // its program has exited, and HoldExits keeps it open
 	Agents  bool   // the pane under the list that shows the agents
+	Current bool   // its window is the one its session shows
 }
 
 // Server is overview's tmux server. run runs one tmux command and returns
@@ -191,7 +192,7 @@ func ParsePanes(out string) []Pane {
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, WinH: wh, List: f[7] == "1",
 			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
-			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Path: f[23],
+			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Current: f[23] == "1", Path: f[24],
 		})
 	}
 	return panes
@@ -655,6 +656,53 @@ func (s Server) Move(list, target, size string, with Carried) error {
 	if err != nil {
 		// tmux stops at the first command that fails, so an empty pane
 		// may be left wherever it was by then.
+		for _, id := range cells {
+			s.KillPane(id) //nolint:errcheck
+		}
+	}
+	return err
+}
+
+// Follow puts pane list in target's window as Move does, for a window that
+// a client shows already, having gone there by a key of tmux's own. The
+// list and the pane it carries take their column there and nothing else
+// changes: the window's active pane keeps the keyboard, and no window is
+// selected, so a client that has since gone on is not brought back.
+//
+// Neither empty pane takes the focus, which would take the keyboard from
+// the program the user is typing in for the length of the move. A split
+// that does not take the focus is not what the next command acts on, so
+// the second split names the first's pane and is a command of its own.
+// The window is on show, and its empty panes with it, for as long as the
+// three commands take.
+func (s Server) Follow(list, target, size string, with Carried) error {
+	if with.Pane == "" {
+		_, err := s.run("join-pane", "-d", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
+		return err
+	}
+	var cells []string
+	split := func(args ...string) error {
+		out, err := s.run(append(args, "-P", "-F", "#{pane_id}", "")...)
+		id := strings.TrimSpace(out)
+		if err == nil && !strings.HasPrefix(id, "%") {
+			err = fmt.Errorf("tmux split-window: unexpected output %q", out)
+		}
+		if err == nil {
+			cells = append(cells, id)
+		}
+		return err
+	}
+	err := split("split-window", "-d", "-h", "-b", "-f", "-l", size, "-t", target)
+	if err == nil {
+		err = split("split-window", "-d", "-v", "-l", strconv.Itoa(with.Lines), "-t", cells[0])
+	}
+	if err == nil {
+		_, err = s.run("swap-pane", "-d", "-s", with.Pane, "-t", cells[1], ";",
+			"swap-pane", "-d", "-s", list, "-t", cells[0], ";",
+			"kill-pane", "-t", cells[0], ";", "kill-pane", "-t", cells[1])
+	}
+	if err != nil {
+		// As in Move, an empty pane may be left wherever it was by then.
 		for _, id := range cells {
 			s.KillPane(id) //nolint:errcheck
 		}
