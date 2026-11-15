@@ -1,0 +1,11 @@
+{:id 5
+ :title "Stop the digest round-trip property failing on a session named do"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "5-stop-the-digest-round-trip-property-failing-on-a-session.md"}

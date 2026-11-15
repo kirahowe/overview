@@ -9,6 +9,12 @@
 | --- | --- | --- | --- |
 | [1](1-resume-a-session-from-overview.md) | Resume a session from overview | feature | P2 |
 
+### Ready
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [5](5-stop-the-digest-round-trip-property-failing-on-a-session.md) | Stop the digest round-trip property failing on a session named do | bug | P2 |
+
 ## Done
 
 | ID | Title | Type | Priority |
