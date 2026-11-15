@@ -114,9 +114,18 @@ func (m model) closeCockpit() (model, tea.Cmd) {
 // unzoomed. When a pane has gone the zoom is asked for again if the list
 // has company. A list alone in its window fills it unzoomed, as tmux
 // cannot zoom it.
+//
+// A client that went to another window has left as well, and there tmux
+// keeps the zoom, of a window it no longer shows. What wanted the zoom
+// closes, and the zoom is ended, so that the list can follow the client.
 func (m model) zoomLost() (model, tea.Cmd) {
 	if !m.zoomWant() || m.zooming || m.mux == nil {
 		return m, nil
+	}
+	if m.strayed() != "" {
+		m = m.left()
+		m.cockpit, m.taskPick, m.screen = cockpit{}, taskPick{}, sessionsScreen
+		return m.syncZoom()
 	}
 	p, ok := m.pane(m.self)
 	if !ok {

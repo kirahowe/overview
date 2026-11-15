@@ -316,6 +316,18 @@ put, even when a search stops matching its entry; the search is cleared
 when you come back. Once the keyboard is back in the list, or you use the
 mouse or a key there, the cursor's own rules apply again.
 
+tmux's own keys for windows work as well: the prefix and a window's
+number, `ctrl+b n` and `ctrl+b p` for the next and the previous window,
+the chooser on `ctrl+b w`, and `ctrl+b c` for a new one. Each shows a
+window the list is not in, and the list goes after you. Within about half
+a second its column, the agents' pane included, is down the left of the
+window you went to. That window stays the one shown and the keyboard
+stays in the pane you landed in, so what you type there meanwhile reaches
+it. The cursor goes to that window's session or terminal. In a window
+with no entry in the list, such as the one the details pane waits in, the
+cursor stays where it was. A cockpit, a task picker or the digests close
+first, as they do when you go to another pane.
+
 When Claude, or a terminal's shell, exits and the list was its only
 neighbour, the list takes the keyboard and moves on to the next entry.
 Until it has, tmux keeps the exited pane open beside it, frozen on its last

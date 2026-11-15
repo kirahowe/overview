@@ -26,7 +26,9 @@ import (
 // view draws a session's details into when it has neither, such as one
 // inside another app. Moving the cursor moves the list into the window of
 // the selected session's pane, as a full-height column on the left, so any
-// splits the user made in that window come along and stay with it.
+// splits the user made in that window come along and stay with it. A
+// client that goes to another window by a key of tmux's own, such as the
+// prefix and a window's number, is followed there: see strayed.
 
 const (
 	// panesEvery is how often the view rereads tmux's panes, so a session
@@ -46,6 +48,7 @@ type multiplexer interface {
 	Panes() ([]tmux.Pane, error)
 	Spawn(session, dir string, env []string, command ...string) (tmux.Pane, error)
 	Move(list, target, size string, with tmux.Carried) error
+	Follow(list, target, size string, with tmux.Carried) error
 	FitWindow(pane string) error
 	Under(list string, lines int, command ...string) (tmux.Pane, error)
 	Resize(pane, size string) error
@@ -176,10 +179,24 @@ func readPanes(mux multiplexer, find func(...string) roots) ([]tmux.Pane, roots,
 // with it the agents' pane under it. fix says from keeps two or more
 // panes, whose layout is then put right. fit says the window of to is
 // not the size of the list's, and is first given the size it is due.
+// stay says a client shows the window of to already, having gone there by
+// itself: the list joins it, and the keyboard and the window shown stay
+// as they are.
 type shift struct {
 	to, from, size string
-	fix, fit       bool
+	fix, fit, stay bool
 	with           tmux.Carried
+}
+
+// move carries the shift out for the list's pane.
+func (mv shift) move(mux multiplexer, list string) error {
+	if mv.stay {
+		return mux.Follow(list, mv.to, mv.size, mv.with)
+	}
+	if mv.fit {
+		mux.FitWindow(mv.to) //nolint:errcheck
+	}
+	return mux.Move(list, mv.to, mv.size, mv.with)
 }
 
 // plan decides how the list, pane self, gets beside pane want, given every
@@ -187,7 +204,9 @@ type shift struct {
 // It reports false when no move is needed, because want is already in the
 // list's window, or is not listed. The agents' pane in the list's window
 // goes too, at the height it has, and keeps the keyboard when inAgents
-// says it has it.
+// says it has it. When want's window is the one its session shows and the
+// list's is not, the list is following a client that left it behind, and
+// the keyboard stays with the client: see shift.stay.
 func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift, bool) {
 	var list, target tmux.Pane
 	for _, p := range panes {
@@ -201,10 +220,11 @@ func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift
 	if list.ID == "" || target.ID == "" || target.Window == list.Window {
 		return shift{}, false
 	}
+	stay := target.Current && !list.Current
 	var with tmux.Carried
 	for _, p := range panes {
 		if p.Agents && p.Window == list.Window && p.ID != want {
-			with = tmux.Carried{Pane: p.ID, Lines: p.H, Focus: inAgents}
+			with = tmux.Carried{Pane: p.ID, Lines: p.H, Focus: inAgents && !stay}
 			break
 		}
 	}
@@ -212,8 +232,10 @@ func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift
 	// A window not shown since the terminal changed size still has the
 	// size it had then. The list's window is the one shown, so it has the
 	// terminal's, which the other is due before the list goes into it.
+	// When the list follows a client it is the other way about: the
+	// window it goes to is the one shown, and has its size already.
 	winW := target.WinW
-	fit := list.WinW > 0 && target.WinW > 0 && (target.WinW != list.WinW || target.WinH != list.WinH)
+	fit := !stay && list.WinW > 0 && target.WinW > 0 && (target.WinW != list.WinW || target.WinH != list.WinH)
 	if fit {
 		winW = list.WinW
 	}
@@ -229,7 +251,7 @@ func plan(self, want string, panes []tmux.Pane, width int, inAgents bool) (shift
 	case n > 1 && list.W > 0:
 		size = strconv.Itoa(list.W)
 	}
-	return shift{to: want, from: list.Window, size: size, fix: n > 2, fit: fit, with: with}, true
+	return shift{to: want, from: list.Window, size: size, fix: n > 2, fit: fit, stay: stay, with: with}, true
 }
 
 // listWidth is the width the list keeps, and where it was last seen, which
@@ -314,10 +336,7 @@ func stageCmd(mux multiplexer, find func(...string) roots, list string, mv shift
 		if mv.fix {
 			layout, lerr = mux.Layout(mv.from)
 		}
-		if mv.fit {
-			mux.FitWindow(mv.to) //nolint:errcheck
-		}
-		err := mux.Move(list, mv.to, mv.size, mv.with)
+		err := mv.move(mux, list)
 		if err == nil && lerr == nil {
 			fixed, err := tmux.Without(layout, list)
 			if err == nil && mv.with.Pane != "" {
@@ -553,17 +572,70 @@ func (m model) keepPanes(panes []tmux.Pane) model {
 	return m.setInputs(func(in *world.Inputs) { in.Panes = panes })
 }
 
-// restage brings tmux in line with the model after every update: it moves
-// the list to the wanted pane, one move at a time, then moves the focus
-// there if enter asked for it, and redraws the holder when it shows and its
-// text has changed.
+// strayed is the pane the list follows a client to, "" for none: the
+// active pane of the window the view's session shows, once a listing says
+// that window is not the list's. Every move the view makes shows the
+// window the list goes to, so the client got there by a key of tmux's
+// own: the prefix and a window's number, the next or the previous window,
+// the window chooser, or a window it made. The list was left behind, out
+// of sight. The list's own pane says whether its window is shown, since
+// what the model has of it is never stale, and no listing that did not say
+// which window is shown sends the list anywhere.
+func (m model) strayed() string {
+	list, ok := m.pane(m.self)
+	if !ok || list.Current {
+		return ""
+	}
+	to := ""
+	for _, p := range m.in.Panes {
+		switch {
+		case p.Session != m.session || !p.Current || p.Window == list.Window || p.Agents:
+		case p.Active:
+			return p.ID
+		case to == "":
+			to = p.ID
+		}
+	}
+	return to
+}
+
+// left is the model once the client is known to be in another window than
+// the list's. The keyboard is there with it, so it is outside the view,
+// and the cursor goes on to follow the list's window as it does while the
+// user types in a pane beside it. A move of the keyboard that was on its
+// way, and a cockpit that waited to open, are dropped: the user has gone
+// somewhere else.
+func (m model) left() model {
+	m.blurred, m.inAgents, m.entering, m.cockpitSoon = true, false, "", false
+	return m
+}
+
+// restage brings tmux in line with the model after every update: it takes
+// the list to a client that has left it behind, or else moves it to the
+// wanted pane, one move at a time, then moves the focus there if enter
+// asked for it, and redraws the holder when it shows and its text has
+// changed.
 func (m model) restage() (model, tea.Cmd) {
-	want := m.want()
 	// The cockpit and the task picker hold the list in its window, zoomed,
 	// until they close and the zoom has gone.
 	// A pane of the agents' that is on its way is not listed yet, and a
 	// move now would leave it behind, so the list waits for it.
-	if m.mux == nil || m.staging || m.agentsBusy || m.zooming || m.zoomWant() || want == "" || want == m.failed {
+	if m.mux == nil || m.staging || m.agentsBusy || m.zooming || m.zoomWant() {
+		return m, nil
+	}
+	// Where the client is comes before where the cursor is: the list is no
+	// use in a window nobody is looking at. A follow that failed waits for
+	// the next listing, as any move does.
+	if to := m.strayed(); to != "" {
+		m = m.left()
+		if mv, ok := plan(m.self, to, m.in.Panes, m.width.want, false); ok && to != m.failed {
+			m.staging = true
+			return m, stageCmd(m.mux, m.deps.roots, m.self, mv, m.landed)
+		}
+		return m, nil
+	}
+	want := m.want()
+	if want == "" || want == m.failed {
 		return m, nil
 	}
 	// With the keyboard outside the list, the list stays beside the pane
@@ -849,10 +921,7 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 			if !canMove {
 				return fail(errors.New("the list has nowhere else to go"))
 			}
-			if mv.fit {
-				mux.FitWindow(mv.to) //nolint:errcheck
-			}
-			if err := mux.Move(self, mv.to, mv.size, mv.with); err != nil {
+			if err := mv.move(mux, self); err != nil {
 				return fail(err)
 			}
 		}

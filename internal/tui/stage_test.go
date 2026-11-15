@@ -34,6 +34,7 @@ type fakeMux struct {
 	killed  []string // the windows KillWindow closed
 	spawned []spawnCall
 	moves   []string          // the size each move asked for
+	follows []string          // the panes Follow took the list beside
 	fits    []string          // the panes FitWindow was asked for, and before which move
 	held    bool              // FitWindow leaves windows as they are, as tmux does with two clients
 	widths  []int             // the widths SetWidth gave the list
@@ -86,14 +87,23 @@ func newFakeMux() *fakeMux {
 	return f
 }
 
-// Panes lists the panes, the one the keyboard is in active.
+// Panes lists the panes, the one the keyboard is in active, and those of
+// the window each session shows marked as such.
 func (f *fakeMux) Panes() ([]tmux.Pane, error) {
 	out := slices.Clone(f.panes)
 	for i := range out {
 		out[i].Active = out[i].ID == f.focus
 		out[i].Panels = f.panels && out[i].Session == "ov"
+		out[i].Current = out[i].Window == f.current[out[i].Session]
 	}
 	return out, nil
+}
+
+// wander takes the client to pane's window with a key of tmux's own, and
+// the keyboard into pane. The list stays where it was.
+func (f *fakeMux) wander(pane string) {
+	i := f.find(pane)
+	f.current[f.panes[i].Session], f.focus = f.panes[i].Window, pane
 }
 
 // lay places the panes of window w as tmux would: the list down the left
@@ -351,6 +361,18 @@ func (f *fakeMux) Move(list, target, size string, with tmux.Carried) error {
 	f.lay(from)
 	f.lay(f.panes[j].Window)
 	return nil
+}
+
+// Follow moves the list as Move does, and leaves the keyboard and the
+// window shown as they were.
+func (f *fakeMux) Follow(list, target, size string, with tmux.Carried) error {
+	focus, current := f.focus, maps.Clone(f.current)
+	err := f.Move(list, target, size, with)
+	f.focus, f.current = focus, current
+	if err == nil {
+		f.follows = append(f.follows, target)
+	}
+	return err
 }
 
 // FitWindow gives pane's window the size of the window shown, as tmux
@@ -841,6 +863,169 @@ func TestAFailedMoveWaitsForTheNextListing(t *testing.T) {
 	}
 }
 
+// wandered is two sessions in one project, the list beside the first with
+// the cursor on it, and the panes of the two: here, beside the list, and
+// there, in a window of its own.
+func wandered(t *testing.T, f *fakeMux) (m model, here, there string) {
+	t.Helper()
+	m = stagedModel(t, f, row("s1", "red", "auth", 11), in("/w/red", row("s2", "blue", "billing", 12)))
+	es := rows(m)
+	here, there = paneWithTTY(f, m.in.TTYs[es[0].sess.PID]), paneWithTTY(f, m.in.TTYs[es[1].sess.PID])
+	if !f.staged(here) || m.sel != es[0].key() {
+		t.Fatalf("setup: the list is in %s with the cursor on %s, want it beside %s", f.stage(), m.sel, here)
+	}
+	return m, here, there
+}
+
+// A key of tmux's own takes the client to another window: the prefix and
+// a window's number, the next window, the chooser. The list was not asked,
+// and is left out of sight in the window it was in. It goes after the
+// client, into the window shown, and takes nothing from it: that window
+// stays the one shown and its pane keeps the keyboard. The cursor goes to
+// the session there, as it does while the user types beside the list.
+func TestTheListFollowsAClientToAnotherWindow(t *testing.T) {
+	f := newFakeMux()
+	m, here, there := wandered(t, f)
+	// The user is typing in the session beside the list.
+	m = pressSettled(t, m, "enter")
+	m = blurred(t, m)
+	moves, selects := len(f.moves), len(f.selects)
+	f.wander(there)
+	m = relist(t, m, f)
+	if f.stage() != f.window(there) || !slices.Equal(f.follows, []string{there}) || len(f.moves) != moves+1 {
+		t.Fatalf("the list is in %s, having followed to %v in %d moves, want it in %s's window", f.stage(), f.follows, len(f.moves)-moves, there)
+	}
+	if f.current["ov"] != f.window(there) || f.focus != there || len(f.selects) != selects {
+		t.Fatalf("the session shows %s with the keyboard in %s after selects %v, want %s left as it was", f.current["ov"], f.focus, f.selects[selects:], there)
+	}
+	if m.sel != rows(m)[1].key() || !m.blurred || m.windowOf(m.self) != f.stage() {
+		t.Fatalf("the cursor is on %s, blurred %v, the model's list in %s", m.sel, m.blurred, m.windowOf(m.self))
+	}
+	// Once there, the list has nowhere to go.
+	m = relist(t, m, f)
+	if len(f.moves) != moves+1 {
+		t.Fatalf("the list moved again: %v", f.moves[moves:])
+	}
+	// Back in the list, the cursor's own rules apply, and a move shows
+	// the window the list goes to.
+	f.focus = "%0"
+	m, cmd := step(m, tea.FocusMsg{})
+	m = settle(t, m, cmd)
+	m = pressSettled(t, m, "k")
+	if m.sel != rows(m)[0].key() || !f.staged(here) || len(f.follows) != 1 {
+		t.Fatalf("after k the cursor is on %s and the list in %s, having followed %v", m.sel, f.stage(), f.follows)
+	}
+}
+
+// The list follows whether or not it heard the keyboard leave: tmux's
+// report of that can go missing. A list that still took itself for the
+// place the keys go would move back to its cursor's window at once, and
+// take the client with it.
+func TestAListThatMissedTheKeyboardLeavingStillFollows(t *testing.T) {
+	f := newFakeMux()
+	m, _, there := wandered(t, f)
+	f.wander(there)
+	m = relist(t, m, f)
+	m = relist(t, m, f)
+	if f.stage() != f.window(there) || f.current["ov"] != f.window(there) || f.focus != there {
+		t.Fatalf("the list is in %s and the session shows %s with the keyboard in %s, want all of them with %s", f.stage(), f.current["ov"], f.focus, there)
+	}
+	if !m.blurred || m.sel != rows(m)[1].key() || len(f.follows) != 1 {
+		t.Fatalf("blurred %v, the cursor on %s, followed %v", m.blurred, m.sel, f.follows)
+	}
+}
+
+// A window with no entry of the list's, such as the holder's, is followed
+// into like any other. The cursor has no entry to go to there and stays
+// where it was, and the list stays with the client all the same.
+func TestTheListFollowsIntoAWindowWithNoEntry(t *testing.T) {
+	f := newFakeMux()
+	m, _, _ := wandered(t, f)
+	sel := m.sel
+	f.wander("%1")
+	m = relist(t, m, f)
+	moves := len(f.moves)
+	m = relist(t, m, f)
+	if f.stage() != "@1" || f.current["ov"] != "@1" || f.focus != "%1" || len(f.moves) != moves {
+		t.Fatalf("the list is in %s and the session shows %s with the keyboard in %s, after %v", f.stage(), f.current["ov"], f.focus, f.moves)
+	}
+	if m.sel != sel || !m.blurred {
+		t.Fatalf("the cursor went from %s to %s, blurred %v", sel, m.sel, m.blurred)
+	}
+}
+
+// The cockpit and the digests hold the list in its window, zoomed, and
+// tmux keeps the zoom of a window it no longer shows. A client that goes
+// to another window has left them as surely as one that goes to another
+// pane: they close, the zoom ends, and the list follows.
+func TestAClientLeavingForAnotherWindowClosesWhatHeldTheList(t *testing.T) {
+	for _, key := range []string{"o", "d"} {
+		f := newFakeMux()
+		m := digestModel(t, f, 1)
+		other := f.add("ov", "ttys333")
+		m = relist(t, m, f)
+		m = pressSettled(t, m, key)
+		if !f.zoomed("%0") || !m.zoomWant() {
+			t.Fatalf("%s: zoomed %v, wanted %v", key, f.zoomed("%0"), m.zoomWant())
+		}
+		f.wander(other.ID)
+		m = relist(t, m, f)
+		if m.cockpit.open || m.screen != sessionsScreen || m.zoomWant() || !slices.Equal(f.zooms, []string{"%0 true", "%0 false"}) {
+			t.Errorf("%s: cockpit %v, screen %v, zooms %v", key, m.cockpit.open, m.screen, f.zooms)
+		}
+		if f.stage() != other.Window || f.current["ov"] != other.Window || f.focus != other.ID || f.zoomed("%0") {
+			t.Errorf("%s: the list is in %s, zoomed %v, and the session shows %s with the keyboard in %s", key, f.stage(), f.zoomed("%0"), f.current["ov"], f.focus)
+		}
+	}
+}
+
+// A follow that fails says so and waits for the next listing, as a move
+// to the cursor's entry does.
+func TestAFailedFollowWaitsForTheNextListing(t *testing.T) {
+	f := newFakeMux()
+	m, _, there := wandered(t, f)
+	f.wander(there)
+	f.moveErr = errors.New("tmux split-window: no space for new pane")
+	m = relist(t, m, f)
+	if !strings.Contains(m.note, "no space") || m.failed != there || f.stage() == f.window(there) {
+		t.Fatalf("note %q, failed %q, list in %s", m.note, m.failed, f.stage())
+	}
+	f.moveErr = nil
+	m = relist(t, m, f)
+	if f.stage() != f.window(there) || f.current["ov"] != f.window(there) || !slices.Equal(f.follows, []string{there}) {
+		t.Fatalf("after the retry the list is in %s, having followed %v", f.stage(), f.follows)
+	}
+}
+
+// The window the list follows a client into is the one shown, so it has
+// the terminal's size already, and it is the window the list left that may
+// not. Nothing is fitted, and the list goes in at the width it keeps,
+// fitted to the window it goes to.
+func TestAFollowFitsTheListToTheWindowShown(t *testing.T) {
+	f := newFakeMux()
+	m, _, there := wandered(t, f)
+	// The terminal was 229 by 60 when the user dragged the list to 100.
+	f.size(229, 60, true)
+	f.panes[f.find("%0")].W = 100
+	m = relist(t, m, f)
+	if m.width.want != 100 {
+		t.Fatalf("the list keeps %d, want the 100 it was dragged to", m.width.want)
+	}
+	// The client goes to the other window, and the terminal narrows to 110
+	// with that one shown.
+	f.wander(there)
+	f.setWinW(f.window(there), 110)
+	fits, moves := len(f.fits), len(f.moves)
+	m = relist(t, m, f)
+	want := strconv.Itoa(fitList(100, 110))
+	if len(f.fits) != fits || len(f.moves) != moves+1 || f.moves[moves] != want {
+		t.Fatalf("fitted %v and moved %v wide, want no fit and one move %s wide", f.fits[fits:], f.moves[moves:], want)
+	}
+	if m.width.want != 100 {
+		t.Fatalf("the list keeps %d after the follow, want 100 still", m.width.want)
+	}
+}
+
 func TestAListLeftAloneMovesOn(t *testing.T) {
 	f := newFakeMux()
 	red, blue := row("s1", "red", "auth", 11), row("s2", "blue", "billing", 12)
@@ -1224,6 +1409,10 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				if m.windowOf(m.self) != f.stage() {
 					t.Fatalf("the list is in %s, the model thinks %s", f.stage(), m.windowOf(m.self))
 				}
+				// Whatever took the client where it is, the list is there.
+				if f.current["ov"] != f.stage() {
+					t.Fatalf("the session shows %s, and the list is in %s", f.current["ov"], f.stage())
+				}
 				seen := map[string]bool{}
 				for _, p := range f.panes {
 					if seen[p.ID] {
@@ -1270,6 +1459,30 @@ func TestPropTheStageSettlesOnTheWantedPane(t *testing.T) {
 				var cmd tea.Cmd
 				m, cmd = step(m, tea.FocusMsg{})
 				m = settle(t, m, cmd)
+			},
+			"wander": func(t *rapid.T) {
+				// A key of tmux's own takes the client to some other
+				// window, and the keyboard into a pane there.
+				var ids []string
+				for _, p := range f.panes {
+					if p.Session == "ov" && p.Window != f.stage() && !p.Dead {
+						ids = append(ids, p.ID)
+					}
+				}
+				if len(ids) == 0 {
+					t.Skip("there is no other window")
+				}
+				to := rapid.SampledFrom(ids).Draw(t, "to")
+				f.wander(to)
+				m = relist(t, m, f)
+				// The list has gone after it, and has taken nothing from
+				// it. From here on it is to stay there, as while the user
+				// types beside it.
+				if f.stage() != f.window(to) || f.current["ov"] != f.window(to) || f.focus != to || !m.blurred {
+					t.Fatalf("the client went to %s in %s: the list is in %s, the session shows %s, the keyboard is in %s, blurred %v",
+						to, f.window(to), f.stage(), f.current["ov"], f.focus, m.blurred)
+				}
+				moves = len(f.moves)
 			},
 			"close": func(t *rapid.T) {
 				if m.blurred {

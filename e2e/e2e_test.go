@@ -1483,3 +1483,77 @@ func sessionBeside(ps []pane) string {
 	}
 	return ""
 }
+
+// A key of tmux's own takes the client to another window, typed at the
+// terminal the view is attached in: the prefix and the window's number.
+// The list was in the window the client left, and goes after it with the
+// agents' pane, into the window now shown. That window stays the one
+// shown, and the session in it keeps the keyboard. The cursor goes to
+// that session. Nothing takes the client back afterwards. Back in the
+// list by ctrl+[, the cursor's keys move the list as they always do,
+// showing the window it goes to.
+func TestTheListFollowsTheClient(t *testing.T) {
+	r := launch(t, "f")
+	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
+	before := r.ov.panes()
+	r.press("c")
+	one := r.fresh(t, "a session window", before, isSleep)
+	r.lists(t, r.work, one)
+	r.ov.must("select-pane", "-t", r.list.id)
+	waitFor(t, "the session in the list", func() (bool, string) {
+		return strings.Contains(r.screen(), "e2e-0"), r.screen()
+	})
+	before = r.ov.panes()
+	r.press("c")
+	two := r.fresh(t, "a second session window", before, isSleep)
+	r.lists(t, r.work, one, two)
+	// own is the list's own pane, without the agents' under it, where each
+	// session is listed once more.
+	own := func() string {
+		out, _ := r.ov.run("capture-pane", "-p", "-t", r.list.id)
+		return out
+	}
+	shown := func() string { return r.ov.must("display-message", "-p", "-t", "="+viewSession+":", "#{window_id}") }
+	// with says whether the list's column is beside pane p in the window
+	// shown, and which pane has the keyboard there.
+	with := func(p pane) (bool, string) {
+		ok, say := beside(r.ov.panes(), p.id, 0)
+		return ok && shown() == p.window, fmt.Sprintf("%s, shown %s, want %s, active %s", say, shown(), p.window, r.active())
+	}
+	waitFor(t, "the list beside the second session, the keyboard in it, both listed under an agents' pane", func() (bool, string) {
+		ok, say := with(two)
+		return ok && r.active() == two.id && strings.Contains(own(), "e2e-1") && agentsPane(r.ov.panes()).id != "" &&
+			strings.Contains(r.cursor(), "e2e-1"), say + "\n" + r.screen()
+	})
+
+	// The prefix and the first session's window number, as typed.
+	r.typed("C-b", r.ov.must("display-message", "-p", "-t", one.id, "#{window_index}"))
+	waitFor(t, "the list to follow the client to the first session's window", func() (bool, string) {
+		ok, say := with(one)
+		return ok && r.active() == one.id && strings.Contains(r.cursor(), "e2e-0"), say + "\n" + r.screen()
+	})
+	for range 6 { // three seconds: a refresh and some listings
+		if ok, say := with(one); !ok || r.active() != one.id {
+			t.Fatalf("the list or the client left the first session: %s", say)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if n := len(r.ov.panes()); n != 5 {
+		t.Fatalf("%d panes, want the list, the agents, the holder and two sessions: %+v", n, r.ov.panes())
+	}
+
+	// ctrl+[ goes to the list, which is the top-left pane here too, and
+	// the key towards the other session takes the list to it.
+	client := r.ov.must("list-clients", "-F", "#{client_name}")
+	r.ov.must("send-keys", "-K", "-c", client, "C-[")
+	waitFor(t, "ctrl+[ to bring the keys to the list", func() (bool, string) { return r.active() == r.list.id, r.active() })
+	key := "j"
+	if s := own(); strings.Index(s, "e2e-1") < strings.Index(s, "e2e-0") {
+		key = "k"
+	}
+	r.typed(key)
+	waitFor(t, "the list to move to the second session, and show its window", func() (bool, string) {
+		ok, say := with(two)
+		return ok && r.active() == r.list.id && strings.Contains(r.cursor(), "e2e-1"), say + "\n" + r.screen()
+	})
+}

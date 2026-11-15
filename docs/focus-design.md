@@ -151,6 +151,43 @@ are taken to be outside the view until a pane reports them. With no
 selection apart from focus, these hold with no more bookkeeping than
 which of the view's two panes has the keys.
 
+## A client in another window
+
+Every move the view makes shows the window the list goes to, so the
+list's window is the one its session shows. tmux's own keys can break
+that: the prefix and a window's number, the next and the previous
+window, the chooser, a new window. The client then shows a window with
+no list in it, and the list sits in one nobody is looking at.
+
+The view goes after the client. Bringing the client back would undo what
+the user asked tmux for. The listing says which window each session
+shows (`window_active`, read into `Pane.Current`). Once the list's own
+pane says its window is not that one, `strayed` names the active pane of
+the window that is, and `restage` plans the move there before any move
+to the cursor's entry.
+
+- `tmux.Follow` is `tmux.Move` with nothing selected, neither a pane nor
+  a window. The window is on show and the user may be typing in it, so
+  neither empty pane takes the focus, and the pane with the keyboard
+  hears nothing of it. A split that does not take the focus is not what
+  the next command acts on, so each split is a command of its own, and
+  the second names the pane the first made.
+- The keyboard is wherever the client is, so `left` marks the list
+  blurred whether or not tmux's report that the keyboard left arrived.
+  The cursor then follows the list's window, as it does while the user
+  types beside the list, and the list stays there until the keyboard is
+  back in it. Without the mark the list would go straight back to its
+  cursor's window, and `Move` would take the client with it.
+- The cockpit, the task picker and the digests hold the list zoomed, and
+  tmux keeps the zoom of a window it no longer shows. `zoomLost` closes
+  them and ends the zoom, and the follow waits for that to land.
+- The window the list follows into is shown, so it has the terminal's
+  size, and the window the list leaves may not. `plan` fits nothing for
+  such a move and sizes the list for the window it goes to.
+- `strayed` goes by the list's own pane, which the model has as the last
+  move left it even when the rest of a listing is stale. A listing that
+  does not say which window is shown sends the list nowhere.
+
 ## Details that bite
 
 - tmux redraws the rules by itself when a key in a binding changes the

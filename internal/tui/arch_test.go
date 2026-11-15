@@ -52,6 +52,7 @@ var sourceReaders = map[string]string{
 	"model.keepAgents":     "effect: plans the agents' pane from the panes listed now",
 	"model.agentsLanded":   "lands the agents' pane's answers: the panes that closed",
 	"model.inStage":        "tmux layout: the panes beside the list, for the zoom and its width",
+	"model.strayed":        "tmux layout lookup: the window a client went to without the list",
 	"model.restage":        "effect: plans the list's move between tmux windows",
 	"model.frames":         "effect: the panes of the view's session whose rules to set",
 	"model.openReview":     "effect: finds a session's review pane, or plans its split",

@@ -434,11 +434,17 @@ func TestPropWindow(t *testing.T) {
 // window, a width the user may have dragged it to, and takes listShare
 // when it was alone, and so as wide as the window. A window of another
 // size than the list's is to be given its size first, and is then as wide
-// as the list's.
+// as the list's. The exception is a window that is shown when the list's
+// is not, where the list follows a client: the move stays out of the
+// client's way, and the window has its size already, so it is not fitted
+// and the list is fitted to it as it is.
 func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var panes []tmux.Pane
 		winW, winH := map[int]int{}, map[int]int{}
+		// One window is shown, or none is, as in a listing that does not
+		// say.
+		shown := rapid.IntRange(-1, 3).Draw(t, "shown")
 		for i := range rapid.IntRange(1, 8).Draw(t, "n") {
 			win := rapid.IntRange(0, 3).Draw(t, "win")
 			if _, ok := winW[win]; !ok {
@@ -446,11 +452,12 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 				winH[win] = rapid.SampledFrom([]int{40, 58}).Draw(t, "winh")
 			}
 			panes = append(panes, tmux.Pane{
-				ID:     fmt.Sprintf("%%%d", i),
-				Window: fmt.Sprintf("@%d", win),
-				W:      rapid.IntRange(1, 200).Draw(t, "w"),
-				WinW:   winW[win],
-				WinH:   winH[win],
+				ID:      fmt.Sprintf("%%%d", i),
+				Window:  fmt.Sprintf("@%d", win),
+				W:       rapid.IntRange(1, 200).Draw(t, "w"),
+				WinW:    winW[win],
+				WinH:    winH[win],
+				Current: win == shown,
 			})
 		}
 		self := rapid.SampledFrom(panes).Draw(t, "self")
@@ -475,10 +482,14 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 		if mv.to != want.ID || mv.from != self.Window || mv.fix != (left >= 2) {
 			t.Fatalf("plan %+v for want %s, list %+v, %d left behind", mv, want.ID, self, left)
 		}
+		stay := want.Current && !self.Current
+		if mv.stay != stay {
+			t.Fatalf("stay %v for a list shown %v going to a window shown %v", mv.stay, self.Current, want.Current)
+		}
 		// Sizes are known for both windows, and they differ.
-		fit := self.WinW > 0 && want.WinW > 0 && (self.WinW != want.WinW || self.WinH != want.WinH)
+		fit := !stay && self.WinW > 0 && want.WinW > 0 && (self.WinW != want.WinW || self.WinH != want.WinH)
 		if mv.fit != fit {
-			t.Fatalf("fit %v for a list in %dx%d going to %dx%d", mv.fit, self.WinW, self.WinH, want.WinW, want.WinH)
+			t.Fatalf("fit %v, staying %v, for a list in %dx%d going to %dx%d", mv.fit, stay, self.WinW, self.WinH, want.WinW, want.WinH)
 		}
 		into := want.WinW
 		if fit {

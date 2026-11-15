@@ -47,7 +47,9 @@ See README.md for behaviour and docs/ for design notes.
   zoomed over it, to its closing with the last session; and the digests,
   `d` zooming the list with the newest digest drawn as a page, each item's
   issue and what to do under its session, and `esc` putting the list
-  back. The key table
+  back; and a client that the prefix and a window's number take to
+  another window, the list following it there with the keyboard left in
+  the session, and `ctrl+[` and a cursor key moving the list on. The key table
   itself is tested in `internal/tmux`. It builds only
   with `-tags e2e`, so the gate skips it; run it after changing launch,
   the view, tmux handling or reviews.
