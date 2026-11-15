@@ -121,7 +121,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 		}
 		r.Transcript = path
 		if f, ok := t.Facts(path); ok {
-			r.Title, r.LastPrompt, r.Tasks = f.Title, f.LastPrompt, f.Links
+			r.Title, r.LastPrompt, r.Tasks = f.Title, f.LastPrompt, HomeDirs(f.Links, h.User)
 			r.LastReply, r.LastReplyAt = f.LastReply, f.ReplyAt
 			if r.Since.IsZero() {
 				r.Since = f.Modified

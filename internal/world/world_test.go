@@ -147,6 +147,56 @@ func TestLinksResolveAsResolveTaskDid(t *testing.T) {
 	}
 }
 
+// A ref with no project and no directory is a start the reader could not
+// place. It links to an issue of the session's own project that is in
+// progress, in review or blocked, and to nothing else.
+func TestAnUnplacedStartLinksInTheSessionsOwnProject(t *testing.T) {
+	ts := map[string]Tracker{
+		"/w/app": tracker("app", issue(1, issues.InProgress), issue(2, issues.Review), issue(3, issues.Blocked),
+			issue(4, issues.Ready), issue(5, issues.Inbox), issue(6, issues.Done)),
+		"/w/lib": tracker("lib", issue(9, issues.InProgress)),
+	}
+	roots := map[string]string{"/w/app/sub": "/w/app"}
+	// /w/lib is known through this.
+	others := []fleet.Row{sess("o", "/w/lib")}
+	for _, c := range []struct {
+		name string
+		id   int
+		own  string
+		want string
+	}{
+		{"in progress", 1, "/w/app", "/w/app#1"},
+		{"in review", 2, "/w/app", "/w/app#2"},
+		{"blocked", 3, "/w/app", "/w/app#3"},
+		{"from a directory inside the project", 1, "/w/app/sub", "/w/app#1"},
+		{"ready", 4, "/w/app", ""},
+		{"in the inbox", 5, "/w/app", ""},
+		{"done", 6, "/w/app", ""},
+		{"an unknown issue", 7, "/w/app", ""},
+		{"another project's issue", 9, "/w/app", ""},
+		{"a session in no tracked project", 1, "/w/plain", ""},
+	} {
+		rows := append(slices.Clone(others), sess("s", c.own, fleet.TaskRef{ID: c.id}))
+		w := Derive(Inputs{Rows: rows, Trackers: ts, Roots: roots})
+		got := ""
+		if p := w.Sessions["s"].Primary(); p != nil {
+			got = p.String()
+		}
+		if got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if c.want != "" && !slices.Contains(w.Streams[w.Sessions["s"].Primary().Key].Sessions, w.Sessions["s"]) {
+			t.Errorf("%s: the stream does not list its session", c.name)
+		}
+		if c.want == "" && !slices.Contains(w.Sessions["s"].Project.Sessions, w.Sessions["s"]) {
+			t.Errorf("%s: the session is not in its project's list", c.name)
+		}
+	}
+	// A project named with the start places it, whatever the directory.
+	w := Derive(Inputs{Rows: append(slices.Clone(others), sess("s", "/w/app", fleet.TaskRef{Project: "lib", ID: 9})), Trackers: ts})
+	eq(t, "a project and no directory", streamKeys(w.Sessions["s"].Streams), []string{"/w/lib#9"})
+}
+
 func TestLinksKeepTheLatestLast(t *testing.T) {
 	ts := map[string]Tracker{"/w/app": tracker("app", issue(1, issues.Ready), issue(2, issues.Ready), issue(3, issues.Done))}
 	r := sess("s", "/w/app", ref("app", 1), ref("app", 2), fleet.TaskRef{Dir: "/w/app", ID: 1}, ref("app", 3))

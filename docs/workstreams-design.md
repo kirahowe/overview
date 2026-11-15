@@ -66,6 +66,26 @@ command gave and the view resolves it to a project. Mentioning an issue
 anywhere else, in a prompt or a command, links nothing, and neither does a
 command that only quotes `issues start`.
 
+The reader of commands follows the shapes agents write. It is no shell.
+It follows a `cd` or `pushd` to a directory the command writes out, with
+`~` as the user's home. It reads a function defined in the command as
+its body wherever a later command calls it, so `i() { issues --dir .
+"$@"; }; i start 6` links as `issues --dir . start 6` does. It expands no
+variables and no substitutions. When a start's directory depends on one,
+or the start comes after a `cd` the reader could not follow, a loop or a
+group, the link keeps the issue's number and no directory. Such a start
+counts for the session's own project, and only for an issue that is in
+progress, in review or blocked there. A start puts its issue in
+progress, so a number that is still ready or in the inbox in the
+session's own project was started somewhere else, and links nothing.
+
+The transcripts from 2026-10-20 to 2026-11-14, outside overview's own
+sessions, hold 30 commands that started an issue. A reader that gave up
+on any directory it could not read linked 21 of them. Of the other
+nine, six came after `cd ~/…` (one of those after a `for` loop as well),
+two named the directory as `--dir $W`, and one went through a function.
+Three of the nine still have no directory and link by the rule above.
+
 The hook takes no part in linking. It records a session's state and,
 when the session is blocked, its reason. The links come from the
 transcripts alone, so they exist wherever the hook is not installed.

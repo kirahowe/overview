@@ -50,6 +50,11 @@ func genRef(t *rapid.T) fleet.TaskRef {
 		Dir:     rapid.SampledFrom(dirs).Draw(t, "rdir"),
 		ID:      rapid.IntRange(1, 5).Draw(t, "rid"),
 	}
+	// A start the reader could not place, more often than the draws
+	// above come to one.
+	if rapid.IntRange(0, 3).Draw(t, "runplaced") == 0 {
+		r.Project, r.Dir = "", ""
+	}
 	if rapid.Bool().Draw(t, "rtimed") {
 		r.Linked = time.UnixMilli(int64(rapid.IntRange(1, 9).Draw(t, "rlinked")) * 100)
 	}
@@ -493,6 +498,35 @@ func TestPropCountsAreARecount(t *testing.T) {
 		}
 		if noHook := interactive && !hooked; w.Need != need || w.Working != working || w.Idle != idle || w.NoHook != noHook {
 			t.Fatalf("counts %d %d %d %v, want %d %d %d %v", w.Need, w.Working, w.Idle, w.NoHook, need, working, idle, noHook)
+		}
+	})
+}
+
+// A session whose refs name no project and no directory is under the
+// issues of its own root that those refs number and that are in progress,
+// in review or blocked, and under nothing else.
+func TestPropUnplacedStartsStayInTheSessionsProject(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := genInputs(t)
+		w := Derive(in)
+		for _, s := range w.Sessions {
+			if slices.ContainsFunc(s.Tasks, func(r fleet.TaskRef) bool { return r.Project != "" || r.Dir != "" }) {
+				continue
+			}
+			own := w.Root(s.Cwd)
+			want := map[Key]bool{}
+			for _, i := range in.Trackers[own].Open {
+				if active(i.Status) && slices.ContainsFunc(s.Tasks, func(r fleet.TaskRef) bool { return r.ID == i.ID }) {
+					want[Key{own, i.ID}] = true
+				}
+			}
+			got := map[Key]bool{}
+			for _, st := range s.Streams {
+				got[st.Key] = true
+			}
+			if !maps.Equal(got, want) {
+				t.Fatalf("%s in %q with refs %+v is under %v, want %v", s.SessionID, own, s.Tasks, got, want)
+			}
 		}
 	})
 }

@@ -310,7 +310,21 @@ func Derive(in Inputs) World {
 // directory's project: a subagent's `issues --dir <worktree> start 6`
 // names a worktree, which is a root of its own with the same id. The ref
 // links only if that project lists the issue as open.
+//
+// A ref with neither a project nor a directory is a start the reader of
+// the transcript could not place. It links to the session's own project,
+// and only to an issue that is in progress, in review or blocked there. A
+// start puts its issue in progress, so an issue of that number still
+// waiting in the session's own project is not the one that was started.
 func resolve(ref fleet.TaskRef, own string, ts map[string]Tracker, known map[string]bool, root func(string) string) (Key, bool) {
+	if ref.Project == "" && ref.Dir == "" {
+		for _, i := range ts[own].Open {
+			if i.ID == ref.ID && active(i.Status) {
+				return Key{own, i.ID}, true
+			}
+		}
+		return Key{}, false
+	}
 	dirRoot := root(ref.Dir)
 	id := ref.Project
 	if id == "" {

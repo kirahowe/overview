@@ -376,27 +376,43 @@ func TestPropIssuesStartsRoundTrip(t *testing.T) {
 			}
 		}
 		lost := false
-		switch before := rapid.SampledFrom([]string{"", "pushd", "unknown", "comment"}).Draw(t, "before"); before {
-		case "pushd":
+		switch before := rapid.SampledFrom([]string{"", "pushd", "home", "unknown", "comment"}).Draw(t, "before"); before {
+		case "pushd", "home":
 			to := "/" + rapid.StringMatching(`[a-z]{1,6}`).Draw(t, "to")
-			prefix = "pushd " + to + " && " + prefix
+			if before == "home" {
+				to = "~" + rapid.SampledFrom([]string{"", to}).Draw(t, "under")
+			}
+			prefix = rapid.SampledFrom([]string{"pushd ", "cd "}).Draw(t, "move") + to + " && " + prefix
 			switch {
 			case dirRel:
 				rel, _ := filepath.Rel(cwd, want.Dir)
-				want.Dir = filepath.Join(to, rel)
+				want.Dir = to + "/" + rel
 			case !dirAbs:
 				want.Dir = to
 			}
 		case "unknown":
-			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~/x && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; ", "if true; then cd /q; fi; ", "for d in /q; do cd $d; done; ", "command cd /q && ", "builtin cd /q && ", "while true; do break; done; "}).Draw(t, "group") + prefix
-			lost = !dirAbs
+			// The start still reads, and its ref has a directory only
+			// when the command names an absolute one.
+			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~sam/x && ", "cd $X && ", "cd - && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; ", "if true; then cd /q; fi; ", "for d in /q; do cd $d; done; ", "command cd /q && ", "builtin cd /q && ", "while true; do break; done; "}).Draw(t, "group") + prefix
+			if !dirAbs {
+				want.Dir = ""
+			}
 		case "comment":
 			// The comment runs to the end of its line only.
 			lost = !strings.Contains(prefix, "\n")
 			prefix = "echo x # see " + prefix
 		}
 
+		// The same start through a function that hands its arguments to
+		// issues reads as the start itself. A wrapper such as `command`
+		// runs a program, so it is left to call issues.
 		cmd := prefix + strings.Join(words, " ") + suffix
+		program := strings.HasSuffix(prefix, "command ") || strings.HasSuffix(prefix, "builtin ") || strings.HasSuffix(prefix, "exec ")
+		if !program && rapid.Bool().Draw(t, "function") {
+			split := rapid.IntRange(1, len(words)-2).Draw(t, "split")
+			def := rapid.SampledFrom([]string{"w() { %s \"$@\"; }\n", "w(){ %s \"$@\" >/dev/null || echo \"FAILED: $*\"; }; ", "function w {\n  %s \"${@}\"\n}\n"}).Draw(t, "def")
+			cmd = fmt.Sprintf(def, strings.Join(words[:split], " ")) + prefix + "w " + strings.Join(words[split:], " ") + suffix
+		}
 		got := IssuesStarts(cmd, cwd)
 		if lost {
 			if len(got) != 0 {
@@ -415,12 +431,29 @@ func TestPropParsersNeverPanic(t *testing.T) {
 		s := rapid.OneOf(
 			text(),
 			rapid.StringMatching(`[a-z ='"\;&|\n$~/#.:0-9-]{0,40}`),
-			rapid.SampledFrom([]string{`issues start 3`, `issues -C "`, `Work on a#1`, `\`, `'`, `"\`}),
+			rapid.StringMatching(`([a-z]{1,2}\(\) ?\{ ?| ?\} ?|"\$@"|\$[1@]|issues |start [0-9] |cd [~/a-z.]{1,4}|[;\n ]|[a-z]{1,2} ){0,14}`),
+			rapid.SampledFrom([]string{`issues start 3`, `issues -C "`, `Work on a#1`, `\`, `'`, `"\`,
+				`f() {`, `function f {`, `f() { f; }; f`, `a() { b; }; b() { a; }; a`, `function`, `f() { }`, `() {`}),
 		).Draw(t, "s")
-		cwd := text().Draw(t, "cwd")
+		cwd := rapid.OneOf(text(), rapid.SampledFrom([]string{"/w/app", "~", "~/x", ""})).Draw(t, "cwd")
 		for _, r := range IssuesStarts(s, cwd) {
 			if r.ID <= 0 {
 				t.Fatalf("IssuesStarts(%q) gave id %d", s, r.ID)
+			}
+			// A ref's directory is absolute, written from ~, or unknown.
+			if r.Dir != "" && !filepath.IsAbs(r.Dir) && r.Dir != "~" && !strings.HasPrefix(r.Dir, "~/") {
+				t.Fatalf("IssuesStarts(%q) in %q gave the directory %q", s, cwd, r.Dir)
+			}
+		}
+		// Under an absolute home, every directory comes out absolute or
+		// unknown, and nothing else about the refs changes.
+		refs := IssuesStarts(s, cwd)
+		for i, r := range HomeDirs(refs, "/u") {
+			if r.Dir != "" && !filepath.IsAbs(r.Dir) {
+				t.Fatalf("HomeDirs left %q for %q", r.Dir, refs[i].Dir)
+			}
+			if o := refs[i]; r.ID != o.ID || r.Project != o.Project || (r.Dir != o.Dir && !strings.HasPrefix(o.Dir, "~")) {
+				t.Fatalf("HomeDirs made %+v of %+v", r, o)
 			}
 		}
 		if r, ok := OpeningTask(s, cwd); ok && (r.ID <= 0 || r.Project == "" || r.Dir != cwd) {

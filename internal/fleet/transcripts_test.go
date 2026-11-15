@@ -79,6 +79,7 @@ func TestFactsFromARealisticTranscript(t *testing.T) {
 	}
 	want := []TaskRef{
 		{Project: "relay", Dir: "/w/relay", ID: 54, Linked: ts("2026-10-23T17:44:47.677Z")},
+		{Dir: "~/code/x", ID: 6, Linked: ts("2026-10-23T17:46:02Z")},
 		{Dir: "/w/other", ID: 64, Linked: ts("2026-10-23T17:49:05Z")},
 	}
 	if !reflect.DeepEqual(got.Links, want) {
@@ -203,10 +204,12 @@ func TestReadingOnlyWhatWasAppended(t *testing.T) {
 }
 
 func TestRowsTakeTheirFactsFromTheTranscript(t *testing.T) {
-	home := Home{Dir: t.TempDir()}
+	home := Home{Dir: t.TempDir(), User: "/u"}
 	path := filepath.Join(home.Dir, "projects", "-w-a", "s-1.jsonl")
 	writeLines(t, path,
 		userPrompt("2026-10-23T10:00:00Z", "/w/a", "Work on p#4: x"),
+		bashCall("2026-10-23T10:00:01Z", "/w/a", "toolu_1", "cd ~/code/x && issues start 6 && issues --dir $W start 7"),
+		bashResult("2026-10-23T10:00:02Z", "toolu_1", false),
 		reply("2026-10-23T10:00:05Z", "Done?"),
 		`{"type":"ai-title","aiTitle":"The title"}`,
 		`{"type":"last-prompt","lastPrompt":"x"}`,
@@ -224,8 +227,16 @@ echo '[{"pid":1,"cwd":"/w/a","kind":"interactive","startedAt":1000,"sessionId":"
 	if r.Title != "The title" || r.LastPrompt != "x" || r.LastReply != "Done?" || !r.LastReplyAt.Equal(ts("2026-10-23T10:00:05Z")) {
 		t.Fatalf("row %+v", r)
 	}
-	if len(r.Tasks) != 1 || r.Tasks[0].Project != "p" || r.Tasks[0].ID != 4 {
-		t.Fatalf("tasks %+v", r.Tasks)
+	// A directory the command wrote from ~ is under the user's home, and
+	// one the reader could not place stays empty.
+	at := ts("2026-10-23T10:00:02Z")
+	want := []TaskRef{
+		{Project: "p", Dir: "/w/a", ID: 4, Linked: ts("2026-10-23T10:00:00Z")},
+		{Dir: "/u/code/x", ID: 6, Linked: at},
+		{ID: 7, Linked: at},
+	}
+	if !reflect.DeepEqual(r.Tasks, want) {
+		t.Fatalf("tasks %+v, want %+v", r.Tasks, want)
 	}
 	if r.Hooked || r.Since.IsZero() {
 		t.Fatalf("hooked %v since %v", r.Hooked, r.Since)

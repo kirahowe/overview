@@ -78,6 +78,9 @@ facts:
   in the main conversation, and every `issues … start <n>` run through
   the Bash tool whose result was not an error, read with the cwd the
   transcript recorded for that line and timed by the line's timestamp.
+  A link's directory is absolute, or empty when the command's reader
+  could not tell where the start ran. One the command wrote from `~` is
+  put under the user's home when the rows are built.
 
 A session's subagents keep their transcripts in
 `<session>/subagents/*.jsonl`. Their `issues start`s link the parent,
@@ -87,8 +90,10 @@ prompts link nothing.
 The fold is pure: folding a transcript in any number of chunks gives the
 facts that folding it whole gives. A file that shrinks or is replaced is
 read again from the start. The parsers that read a link,
-`OpeningTask` and `IssuesStarts`, are the ones the hook used, and they
-keep their rule that a false link is worse than a missed one.
+`OpeningTask` and `IssuesStarts`, are the ones the hook used. A false
+link is worse than a missed one, so a command the reader cannot make
+out gives no link. A start whose directory alone is unclear gives a
+link with no directory, and the join decides whether it holds.
 
 The hook records only what no other source can show: that a session is
 blocked on a prompt, with the reason. Its record keeps the state, when it
@@ -253,8 +258,10 @@ The rules that used to be spread across the view now live in `Derive`.
 - A link resolves to a workstream as `resolveTask` resolves it: the
   link's project id, or else its directory's tracker's id, preferring
   the session's own project, and only when that project lists the issue
-  as open. A session's `Streams` follow its links in order, each
-  workstream once, at the place it was last linked.
+  as open. A link with neither a project id nor a directory resolves in
+  the session's own project, and only to an issue that is in progress,
+  in review or blocked. A session's `Streams` follow its links in order,
+  each workstream once, at the place it was last linked.
 - A workstream exists for each open issue that is in progress, in
   review or blocked, or that a live session is linked to. It sorts by
   status rank, then priority, then number, then root.

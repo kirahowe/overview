@@ -190,7 +190,11 @@ sessions`. A session works on an issue when a prompt, the first or any
 later one, starts with `Work on <project>#<n>`, or when it or one of its
 subagents runs `issues start <n>` through the Bash tool and the call did
 not fail. overview reads both from the transcripts, so the links do not
-depend on the hook. One linked to several open
+depend on the hook. It follows a `cd` in the command, `~` included, and
+a shell function the command defines around `issues`. A start whose
+directory it cannot read, such as `issues --dir $W start <n>`, counts for
+the session's own project when issue `<n>` is in progress, in review or
+blocked there. One linked to several open
 issues, as an orchestrating session running several tasks may be, is
 listed under each, and its primary entry is under the one it was linked
 to last. When an issue is done or dropped, its workstream goes, and its

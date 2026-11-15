@@ -10,9 +10,61 @@ import (
 	"time"
 )
 
+// The starts the reader missed in three weeks of real transcripts, each as
+// its session wrote it, with the user's home as /u.
+func TestIssuesStartsAsSessionsWriteThem(t *testing.T) {
+	for _, c := range []struct {
+		name, cwd, cmd string
+		want           []TaskRef
+	}{
+		{"a directory held in a variable", "/u/code/projects/horizon/.claude/worktrees/explore-viz",
+			`rm crates/viz/tests/grammar.proptest-regressions && git status --short && W=$PWD && issues --dir $W start 59 >/dev/null && node tools/factory/cli.ts record add --issue 59 --event agent --note "Step 1: chart_holding in crates/viz."`,
+			[]TaskRef{{ID: 59}}},
+		{"a sweep from a worktree", "/u/code/projects/horizon",
+			`cd /u/code/projects/horizon/.claude/worktrees/sweep && grep -n '"deep"\|"gate"\|"factory"' package.json; W=$PWD; issues --dir $W done 2 && issues --dir $W drop 18 && issues --dir $W done 19 && issues --dir $W start 10 && issues --dir $W start 29 && issues --dir $W set 16 status ready; issues --dir $W doctor --json | head -30; git status --short | head -30`,
+			[]TaskRef{{ID: 10}, {ID: 29}}},
+		{"a function for issues", "/u/code/projects/relay",
+			`i() { issues --dir . "$@" >/dev/null || echo "FAILED: $*"; }; i set 94 status ready; i start 94; i set 96 status ready; i start 96; i set 93 status ready; i start 93; i set 98 status ready; i block 95 --on 94; i block 97 --on 96; i block 97 --on 98; issues --dir . doctor --json | head -12`,
+			[]TaskRef{{Dir: "/u/code/projects/relay", ID: 94}, {Dir: "/u/code/projects/relay", ID: 96}, {Dir: "/u/code/projects/relay", ID: 93}}},
+		// zsh does not split $I into words, so this ran nothing: the
+		// session went on to the function above.
+		{"a variable for issues", "/u/code/projects/relay",
+			`set -e; I="issues --dir ."; $I set 94 status ready >/dev/null; $I start 94 >/dev/null; $I doctor --json | head -20`,
+			nil},
+		{"a workspace under the home", "/u/code/projects/relay",
+			`cd ~/code/projects/.cards/relay && issues --dir . start 55 >/dev/null && issues --dir . details 55 && cat "$(issues --dir . details 55)"`,
+			[]TaskRef{{Dir: "~/code/projects/.cards/relay", ID: 55}}},
+		{"a directory beside a workspace under the home", "/u/code/projects/relay",
+			`cd ~/code/projects/.next/t35 && issues --dir relay start 35 2>&1 | tail -1; grep -E '^[✓✗]' test.log | sort -rn | head -25; sysctl -n hw.ncpu`,
+			[]TaskRef{{Dir: "~/code/projects/.next/t35/relay", ID: 35}}},
+		{"after a loop", "/u/code/projects/relay",
+			`cd ~/code/projects/.next/relay-board && for i in 73 74 75 77; do issues --dir . review $i >/dev/null; done; issues --dir . start 79 >/dev/null 2>&1; issues --dir . doctor --json 2>&1 | tail -3`,
+			[]TaskRef{{ID: 79}}},
+	} {
+		if got := IssuesStarts(c.cmd, c.cwd); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	got := HomeDirs([]TaskRef{{Dir: "~/code/x", ID: 1}, {Dir: "~", ID: 2}, {Dir: "/w/a", ID: 3}, {ID: 4}, {Project: "p", Dir: "~/y", ID: 5}}, "/u")
+	want := []TaskRef{{Dir: "/u/code/x", ID: 1}, {Dir: "/u", ID: 2}, {Dir: "/w/a", ID: 3}, {ID: 4}, {Project: "p", Dir: "/u/y", ID: 5}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("HomeDirs %+v, want %+v", got, want)
+	}
+	// With no home to put it under, a directory written from ~ is unknown.
+	if got := HomeDirs([]TaskRef{{Dir: "~/code/x", ID: 1}, {Dir: "/w/a", ID: 3}}, ""); !reflect.DeepEqual(got, []TaskRef{{ID: 1}, {Dir: "/w/a", ID: 3}}) {
+		t.Errorf("HomeDirs with no home: %+v", got)
+	}
+	if got := HomeDirs(nil, "/u"); got != nil {
+		t.Errorf("HomeDirs of nothing: %+v", got)
+	}
+}
+
 func TestIssuesStarts(t *testing.T) {
 	const cwd = "/work/app"
 	r := func(project, dir string, id int) TaskRef { return TaskRef{Project: project, Dir: dir, ID: id} }
+	// nowhere is a start the reader could not place: the issue, and no
+	// directory.
+	nowhere := func(id int) []TaskRef { return []TaskRef{{ID: id}} }
 	for _, c := range []struct {
 		name, cmd string
 		want      []TaskRef
@@ -38,36 +90,46 @@ func TestIssuesStarts(t *testing.T) {
 		{"cd relative", "cd x && issues start 2", []TaskRef{r("", "/work/app/x", 2)}},
 		{"cd absolute", "cd /elsewhere && issues start 2", []TaskRef{r("", "/elsewhere", 2)}},
 		{"cd then -C relative", "cd /a; issues -C b start 2", []TaskRef{r("", "/a/b", 2)}},
-		{"cd home makes the directory unknown", "cd ~/x && issues start 2", nil},
+		{"cd home", "cd ~/x && issues start 2", []TaskRef{r("", "~/x", 2)}},
+		{"cd home alone", "cd ~; issues start 2", []TaskRef{r("", "~", 2)}},
 		{"cd home then absolute dir", "cd ~/x && issues --dir /d start 2", []TaskRef{r("", "/d", 2)}},
-		{"cd home then relative dir", "cd ~/x && issues --dir d start 2", nil},
-		{"cd with no argument", "cd && issues start 2", nil},
-		{"cd -", "cd - && issues start 2", nil},
-		{"cd variable", "cd $HOME/x; issues start 2", nil},
-		{"cd unknown stays unknown", "cd ~/x; cd /a; issues start 2", nil},
-		{"cd unknown covers later commands only", "issues start 1; cd ~; issues start 2", []TaskRef{r("", cwd, 1)}},
+		{"cd home then relative dir", "cd ~/x && issues --dir d start 2", []TaskRef{r("", "~/x/d", 2)}},
+		{"cd home then up", "cd ~/x/y && cd .. && issues start 2", []TaskRef{r("", "~/x", 2)}},
+		{"cd out of home", "cd ~/x && cd ../.. && issues start 2", nowhere(2)},
+		{"cd another user's home", "cd ~sam/x && issues start 2", nowhere(2)},
+		{"cd with no argument goes home", "cd && issues start 2", []TaskRef{r("", "~", 2)}},
+		{"cd with no argument then relative", "cd; cd code/x; issues start 2", []TaskRef{r("", "~/code/x", 2)}},
+		{"cd -", "cd - && issues start 2", nowhere(2)},
+		{"cd variable", "cd $HOME/x; issues start 2", nowhere(2)},
+		{"cd unknown stays unknown", "cd $X; cd /a; issues start 2", nowhere(2)},
+		{"cd unknown covers later commands only", "issues start 1; cd -; issues start 2", []TaskRef{r("", cwd, 1), {ID: 2}}},
 		{"pushd another dir", "pushd /other && issues start 5", []TaskRef{r("", "/other", 5)}},
 		{"pushd relative", "pushd sub; issues start 5", []TaskRef{r("", "/work/app/sub", 5)}},
-		{"pushd with no argument", "pushd && issues start 5", nil},
-		{"pushd +n", "pushd +1 && issues start 5", nil},
-		{"popd", "pushd /other && popd && issues start 5", nil},
-		{"brace group", "{ cd /other; issues start 5; }", nil},
-		{"brace group glued", "{cd /other; issues start 5; }", nil},
-		{"subshell", "(cd /other; issues start 5 )", nil},
-		{"subshell spaced", "( cd /other; issues start 5 )", nil},
-		{"after a subshell", "(cd /other); issues start 5", nil},
+		{"pushd home", "pushd ~/x && issues start 5", []TaskRef{r("", "~/x", 5)}},
+		{"pushd with no argument", "pushd && issues start 5", nowhere(5)},
+		{"pushd +n", "pushd +1 && issues start 5", nowhere(5)},
+		{"popd", "pushd /other && popd && issues start 5", nowhere(5)},
+		{"brace group", "{ cd /other; issues start 5; }", nowhere(5)},
+		{"brace group glued", "{cd /other; issues start 5; }", nowhere(5)},
+		{"subshell", "(cd /other; issues start 5 )", nowhere(5)},
+		{"subshell spaced", "( cd /other; issues start 5 )", nowhere(5)},
+		{"after a subshell", "(cd /other); issues start 5", nowhere(5)},
 		{"group then absolute dir", "(cd /other); issues -C /d start 5", []TaskRef{r("", "/d", 5)}},
-		{"cd in an if", "if true; then cd ../b; fi; issues start 3", nil},
-		{"cd in a for", "for d in ../b; do cd $d; done; issues start 3", nil},
-		{"command cd", "command cd ../b && issues start 3", nil},
-		{"builtin cd", "builtin cd ../b && issues start 3", nil},
+		{"group then home dir", "(cd /other); issues -C ~/d start 5", []TaskRef{r("", "~/d", 5)}},
+		{"group then relative dir", "(cd /other); issues -C d start 5", nowhere(5)},
+		{"group then a project", "(cd /other); issues --project p start 5", []TaskRef{r("p", "", 5)}},
+		{"cd in an if", "if true; then cd ../b; fi; issues start 3", nowhere(3)},
+		{"cd in a for", "for d in ../b; do cd $d; done; issues start 3", nowhere(3)},
+		{"a loop with no cd", "for i in 1 2; do issues --dir . review $i; done; issues --dir . start 3", nowhere(3)},
+		{"command cd", "command cd ../b && issues start 3", nowhere(3)},
+		{"builtin cd", "builtin cd ../b && issues start 3", nowhere(3)},
 		{"command cd then absolute dir", "command cd ../b && issues -C /d start 3", []TaskRef{r("", "/d", 3)}},
-		{"eval cd", `eval "cd ../b"; issues start 3`, nil},
-		{"source script", "source env.sh; issues start 3", nil},
-		{"cd as a word", "env cd ../b; issues start 3", nil},
+		{"eval cd", `eval "cd ../b"; issues start 3`, nowhere(3)},
+		{"source script", "source env.sh; issues start 3", nowhere(3)},
+		{"cd as a word", "env cd ../b; issues start 3", nowhere(3)},
 		{"command issues", "command issues start 3", []TaskRef{r("", cwd, 3)}},
 		{"exec issues", "exec issues start 3", []TaskRef{r("", cwd, 3)}},
-		{"command issues after unknown cd", "cd ~/x; command issues start 3", nil},
+		{"command issues after unknown cd", "cd -; command issues start 3", nowhere(3)},
 		{"issues behind then", "if true; then issues start 3; fi", []TaskRef{r("", cwd, 3)}},
 		{"issues behind do", "true; do issues start 3; done", []TaskRef{r("", cwd, 3)}},
 		{"issues behind else", "false; else issues start 3; fi", []TaskRef{r("", cwd, 3)}},
@@ -77,13 +139,51 @@ func TestIssuesStarts(t *testing.T) {
 		{"hash inside a word", "echo a#b && issues start 5", []TaskRef{r("", cwd, 5)}},
 		{"quoted hash", `echo "# x" && issues start 5`, []TaskRef{r("", cwd, 5)}},
 		{"comment line", "# issues start 4\nissues start 5", []TaskRef{r("", cwd, 5)}},
-		{"tilde dir dropped", "issues -C ~/x start 2", nil},
-		{"tilde dir long flag", "issues --dir ~/code/other start 5", nil},
-		{"variable dir dropped", "issues --dir $HOME/x start 5", nil},
-		{"substitution dir dropped", "issues --dir=$(pwd) start 5", nil},
-		{"backtick dir dropped", "issues --dir `pwd` start 5", nil},
-		{"empty dir dropped", `issues --dir "" start 5`, nil},
-		{"dropped ref does not hide the next", "issues --dir ~/x start 5; issues start 6", []TaskRef{r("", cwd, 6)}},
+		{"home dir", "issues -C ~/x start 2", []TaskRef{r("", "~/x", 2)}},
+		{"home dir long flag", "issues --dir ~/code/other/ start 5", []TaskRef{r("", "~/code/other", 5)}},
+		{"home itself", "issues --dir ~ start 5", []TaskRef{r("", "~", 5)}},
+		{"another user's home dir", "issues --dir ~sam/x start 5", nowhere(5)},
+		{"home dir with a variable", "issues --dir ~/$P start 5", nowhere(5)},
+		{"variable dir", "issues --dir $HOME/x start 5", nowhere(5)},
+		{"variable dir set from the directory", "W=$PWD; issues --dir $W start 5", nowhere(5)},
+		{"variable dir keeps its project", "issues --dir $W --project p start 5", []TaskRef{r("p", "", 5)}},
+		{"substitution dir", "issues --dir=$(pwd) start 5", nowhere(5)},
+		{"backtick dir", "issues --dir `pwd` start 5", nowhere(5)},
+		{"empty dir", `issues --dir "" start 5`, nowhere(5)},
+		{"an unplaced ref does not hide the next", "issues --dir $W start 5; issues start 6", []TaskRef{{ID: 5}, r("", cwd, 6)}},
+		{"variable project gives nothing", "issues --project $P start 5", nil},
+		{"variable command", `I="issues --dir ."; $I start 5`, nil},
+		{"function", `i() { issues --dir . "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function called twice", `i() { issues "$@" >/dev/null || echo "FAILED: $*"; }; i set 4 status ready; i start 4; i start 5`, []TaskRef{r("", cwd, 4), r("", cwd, 5)}},
+		{"function glued head", `i(){ issues "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function spaced head", `i () { issues "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function keyword", `function i { issues "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function keyword and parens", `function i() { issues "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function over lines", "i() {\n  issues -C /d \"$@\"\n}\ni start 5", []TaskRef{r("", "/d", 5)}},
+		{"function closed on its last command", `i() { issues "$@" }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function with braced parameters", `i() { issues start "${1}"; }; i 5`, []TaskRef{r("", cwd, 5)}},
+		{"function with a numbered parameter", `go() { issues -C "$2" start "$1"; }; go 5 /d`, []TaskRef{r("", "/d", 5)}},
+		{"function with a missing parameter", `go() { issues start $1; }; go`, nil},
+		{"function that takes no arguments", `go() { issues start 5; }; go`, []TaskRef{r("", cwd, 5)}},
+		{"function never called", `go() { issues start 5; }`, nil},
+		{"function never called, over lines", "go() {\n  issues start 5\n}\necho hi", nil},
+		{"function defined after the call", `i start 5; i() { issues "$@"; }`, nil},
+		{"function defined again", `i() { echo "$@"; }; i() { issues "$@"; }; i start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function that moves", `go() { cd /other; }; go; issues start 5`, []TaskRef{r("", "/other", 5)}},
+		{"function that moves somewhere unknown", `go() { cd "$1"; }; go $X; issues start 5`, nowhere(5)},
+		{"function that only wraps issues does not move", `i() { issues "$@"; }; i show 3; issues start 5`, []TaskRef{r("", cwd, 5)}},
+		{"function named issues", `issues() { command issues -C /d "$@"; }; issues start 5`, []TaskRef{r("", "/d", 5)}},
+		{"function calling a function", `a() { issues "$@"; }; b() { a start "$1"; }; b 5`, []TaskRef{r("", cwd, 5)}},
+		{"function calling itself ends the reading", `a() { a "$@"; issues start 5; }; a; issues start 6`, nil},
+		{"start before a function calling itself", `issues start 4; a() { a; }; a; issues start 6`, []TaskRef{r("", cwd, 4)}},
+		{"function behind command is not called", `i() { issues "$@"; }; command i start 5`, nil},
+		{"function with a group inside ends the reading", `go() { { cd /x; }; issues start 5; }; go; issues start 6`, nil},
+		{"function never closed ends the reading", `go() { issues start 5; issues start 6`, nil},
+		{"start before an unreadable function", `issues start 4; go() { { cd /x; }; }; issues start 6`, []TaskRef{r("", cwd, 4)}},
+		{"a word ending in a brace is no function", `echo x{ ; issues start 5`, []TaskRef{r("", cwd, 5)}},
+		{"an argument that looks like a function head", `grep -n 'main(){' a.js; issues start 5`, []TaskRef{r("", cwd, 5)}},
+		{"a quoted function head", `echo 'f() {'; issues start 5`, []TaskRef{r("", cwd, 5)}},
+		{"a function head split over arguments", `grep 'run()' '{' a.sh; issues start 5`, []TaskRef{r("", cwd, 5)}},
 		{"help", "issues start --help 5", nil},
 		{"short help", "issues start -h 5", nil},
 		{"help before start", "issues --help start 5", nil},
@@ -140,11 +240,20 @@ func TestIssuesStarts(t *testing.T) {
 	if got := IssuesStarts("issues start 3", ""); !reflect.DeepEqual(got, []TaskRef{{ID: 3}}) {
 		t.Errorf("no cwd: %+v", got)
 	}
-	if got := IssuesStarts("issues -C rel start 3", ""); got != nil {
+	if got := IssuesStarts("issues -C rel start 3", ""); !reflect.DeepEqual(got, nowhere(3)) {
 		t.Errorf("relative dir with no cwd: %+v", got)
 	}
-	if got := IssuesStarts("issues -C rel start 3", "rel/cwd"); got != nil {
+	if got := IssuesStarts("issues -C rel start 3", "rel/cwd"); !reflect.DeepEqual(got, nowhere(3)) {
 		t.Errorf("relative dir with a relative cwd: %+v", got)
+	}
+	if got := IssuesStarts("issues start 3", "rel/cwd"); !reflect.DeepEqual(got, nowhere(3)) {
+		t.Errorf("a relative cwd: %+v", got)
+	}
+	if got := IssuesStarts("cd /a && issues start 3", ""); !reflect.DeepEqual(got, []TaskRef{{Dir: "/a", ID: 3}}) {
+		t.Errorf("an absolute cd with no cwd: %+v", got)
+	}
+	if got := IssuesStarts("cd x && issues start 3", "~/code"); !reflect.DeepEqual(got, []TaskRef{{Dir: "~/code/x", ID: 3}}) {
+		t.Errorf("a cwd written from home: %+v", got)
 	}
 }
 

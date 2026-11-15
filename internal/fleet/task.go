@@ -15,6 +15,9 @@ const maxTasks = 8
 // TaskRef names an issue a session took on, as a transcript shows it. Project is
 // the issues project id when the reference gave one; Dir is the directory the
 // command named (made absolute against the event's cwd) or else the event's cwd.
+// A directory under the user's home that the command wrote with ~ keeps the ~
+// until HomeDirs puts it under that home. Dir is empty when the reader could
+// not tell where the command ran, which leaves the world to place the ref.
 // Linked is when the session first took it on, zero when that is unknown.
 type TaskRef struct {
 	Project string    `json:"project,omitempty"`
@@ -95,21 +98,64 @@ func OpeningTask(prompt, cwd string) (TaskRef, bool) {
 // IssuesStarts finds every `issues start <n>` in a shell command. It is a
 // reader for the common shapes, not a shell: no expansion, and command
 // substitutions and heredoc bodies are opaque. A `cd <dir>` or `pushd
-// <dir>` earlier in the string moves the directory later commands use. A
-// `cd` the reader cannot follow (home, `-`, a variable), a `popd`, and a
-// group or subshell, whose `cd` may or may not last past it, leave the
-// directory unknown, and a start after one links only when it names an
-// absolute directory itself. So does a `cd` behind a keyword or wrapper
-// (`if`, `then`, `do`, `command`, `builtin`), a loop, `eval`, `source`,
-// `exec` and any command with `cd` among its words. `then`, `do`, `else`
-// and `command` before `issues` do not hide the invocation. A false link
-// is worse than a missed one, so anything unclear links nothing.
+// <dir>` earlier in the string moves the directory later commands use,
+// and a bare `cd` moves it to ~. A `cd` the reader cannot follow (`-`, a
+// variable), a `popd`, and a group or subshell, whose `cd` may or may not
+// last past it, leave the directory unknown. So does a `cd` behind a
+// keyword or wrapper (`if`, `then`, `do`, `command`, `builtin`), a loop,
+// `eval`, `source`, `exec` and any command with `cd` among its words.
+// `then`, `do`, `else` and `command` before `issues` do not hide the
+// invocation.
+//
+// A start still reads when the directory is unknown or the one it names
+// cannot be read (a variable, a substitution, a relative path with nothing
+// to stand on). Its ref then has no directory: it says which issue was
+// started and not where, and the world decides whether that is enough to
+// link. What the command does is another matter. A start with a flag the
+// reader does not know, or one asking for help, gives no ref at all.
+//
+// A function defined in the command stands for its body wherever a later
+// command calls it, with the call's arguments in place of "$@" and of $1
+// to $9, so `i() { issues --dir . "$@"; }; i start 3` reads as the start
+// it runs. Defining a function runs nothing. Reading stops at a
+// definition whose end the reader cannot find, since what follows may be
+// a body that never runs, and at a function that calls itself.
 func IssuesStarts(command, cwd string) []TaskRef {
-	var out []TaskRef
-	known := true
-	for _, argv := range splitCommands(command) {
+	s := shell{cwd: cwd, known: true, funcs: map[string][][]string{}}
+	s.run(splitCommands(command), 0)
+	return s.out
+}
+
+// maxCalls is how deep the reader follows functions that call functions.
+const maxCalls = 4
+
+// shell is what the reader knows as it goes through a command's simple
+// commands: the directory they run in, whether that is still known, the
+// functions defined so far and the starts found. stopped says the reader
+// met something it cannot read past.
+type shell struct {
+	cwd     string
+	known   bool
+	funcs   map[string][][]string
+	out     []TaskRef
+	stopped bool
+}
+
+func (s *shell) run(cmds [][]string, depth int) {
+	for i := 0; i < len(cmds) && !s.stopped; i++ {
+		argv := cmds[i]
+		if name, n, ok := funcHead(argv); ok {
+			body, next, ok := funcBody(cmds, i, n)
+			if !ok {
+				s.stopped = true
+				return
+			}
+			s.funcs[name] = body
+			i = next - 1
+			continue
+		}
 		if opensGroup(argv[0]) {
-			known = false
+			s.known = false
 			continue
 		}
 		for len(argv) > 0 && isAssignment(argv[0]) {
@@ -118,45 +164,182 @@ func IssuesStarts(command, cwd string) []TaskRef {
 		if len(argv) == 0 {
 			continue
 		}
-		argv, wrapped, ok := unwrapCommand(argv)
+		argv, wrapped, program, ok := unwrapCommand(argv)
 		if !ok {
-			known = false
+			s.known = false
 			continue
 		}
 		if len(argv) == 0 {
 			continue
 		}
+		// A function stands in for a builtin or a program of its name.
+		if body, ok := s.funcs[argv[0]]; ok && !program {
+			if depth == maxCalls {
+				s.stopped = true
+				return
+			}
+			s.run(bind(body, argv[1:]), depth+1)
+			continue
+		}
 		switch argv[0] {
 		case "cd", "pushd":
-			if !wrapped && len(argv) == 2 && known && !strings.HasPrefix(argv[1], "-") && !strings.HasPrefix(argv[1], "+") {
-				cwd, known = resolveDir(cwd, argv[1])
-			} else {
-				known = false
+			switch {
+			case wrapped || !s.known:
+				s.known = false
+			case len(argv) == 1 && argv[0] == "cd":
+				s.cwd = "~"
+			case len(argv) == 2 && !strings.HasPrefix(argv[1], "-") && !strings.HasPrefix(argv[1], "+"):
+				s.cwd, s.known = resolveDir(s.cwd, argv[1])
+			default:
+				s.known = false
 			}
 			continue
 		case "popd":
-			known = false
+			s.known = false
 			continue
 		}
 		if !isIssues(argv[0]) && slices.ContainsFunc(argv, func(w string) bool {
 			return w == "cd" || w == "pushd" || w == "popd"
 		}) {
-			known = false
+			s.known = false
 			continue
 		}
-		if ref, ok := parseStart(argv, cwd, known); ok {
-			out = append(out, ref)
+		if ref, ok := parseStart(argv, s.cwd, s.known); ok {
+			s.out = append(s.out, ref)
+		}
+	}
+}
+
+// funcHead reads the head of a function definition off the front of a
+// command: `name() {`, `name () {`, `name(){` or `function name {`. It
+// gives the function's name and how many words the head takes, the
+// opening brace included. The name is the head's first word, and the
+// words after it are the parentheses and the brace and nothing else, so
+// an argument such as 'main(){' makes no definition of the command
+// before it.
+func funcHead(argv []string) (name string, n int, ok bool) {
+	keyword := len(argv) > 0 && argv[0] == "function"
+	if keyword {
+		argv = argv[1:]
+	}
+	var head strings.Builder
+	for i, w := range argv {
+		if i > 2 || i > 0 && w != "()" && w != "{" && w != "(){" {
+			break
+		}
+		head.WriteString(w)
+		h, brace := strings.CutSuffix(head.String(), "{")
+		if !brace {
+			continue
+		}
+		h, parens := strings.CutSuffix(h, "()")
+		if !isFuncName(h) || !parens && !keyword {
+			break
+		}
+		if keyword {
+			i++
+		}
+		return h, i + 1, true
+	}
+	return "", 0, false
+}
+
+func isFuncName(w string) bool {
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c == '-' || c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return w != ""
+}
+
+// funcBody is the body of the function whose head takes the first n words
+// of cmds[i], and the index of the command after its closing brace. The
+// brace closes the body as a command of its own, or as the last word of
+// one, which zsh allows. It reports false for a body the reader cannot
+// find the end of: one with a brace of its own inside, or with no closing
+// brace.
+func funcBody(cmds [][]string, i, n int) (body [][]string, next int, ok bool) {
+	for j := i; j < len(cmds); j++ {
+		cmd := cmds[j]
+		if j == i {
+			cmd = cmd[n:]
+		}
+		if len(cmd) == 0 {
+			continue
+		}
+		if j > i && cmd[0] == "}" {
+			return body, j + 1, true
+		}
+		closes := cmd[len(cmd)-1] == "}"
+		if closes {
+			cmd = cmd[:len(cmd)-1]
+		}
+		for _, w := range cmd {
+			if strings.HasPrefix(w, "{") || w == "}" {
+				return nil, 0, false
+			}
+		}
+		if len(cmd) > 0 {
+			body = append(body, cmd)
+		}
+		if closes {
+			return body, j + 1, true
+		}
+	}
+	return nil, 0, false
+}
+
+// bind is a function's body as one call runs it: "$@" gives way to the
+// call's arguments, and $1 to $9 each to the argument it names, or to
+// nothing when the call has too few.
+func bind(body [][]string, args []string) [][]string {
+	var out [][]string
+	for _, cmd := range body {
+		var argv []string
+		for _, w := range cmd {
+			switch p := param(w); {
+			case p == "@":
+				argv = append(argv, args...)
+			case len(p) == 1 && p[0] >= '1' && p[0] <= '9':
+				if n := int(p[0] - '0'); n <= len(args) {
+					argv = append(argv, args[n-1])
+				}
+			default:
+				argv = append(argv, w)
+			}
+		}
+		if len(argv) > 0 {
+			out = append(out, argv)
 		}
 	}
 	return out
 }
 
+// param is the parameter a word expands and nothing else, as $@ or ${1}
+// do: "@" or "1" there, and "" for any other word.
+func param(w string) string {
+	name, ok := strings.CutPrefix(w, "$")
+	if !ok {
+		return ""
+	}
+	if inner, braced := strings.CutPrefix(name, "{"); braced {
+		if name, ok = strings.CutSuffix(inner, "}"); !ok {
+			return ""
+		}
+	}
+	return name
+}
+
 // unwrapCommand strips the control keywords and wrappers off the front of
 // a simple command. wrapped says one was there, so a `cd` that follows may
-// not run, or not last. It reports false when the command may change the
-// directory in a way the reader cannot follow: a loop, case or function
-// head, eval, source, or a wrapper in front of anything but `issues`.
-func unwrapCommand(argv []string) (rest []string, wrapped, ok bool) {
+// not run, or not last, and program that it was a wrapper, which runs the
+// program of that name and never a function. It reports false when the
+// command may change the directory in a way the reader cannot follow: a
+// loop, case or function head, eval, source, or a wrapper in front of
+// anything but `issues`.
+func unwrapCommand(argv []string) (rest []string, wrapped, program, ok bool) {
 	for len(argv) > 0 {
 		switch argv[0] {
 		case "if", "then", "else", "elif", "do", "!":
@@ -164,15 +347,15 @@ func unwrapCommand(argv []string) (rest []string, wrapped, ok bool) {
 			continue
 		case "command", "builtin", "exec":
 			if len(argv) > 1 && isIssues(argv[1]) {
-				return argv[1:], true, true
+				return argv[1:], true, true, true
 			}
-			return nil, true, false
+			return nil, true, true, false
 		case "for", "while", "until", "case", "select", "function", "eval", "source", ".":
-			return nil, true, false
+			return nil, true, false, false
 		}
 		break
 	}
-	return argv, wrapped, true
+	return argv, wrapped, false, true
 }
 
 func isIssues(w string) bool { return w == "issues" || strings.HasSuffix(w, "/issues") }
@@ -197,24 +380,59 @@ func isAssignment(w string) bool {
 	return true
 }
 
-// opaqueWord reports whether the reader cannot know what a word expands to.
-func opaqueWord(w string) bool {
-	return strings.HasPrefix(w, "~") || strings.ContainsAny(w, "$`")
-}
-
-// resolveDir makes dir absolute against cwd. It reports false for a dir the
-// reader cannot expand (~, $VAR, substitutions, empty) and for a relative dir
-// when cwd is not an absolute path to resolve it against.
+// resolveDir makes dir a rooted path against cwd: an absolute one, or one
+// under the user's home, written with a leading ~. It reports false for a
+// dir the reader cannot expand (~user, $VAR, substitutions, empty), for a
+// relative dir when cwd is not rooted to resolve it against, and for one
+// that climbs out of ~.
 func resolveDir(cwd, dir string) (string, bool) {
 	switch {
-	case dir == "" || opaqueWord(dir):
+	case dir == "" || strings.ContainsAny(dir, "$`"):
+		return "", false
+	case underHome(dir):
+		return cleanHome(dir)
+	case strings.HasPrefix(dir, "~"):
 		return "", false
 	case filepath.IsAbs(dir):
 		return filepath.Clean(dir), true
-	case cwd == "" || !filepath.IsAbs(cwd):
-		return "", false
+	case filepath.IsAbs(cwd):
+		return filepath.Join(cwd, dir), true
+	case underHome(cwd):
+		return cleanHome(cwd + "/" + dir)
 	}
-	return filepath.Join(cwd, dir), true
+	return "", false
+}
+
+// underHome says whether a directory is written from the user's home.
+func underHome(dir string) bool { return dir == "~" || strings.HasPrefix(dir, "~/") }
+
+// rooted says whether a directory is absolute or written from ~.
+func rooted(dir string) bool { return filepath.IsAbs(dir) || underHome(dir) }
+
+// cleanHome cleans a path written from ~. It reports false for one that
+// climbs out of the home, which only whoever knows the home could follow.
+func cleanHome(dir string) (string, bool) {
+	if d := filepath.Clean(dir); underHome(d) {
+		return d, true
+	}
+	return "", false
+}
+
+// HomeDirs is refs with each directory written from ~ put under user, the
+// user's home. With no home to put it under, such a directory is unknown
+// and its ref keeps none.
+func HomeDirs(refs []TaskRef, user string) []TaskRef {
+	out := slices.Clone(refs)
+	for i, r := range out {
+		switch {
+		case !underHome(r.Dir):
+		case filepath.IsAbs(user):
+			out[i].Dir = filepath.Join(user, r.Dir[1:])
+		default:
+			out[i].Dir = ""
+		}
+	}
+	return out
 }
 
 // flagValue reports whether a flag takes a value, and if it is written
@@ -310,17 +528,14 @@ func parseStart(argv []string, cwd string, cwdKnown bool) (TaskRef, bool) {
 		return TaskRef{}, false
 	}
 	ref := TaskRef{Project: project, ID: id}
+	if !cwdKnown {
+		cwd = ""
+	}
 	switch {
 	case dirSet:
-		d, ok := resolveDir(cwd, dir)
-		if !ok || !cwdKnown && !filepath.IsAbs(dir) {
-			return TaskRef{}, false
-		}
-		ref.Dir = d
-	case cwdKnown:
+		ref.Dir, _ = resolveDir(cwd, dir)
+	case rooted(cwd):
 		ref.Dir = cwd
-	default:
-		return TaskRef{}, false
 	}
 	return ref, true
 }
