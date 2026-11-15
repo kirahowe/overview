@@ -194,6 +194,51 @@ func TestPropLiveState(t *testing.T) {
 	})
 }
 
+// A limit only ever turns a session blocked, never working or idle, and
+// leaves a working one and any reason already given alone.
+func TestPropLimited(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+		moment := func(label string) time.Time {
+			if rapid.Bool().Draw(t, label+"-zero") {
+				return time.Time{}
+			}
+			return base.Add(time.Duration(rapid.IntRange(0, 100).Draw(t, label)) * time.Minute)
+		}
+		st := rapid.SampledFrom([]State{Working, Blocked, Idle}).Draw(t, "state")
+		since := moment("since")
+		reason := ""
+		if st == Blocked {
+			reason = rapid.SampledFrom([]string{"", "Bash"}).Draw(t, "reason")
+		}
+		var lim Limit
+		if rapid.Bool().Draw(t, "limit") {
+			lim = Limit{Text: "out", At: base.Add(time.Minute), Resets: moment("resets")}
+		}
+		now := moment("now")
+		got, at, why := limited(st, since, reason, lim, now)
+		switch {
+		case got != st && !(st == Idle && got == Blocked):
+			t.Fatalf("a limit turned %s into %s", st, got)
+		case st == Working && (at != since || why != reason):
+			t.Fatal("a working session changed")
+		case reason != "" && why != reason:
+			t.Fatalf("reason %q replaced by %q", reason, why)
+		case got == Blocked && why == "":
+			if reason != "" || lim.Text != "" {
+				t.Fatal("a block lost its reason")
+			}
+		case got != Blocked && why != "":
+			t.Fatalf("reason %q on a %s session", why, got)
+		case !at.Equal(since) && !at.Equal(lim.At):
+			t.Fatalf("since %v is neither the state's %v nor the limit's %v", at, since, lim.At)
+		}
+		if st == Idle && got == Blocked != lim.Active(now) {
+			t.Fatalf("an idle session %s with the limit active=%v", got, lim.Active(now))
+		}
+	})
+}
+
 func TestPropAsking(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		r := Row{

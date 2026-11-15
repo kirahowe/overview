@@ -24,6 +24,24 @@ type Facts struct {
 	Modified time.Time
 	// Links are the issues the session took on, oldest first.
 	Links []TaskRef
+	// Limit is set while the session's last turn ended on Claude Code
+	// refusing it for being out of usage.
+	Limit Limit
+}
+
+// Limit is a turn that ended because its account was out of usage: Claude
+// Code's message saying so, when it said it, and when the usage resets.
+// The zero Limit is no limit.
+type Limit struct {
+	Text   string
+	At     time.Time
+	Resets time.Time
+}
+
+// Active says whether the limit still holds at now. One with no reset
+// time holds until something else is said.
+func (l Limit) Active(now time.Time) bool {
+	return l.Text != "" && (l.Resets.IsZero() || now.Before(l.Resets))
 }
 
 // Transcripts is an index of transcripts. For each file it remembers how
@@ -135,7 +153,7 @@ func (t *Transcripts) Facts(path string) (Facts, bool) {
 	return Facts{
 		Title: f.title, LastPrompt: f.lastPrompt,
 		LastReply: f.reply, ReplyAt: f.replyAt,
-		Modified: mod, Links: FoldTasks(links),
+		Modified: mod, Links: FoldTasks(links), Limit: f.limit,
 	}, true
 }
 
@@ -231,6 +249,7 @@ type folded struct {
 	lastPrompt string
 	reply      string
 	replyAt    time.Time
+	limit      Limit
 	links      []TaskRef // in the order the results arrived, timed by them
 	pending    map[string][]TaskRef
 }
@@ -256,7 +275,19 @@ type tline struct {
 	Message     struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	// APIError names why Claude Code ended a turn without the model, as
+	// usage_limit_reached on the message it writes when usage runs out.
+	APIError       string `json:"apiError"`
+	APIErrorParams struct {
+		RateLimitInfo struct {
+			ResetsAt int64 `json:"resetsAt"` // unix seconds
+		} `json:"rate_limit_info"`
+	} `json:"apiErrorParams"`
 }
+
+// usageLimit is the error Claude Code records on a turn it refused for
+// want of usage.
+const usageLimit = "usage_limit_reached"
 
 type tblock struct {
 	Type      string `json:"type"`
@@ -340,6 +371,17 @@ func (f *folded) line(b []byte) {
 	}
 	if e.IsSidechain || e.IsMeta {
 		return
+	}
+	// The limit holds until the session says anything else. A prompt
+	// alone does not lift it: one sent while out of usage is refused too.
+	if e.Type == "assistant" {
+		f.limit = Limit{}
+		if e.APIError == usageLimit {
+			f.limit = Limit{Text: clip(prose, 200), At: at}
+			if r := e.APIErrorParams.RateLimitInfo.ResetsAt; r > 0 {
+				f.limit.Resets = time.Unix(r, 0)
+			}
+		}
 	}
 	switch {
 	case prose == "":

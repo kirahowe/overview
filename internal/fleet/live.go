@@ -23,6 +23,9 @@ type Live struct {
 	SessionID string `json:"sessionId"`
 	Name      string `json:"name"`
 	Status    string `json:"status"`
+	// WaitingFor is what a session whose status is waiting waits on, such
+	// as "dialog open" while a prompt or a menu waits on an answer.
+	WaitingFor string `json:"waitingFor"`
 	// BgState is Claude Code's own working, blocked or idle for a background
 	// session. Interactive sessions leave it empty.
 	BgState string `json:"state"`
@@ -108,6 +111,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 		return nil, err
 	}
 	recorded := h.Sessions()
+	now := time.Now()
 	rows := make([]Row, 0, len(live))
 	var paths []string
 	for _, l := range live {
@@ -123,6 +127,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 		if f, ok := t.Facts(path); ok {
 			r.Title, r.LastPrompt, r.Tasks = f.Title, f.LastPrompt, HomeDirs(f.Links, h.User)
 			r.LastReply, r.LastReplyAt = f.LastReply, f.ReplyAt
+			r.State, r.Since, r.Reason = limited(r.State, r.Since, r.Reason, f.Limit, now)
 			if r.Since.IsZero() {
 				r.Since = f.Modified
 			}
@@ -145,8 +150,10 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 	return rows, nil
 }
 
-// liveState settles a session's state from two sources. Claude Code's busy or
-// idle is current but coarse. The hook record knows about a pending prompt,
+// liveState settles a session's state from two sources. Claude Code's busy,
+// waiting or idle is current but coarse: waiting means a dialog, such as a
+// permission prompt or the menu shown when usage runs out, waits on an
+// answer. The hook record knows about a pending prompt,
 // but it goes stale when a turn is interrupted, because no Stop hook fires
 // then.
 func liveState(l Live, rec Session) (State, time.Time, string) {
@@ -154,7 +161,7 @@ func liveState(l Live, rec Session) (State, time.Time, string) {
 	switch {
 	case rec.State == Blocked:
 		return Blocked, rec.Since, rec.Reason
-	case l.BgState == "blocked":
+	case l.BgState == "blocked", l.Status == "waiting":
 		return Blocked, time.Time{}, ""
 	case busy && rec.State == Working:
 		return Working, rec.Since, ""
@@ -165,6 +172,25 @@ func liveState(l Live, rec Session) (State, time.Time, string) {
 	default:
 		return Idle, time.Time{}, ""
 	}
+}
+
+// limited folds a usage limit into a session's state. A session out of
+// usage stops whether or not Claude Code still shows the menu that says
+// so, so an idle one is blocked until the limit resets, and a blocked one
+// is blocked by the limit. A working one has got past it.
+func limited(st State, since time.Time, reason string, lim Limit, now time.Time) (State, time.Time, string) {
+	switch {
+	case lim.Text == "" || st == Working:
+		return st, since, reason
+	case st == Blocked && reason == "":
+		if since.IsZero() {
+			since = lim.At
+		}
+		return Blocked, since, lim.Text
+	case st == Idle && lim.Active(now):
+		return Blocked, lim.At, lim.Text
+	}
+	return st, since, reason
 }
 
 // Asking reports whether an idle session ended its last reply with a

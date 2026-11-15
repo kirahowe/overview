@@ -430,6 +430,7 @@ func TestLiveStatePrecedence(t *testing.T) {
 		{"recorded block beats busy", Live{Status: "busy"}, Session{State: Blocked, Since: at, Reason: "Bash"}, Blocked, at, "Bash"},
 		{"recorded block beats idle", Live{Status: "idle", BgState: "idle"}, Session{State: Blocked, Since: at, Reason: "r"}, Blocked, at, "r"},
 		{"Claude Code's block", Live{Status: "idle", BgState: "blocked"}, Session{State: Idle, Since: at}, Blocked, time.Time{}, ""},
+		{"a dialog waiting on an answer", Live{Status: "waiting", WaitingFor: "dialog open"}, Session{State: Working, Since: at}, Blocked, time.Time{}, ""},
 		{"busy with a working record", Live{Status: "busy"}, Session{State: Working, Since: at}, Working, at, ""},
 		{"busy with an idle record", Live{Status: "busy"}, Session{State: Idle, Since: at}, Working, time.Time{}, ""},
 		{"no status counts as busy", Live{}, Session{}, Working, time.Time{}, ""},
@@ -440,6 +441,40 @@ func TestLiveStatePrecedence(t *testing.T) {
 		st, since, reason := liveState(c.live, c.rec)
 		if st != c.state || !since.Equal(c.since) || reason != c.reason {
 			t.Errorf("%s: got %s %v %q, want %s %v %q", c.name, st, since, reason, c.state, c.since, c.reason)
+		}
+	}
+}
+
+// limited lets a usage limit block a session that is not working, and
+// name the limit as the reason for a block that has none of its own.
+func TestLimited(t *testing.T) {
+	at := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
+	hit := at.Add(time.Minute)
+	now := at.Add(time.Hour)
+	lim := Limit{Text: "out", At: hit, Resets: now.Add(time.Hour)}
+	spent := Limit{Text: "out", At: hit, Resets: now.Add(-time.Second)}
+	for _, c := range []struct {
+		name   string
+		st     State
+		since  time.Time
+		reason string
+		lim    Limit
+		state  State
+		at     time.Time
+		why    string
+	}{
+		{"no limit", Idle, at, "", Limit{}, Idle, at, ""},
+		{"working got past it", Working, at, "", lim, Working, at, ""},
+		{"idle while it holds", Idle, at, "", lim, Blocked, hit, "out"},
+		{"idle after it reset", Idle, at, "", spent, Idle, at, ""},
+		{"idle with no reset time", Idle, at, "", Limit{Text: "out", At: hit}, Blocked, hit, "out"},
+		{"a block with no reason", Blocked, time.Time{}, "", lim, Blocked, hit, "out"},
+		{"a block keeps its time", Blocked, at, "", spent, Blocked, at, "out"},
+		{"a block keeps its reason", Blocked, at, "Bash", lim, Blocked, at, "Bash"},
+	} {
+		st, since, why := limited(c.st, c.since, c.reason, c.lim, now)
+		if st != c.state || !since.Equal(c.at) || why != c.why {
+			t.Errorf("%s: got %s %v %q, want %s %v %q", c.name, st, since, why, c.state, c.at, c.why)
 		}
 	}
 }

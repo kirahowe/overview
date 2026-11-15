@@ -48,6 +48,14 @@ func reply(at, text string) string {
 	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":%q}]}}`, at, text)
 }
 
+// limitHit is the line Claude Code writes when it refuses a turn because
+// the account is out of usage, cut to the fields that matter here.
+func limitHit(at string, resets int64) string {
+	return fmt.Sprintf(`{"parentUuid":"p","isSidechain":false,"type":"assistant","timestamp":%q,"message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"You've hit your Fable limit · resets Nov 17 at 3pm (America/Halifax)"}]},"apiError":"usage_limit_reached","apiErrorParams":{"rate_limit_info":{"status":"rejected","resetsAt":%d,"rateLimitType":"seven_day_overage_included"}},"error":"rate_limit","isApiErrorMessage":true}`, at, resets)
+}
+
+const limitText = "You've hit your Fable limit · resets Nov 17 at 3pm (America/Halifax)"
+
 func ts(s string) time.Time {
 	at, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
@@ -112,6 +120,32 @@ func TestANewPromptClearsTheReplyAndSidechainsAndMetaDoNot(t *testing.T) {
 	appendLines(t, path, userPrompt("2026-10-23T10:01:00Z", "/w", "and then?"))
 	if f, _ := idx.Facts(path); f.LastReply != "" || !f.ReplyAt.IsZero() {
 		t.Fatalf("a new prompt left the reply %q", f.LastReply)
+	}
+}
+
+// A prompt sent while out of usage is refused too, so only something the
+// session says lifts the limit.
+func TestAUsageLimitHoldsUntilTheSessionSaysSomethingElse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	writeLines(t, path,
+		userPrompt("2026-11-15T16:19:20Z", "/w", "go on"),
+		limitHit("2026-11-15T16:19:24Z", 1794942000),
+	)
+	idx := NewTranscripts()
+	want := Limit{Text: limitText, At: ts("2026-11-15T16:19:24Z"), Resets: time.Unix(1794942000, 0)}
+	if f, _ := idx.Facts(path); f.Limit != want {
+		t.Fatalf("limit %+v, want %+v", f.Limit, want)
+	}
+	appendLines(t, path,
+		userPrompt("2026-11-15T16:30:00Z", "/w", "and now?"),
+		`{"type":"assistant","isSidechain":true,"timestamp":"2026-11-15T16:30:01Z","message":{"content":[{"type":"text","text":"agent chatter"}]}}`,
+	)
+	if f, _ := idx.Facts(path); f.Limit != want {
+		t.Fatalf("a prompt or a subagent lifted the limit: %+v", f.Limit)
+	}
+	appendLines(t, path, reply("2026-11-17T19:00:05Z", "Back at it."))
+	if f, _ := idx.Facts(path); f.Limit != (Limit{}) {
+		t.Fatalf("a reply left the limit %+v", f.Limit)
 	}
 }
 
@@ -243,6 +277,43 @@ echo '[{"pid":1,"cwd":"/w/a","kind":"interactive","startedAt":1000,"sessionId":"
 	}
 	if rows[1].Tasks != nil || rows[1].Title != "" || !rows[1].Since.Equal(time.UnixMilli(2000)) {
 		t.Fatalf("a session with no transcript: %+v", rows[1])
+	}
+}
+
+// A session out of usage shows as blocked by the limit, whether Claude
+// Code still holds its menu open or it was told to stop and wait, until
+// the limit resets.
+func TestRowsShowASessionOutOfUsageAsBlocked(t *testing.T) {
+	home := Home{Dir: t.TempDir(), User: "/u"}
+	future := time.Now().Add(48 * time.Hour).Unix()
+	past := time.Now().Add(-time.Hour).Unix()
+	for id, resets := range map[string]int64{"menu": future, "stopped": future, "reset": past} {
+		writeLines(t, filepath.Join(home.Dir, "projects", "-w", id+".jsonl"),
+			userPrompt("2026-11-15T16:19:20Z", "/w", "go on"),
+			limitHit("2026-11-15T16:19:24Z", resets),
+		)
+	}
+	script := filepath.Join(t.TempDir(), "claude")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '[{"pid":1,"cwd":"/w","kind":"interactive","startedAt":1000,"sessionId":"menu","name":"a","status":"waiting","waitingFor":"dialog open"},{"pid":2,"cwd":"/w","kind":"interactive","startedAt":1000,"sessionId":"stopped","name":"b","status":"idle"},{"pid":3,"cwd":"/w","kind":"interactive","startedAt":1000,"sessionId":"reset","name":"c","status":"idle"}]'
+`), 0o755)
+	home.Claude = script
+	rows, err := home.Rows(NewTranscripts())
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("rows %+v, %v", rows, err)
+	}
+	at := ts("2026-11-15T16:19:24Z")
+	for i, want := range []struct {
+		state  State
+		reason string
+	}{{Blocked, limitText}, {Blocked, limitText}, {Idle, ""}} {
+		r := rows[i]
+		if r.State != want.state || r.Reason != want.reason || r.WaitingFor != map[int]string{0: "dialog open"}[i] {
+			t.Errorf("%s: %s %q, want %s %q", r.SessionID, r.State, r.Reason, want.state, want.reason)
+		}
+		if want.state == Blocked && !r.Since.Equal(at) {
+			t.Errorf("%s: blocked since %v, want the limit's %v", r.SessionID, r.Since, at)
+		}
 	}
 }
 

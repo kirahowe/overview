@@ -28,9 +28,10 @@ sessions never appear together.
 Three sources feed the view. None of them needs a model.
 
 - `claude agents --json` says which sessions are running and whether each is
-  busy or idle.
+  busy, idle or waiting on a dialog.
 - Each session's transcript says what it has said and done: its title, last
-  prompt and last reply, and the issues it took on. overview reads a
+  prompt and last reply, the issues it took on, and whether its last turn
+  was refused because the account ran out of usage. overview reads a
   transcript once and then only the lines appended since, and reads a
   session's subagent transcripts the same way.
 - A hook records the one thing neither shows, that a session is blocked on
@@ -39,8 +40,11 @@ Three sources feed the view. None of them needs a model.
 
 A session that has not loaded the hook still appears, with its title,
 prompts and issues. A background session still shows as blocked, since
-Claude Code reports that itself. An interactive session, one running in a
-pane, shows only busy or idle, so a permission prompt looks like work.
+Claude Code reports that itself, and so does an interactive one with a
+dialog open, such as a permission prompt or the menu Claude Code shows when
+usage runs out. A session out of usage shows as blocked with Claude Code's
+message about the limit as the reason. It stays blocked after you tell it
+to stop and wait, until the limit resets or it says something else.
 When interactive sessions are listed and none reports through the hook,
 the list's title says "hook not installed".
 
