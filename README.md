@@ -30,16 +30,15 @@ Three sources feed the view. None of them needs a model.
 - `claude agents --json` says which sessions are running and whether each is
   busy, idle or waiting on a dialog.
 - Each session's transcript says what it has said and done: its title, last
-  prompt and last reply, the issues it took on, and whether its last turn
-  was refused because the account ran out of usage. overview reads a
-  transcript once and then only the lines appended since, and reads a
-  session's subagent transcripts the same way.
+  prompt and last reply, and whether its last turn was refused because the
+  account ran out of usage. overview reads a transcript once and then only
+  the lines appended since.
 - A hook records the one thing neither shows, that a session is blocked on
   a permission prompt. Each session has one small file in
   `<home>/overview/sessions/`.
 
-A session that has not loaded the hook still appears, with its title,
-prompts and issues. A background session still shows as blocked, since
+A session that has not loaded the hook still appears, with its title and
+prompts. A background session still shows as blocked, since
 Claude Code reports that itself, and so does an interactive one with a
 dialog open, such as a permission prompt or the menu Claude Code shows when
 usage runs out. A session out of usage shows as blocked with Claude Code's
@@ -88,20 +87,20 @@ The list's title is the home's name, then how many sessions need you
 (`!`), how many work (`●`) and how many are idle (`○`). In the list
 each project has a section, headed by a rule with its name. The rule ends
 with counts that always name their unit: a project that tracks its
-issues counts the issues that wait on you, or its open issues when none
-waits, and then its sessions and terminals, as `2 waiting issues · 1
-session`. One that does not track them counts only its
+issues counts the issues in review, which wait on you, or its open
+issues when none is in review, and then its sessions and terminals, as
+`2 to review · 1 session`. One that does not track them counts only its
 sessions and terminals, and a pinned project with nothing in it says
 `no sessions`. A count shows only for a kind the project has, so it
 never reads `no` beside another. A search keeps every count and says how
-many of each it shows, zero included, as `0 of 2 waiting issues · 1 of 2 sessions`,
+many of each it shows, zero included, as `0 of 4 open issues · 1 of 2 sessions`,
 and the footer counts the matches,
 each session once even when it is listed twice. When the pane is narrow
 the counts give way before the name: first all but the first count go,
 then its unit, as `1/3`, then the count itself. The rule is an entry
 the cursor reaches with `j`, `k` and a click, and on it `c` and `t`
-start a session or a terminal at the project's root on no task, `s`
-picks a task, and `o` opens the project's cockpit, whose cards show
+start a session or a terminal at the project's root, `s` picks an
+issue to start a session on, and `o` opens the project's cockpit, whose cards show
 beside the list. The cursor lands on a rule only when you move it there
 or nothing else in the project is left. A project is
 the nearest parent directory with a `.jj` or `.git` in it, or the session's
@@ -115,8 +114,7 @@ and `○` when idle. A session needs you when it is blocked, or when it is
 idle and its last reply ends with a question. The project's terminals come
 after its sessions, marked `$`, and a project you pinned is listed even
 with nothing in it. A session that another app started, such as an editor
-plugin's chat panel, has no terminal. Unless it works on a task, it goes
-in a section of its own, "in other apps", dimmed and named after the app
+plugin's chat panel, has no terminal. It goes in a section of its own, "in other apps", dimmed and named after the app
 that runs it. When the entry under the cursor goes away, the cursor moves
 to the one after it in its project, or to the one before it when it was
 last, and it skips the projects' rules. When nothing it was beside is
@@ -128,14 +126,11 @@ The agents are a panel of their own, under the list. They hold every
 session in the list once more, in order of priority: those that need you
 first, longest wait first, then the working ones, then the idle ones. A
 session there acts exactly as it does in its project. Its row ends with
-where the list has it: the project, or the app that runs it, and after
-that the tasks it holds, as `overview #6`. The agents sit under no
-project's heading, so a number alone would not say whose task it is. A long project path keeps
-its end, and when not even that fits, the number stays without the
-project. In a narrow pane a row keeps ten cells of its name: a session
-drops its age, then its review badge's words, then the badge, then its
-tasks, then its state word before its name is cut further, and an issue
-drops its priority and then its status.
+where the list has it: the project, or the app that runs it. A long
+project path keeps its end, and goes when not even that fits. In a
+narrow pane a row keeps ten cells of its name: a session drops its age,
+then its review badge's words, then the badge, then its state word
+before its name is cut further.
 
 The agents' panel is a tmux pane, the foot of the list's column: as wide
 as the list, with a line for each session and one for the footer, which
@@ -159,13 +154,11 @@ whether to stop a session still show in the list's pane and the footer.
 The session under the cursor is marked on the other side as well. Its
 row there has the cursor's background and a thinner bar, `▎`, in grey,
 and that side scrolls to show it. So with the cursor among the agents the
-list shows which project and task the session is in, and with the cursor
-in the list the agents show where it stands in their order. The bar is in
-the accent colour only on the cursor's own row, in the pane that has the
-keyboard. A session listed under two tasks is marked under both. With the
-cursor on a task, the rows marked are those of the session that stands
-for it, the one shown beside the list. A terminal and a project's rule
-are listed once, so nothing else is marked for them.
+list shows which project the session is in, and with the cursor in the
+list the agents show where it stands in their order. The bar is in the
+accent colour only on the cursor's own row, in the pane that has the
+keyboard. A terminal and a project's rule are listed once, so nothing
+else is marked for them.
 
 While the cockpit or the task picker is open, the list is zoomed over the
 agents' pane and draws the agents itself, as its last lines under a rule
@@ -183,122 +176,81 @@ always keep their room, a search keeps its input, and a long path is
 cut from the left.
 
 A project that tracks its work with the `issues` tool, in a `.issues`
-directory, shows which task each session is on. A session's row ends
-with its tasks: the issues in progress that it is linked to, as `#14
-#19`, the first two and a count of any more, with the whole reference,
-such as `site#3`, for another project's issue. A session is listed once
-however many tasks it has. It is linked to an issue when a prompt, the
-first or any later one, starts with `Work on <project>#<n>`, or when it
-or one of its subagents runs `issues start <n>` through the Bash tool
-and the call did not fail. A subagent's link counts for its session, and
-overview lists no subagents of its own: Claude Code shows them. overview reads both from the transcripts, so the links do not
-depend on the hook. It follows a `cd` in the command, `~` included, and
-a shell function the command defines around `issues`. A start whose
-directory it cannot read, such as `issues --dir $W start <n>`, counts for
-the session's own project when issue `<n>` is in progress, in review or
-blocked there.
+directory, counts its issues in review in its heading, and each of them
+counts as needing you in the list's title. overview does not join issues
+to sessions. Which session works on which issue depends on how each
+agent and workflow is set up, so the list shows sessions, and the
+cockpit and the task picker show issues. A session started on an issue
+from overview opens with the prompt `Work on <project>#<n>: <title>`,
+and its title usually names the issue after that.
 
-After a project's sessions and terminals come the issues that wait on
-you, one row each with the issue's number, title, status and priority:
-those in review, then the blocked ones, then those in progress that no
-live session is linked to, marked `stalled`, and by priority within
-each. Each counts as needing you. An issue that a live session has as a
-task is not listed on a row of its own, and a ready issue, one in the
-inbox and a closed one are not listed at all. The issue's status says
-who it waits on, so a session that puts its issue in review drops the
-label, and the issue moves to the rows that wait on you. overview reads a project's issues with the `issues` binary, and reads
-them again when a file in `.issues` changes, and retries a failed read
-after a few seconds. The list never waits
-for a read, and a run that takes more than three seconds is stopped.
-When the last read of a project's issues failed, its heading says
-`issues failed` where it would count the issues, and its cockpit's issues
-card says why. Without the binary or a `.issues`, a project's sessions are listed as
-above.
+overview reads a project's issues with the `issues` binary, reads them
+again when a file in `.issues` changes, and retries a failed read after a
+few seconds. The list never waits for a read, and a run that takes more
+than three seconds is stopped. When the last read of a project's issues
+failed, its heading says `issues failed` where it would count the
+issues, and its cockpit's issues card says why. Without the binary or a
+`.issues`, a project's sessions are listed as above.
 
-`o` opens the cockpit for the selected entry: for an issue, the issue's;
-for a session or a terminal with exactly one task, that task's; and
-otherwise its project's. The list's pane
+`o` opens the cockpit for the selected entry's project. The list's pane
 zooms to fill its window, so the session beside it keeps running out of
 sight and comes back as it was. The list stays down the left at its
-usual width, and cards about the task or project take the rest.
-When the window is too narrow for both, only the cards show. `o` closes
-the cockpit, and so does `esc`, once it has cleared any filter on the
-list. So does going to another pane, since tmux ends
-the zoom then. A pane of the window closing also ends tmux's zoom, but
-the cockpit stays open and zooms again; a list left alone in its window
-fills it without a zoom. While the cockpit is open the list stays in its window,
-and the cards follow the cursor. `enter`, `c`, `t` and `v` close it
-first, then do what they always do. The exception is `enter` on an
-issue that no session is linked to: the cockpit stays open and says how
-to start one. `s` replaces it with the task picker, which keeps
-the zoom, and `d` with the digests, which keep it too.
+usual width, and cards about the project take the rest. When the window
+is too narrow for both, only the cards show. `o` closes the cockpit, and
+so does `esc`, once it has cleared any filter on the list. So does going
+to another pane, since tmux ends the zoom then. A pane of the window
+closing also ends tmux's zoom, but the cockpit stays open and zooms
+again; a list left alone in its window fills it without a zoom. While
+the cockpit is open the list stays in its window, and the cards follow
+the cursor. `enter`, `c`, `t` and `v` close it first, then do what they
+always do. `s` replaces it with the task picker, which keeps the zoom,
+and `d` with the digests, which keep it too.
 
-A task's cockpit starts with a header: the issue's reference, title,
-status and priority, how long ago it was taken on, and the sessions
-linked to it and the terminals opened for it. Then come the issue's details from `issues
-show`, with all its acceptance criteria, those still to do first, and
-how many are done. The changes
-and the review sit side by side in a wide window. The changes are the
-files changed since the task was taken on, most changed first, and how
-many of them are still uncommitted. The review counts the open notes
-across the task's sessions and the replies waiting on you. Last
-are the project's other open issues: those in review, those in progress,
-the blocked ones, the ready ones by priority, and how many sit in the
-inbox. A
-project's cockpit shows its root and the kind of repository, its
-sessions and terminals, its uncommitted changes, and its issues. A card
-the window has no room for is left out, from the bottom up. The last card
+The cockpit shows the project's root and the kind of repository, its
+sessions and terminals, its uncommitted changes, most changed first, and
+its open issues: those in review, those in progress, the blocked ones,
+the ready ones by priority, and how many sit in the inbox. A card the
+window has no room for is left out, from the bottom up. The last card
 shown fills the rows that are left, cut short with a line that says how
 many more it has, or, with one row left, its rule alone saying `↓ 3 more
-issues`. The issues card lists every issue and comes last in both
-cockpits, so a long list scrolls with its cursor in the rows below the
-other cards.
+issues`. The issues card lists every issue and comes last, so a long
+list scrolls with its cursor in the rows below the other cards.
 
 The cockpit's issues card can take the keyboard, and the other cards only
 show. The header offers `enter` only when the footer does, with the same
-word, and `v` only when a live session is linked to the task. While the issues
-card has the keyboard, `enter` and `m` act on the issue under its cursor,
-so the header offers neither. `l` or the right arrow moves the keyboard from the list into the
-issues card while the window has room to show the card, and `h` or the
-left arrow moves it back. `tab` does either. There,
-`j` and `k` move between the issues. On an issue that a live session is
-linked to, `enter` moves the list's cursor to the issue's row, or to
-the session's when the issue has none, and the cockpit stays open on
-it. On any other issue, `enter` starts a session with the first prompt
-`Work on <project>#<n>: <title>`, as `c` does on an issue. That includes an issue in progress, in review or blocked
-whose sessions have all ended, so a paused task picks up again. The cockpit closes, and the new session shows beside the
-list with the keyboard in it.
+word. While the issues card has the keyboard, `enter` and `m` act on the
+issue under its cursor, so the header offers neither. `l` or the right
+arrow moves the keyboard from the list into the issues card while the
+window has room to show the card, and `h` or the left arrow moves it
+back. `tab` does either. There, `j` and `k` move between the issues, and
+`enter` starts a session with the first prompt `Work on <project>#<n>:
+<title>`, whatever the issue's status. The cockpit closes, and the new
+session shows beside the list with the keyboard in it.
 
-`m` gives an issue a verdict through the `issues` tool. It acts on the
-selected issue, or the task of a selected session or terminal that has
-exactly one, or on the issue under the cursor while the issues card has
-the keyboard. A box asks for the verdict first. On an
-issue in review, `a` approves it as done, `c` sends it back to ready and
-`r` rejects it, which drops it. On an issue in any other status, `a`
-marks it done and `r` drops it, and `c` is not offered. Any other key
-cancels. While the box is open, the footer lists its keys. The box then asks for a note for the issue's details log, which
-`enter` sends and `esc` abandons. A note is optional except when sending
-an issue back. In that case the cockpit closes and a new session starts on
-the issue, with the note under its opening prompt. A done or dropped issue
-leaves the list once the tracker is next read.
+`m` gives the issue under the issues card's cursor a verdict through the
+`issues` tool. A box asks for the verdict first. On an issue in review,
+`a` approves it as done, `c` sends it back to ready and `r` rejects it,
+which drops it. On an issue in any other status, `a` marks it done and
+`r` drops it, and `c` is not offered. Any other key cancels. While the
+box is open, the footer lists its keys. The box then asks for a note for
+the issue's details log, which `enter` sends and `esc` abandons. A note
+is optional except when sending an issue back. In that case the cockpit
+closes and a new session starts on the issue, with the note under its
+opening prompt. A done or dropped issue leaves the card once the tracker
+is next read.
 
 A project that does not track its tasks gets a card in the issues
 card's place. It says what the `issues` tool would add, and that
 `issues init` in the project's root starts it, or that the tool needs
 installing when overview has none. overview reads the changes with git
 or jj when the cockpit opens and when one of its sessions changes
-state. A task was taken on when the first of its sessions linked to it, or, for a session whose link has no time, when that session
-started. Once the cockpit has found the commit to count from, it keeps
-it while it is open: a session ending does not move it, and only a
-session that took the work on sooner moves it earlier. It reads an issue's details
-again only when a file in `.issues` changes.
+state.
 
 A terminal is a window in overview's tmux that runs no Claude session: a
 shell for a one-off command, or a dev server. `t` opens one at the root of
 the selected entry's project. Its row is named after what runs in it, such
 as `node`, or after the shell when nothing else does, and shows the
-directory it is in, after the number of the issue it was opened for, if
-any. A terminal belongs to the project it was opened for. One
+directory it is in. A terminal belongs to the project it was opened for. One
 that overview did not open, such as a window you made with `ctrl+b c`,
 belongs to the project of the directory its first pane is in.
 
@@ -372,15 +324,12 @@ In the list, `j`/`k` move, as far as its first and last entries: the
 agents have their own pane below it.
 `g` goes to the first entry under the top project's rule, and `G` to the
 last entry. `n` jumps to the next session
-that needs you or issue that waits on you, `N` to the previous one, and `/`
+that needs you, `N` to the previous one, and `/`
 searches. In the agents' pane the same keys move among the agents: `g`
 and `G` go to the first and last of them, and `n` and `N` to the next and
 previous session that needs you. Search looks at the project,
-title, last prompt and name, the app's name for a session in another
-app, and the reference, number and title of each of its tasks, ignoring
-case, so `#6` finds the session working on it. An issue that waits on
-you matches on its reference, such as `overview#6` or `#6`, its title
-and its project. Each space-separated word has to match one of
+title, last prompt and name, and the app's name for a session in another
+app, ignoring case. Each space-separated word has to match one of
 those fields, and a word never matches across two of them. The cursor
 moves to the first match, `up` and `down` step through the matches, and
 `esc` clears the search. `enter` (or `tab`, `l` or the right arrow) moves the keyboard into the
@@ -389,18 +338,10 @@ focus right instead, and in the cockpit's list they go into the issues
 card, where they do nothing more. On a background session, `enter` first attaches to it in a
 window of its own; the attach stays there for when you come back to it. On
 a session in another app, `enter` brings that app to the front, on the
-machine overview runs on; typed from another machine, it says so instead. On a
-an issue that waits on you, `enter` does what it does on the entry shown
-beside it: the session linked to the issue last that has a pane, so you
-can ask it about the work, or else a terminal opened for it, or else the
-first session. An issue that no session is linked to, such as one in
-review whose sessions have ended, shows its cockpit's cards beside the
-list, and `enter` opens the cockpit, with the keyboard still in the
-list.
+machine overview runs on; typed from another machine, it says so instead.
 While you are searching, `enter` acts on the selected match and clears the
 search. The footer names what `enter` does on the selected entry, in the
-list, in the cockpit and while searching: `type`, `attach`, `open app` or
-`cockpit`. Where `enter` would only say how to start something, the
+list, in the cockpit and while searching: `type`, `attach` or `open app`. Where `enter` would only say how to start something, the
 footer leaves it out. On a terminal, `enter` moves the keyboard into the pane right of
 the list, and of several splits there, the one you used last. `x` stops a
 background session or closes a terminal, and asks first; closing a
@@ -410,14 +351,10 @@ session in another app, close it in that app. `v` reviews the selected
 session's changes, as the next section describes. `c` starts a new session
 at the root of the selected entry's project, or where overview was started
 when the list is empty, shows it on the right and moves the keyboard into
-it. On an issue, or on a session or terminal with exactly one task, the
-new session's first prompt is `Work on <project>#<n>: <title>`, so it
-works on that issue. On the project's rule it has no prompt and works on
-no task. `t` does the same with a terminal, and a terminal opened that
-way shows the issue's number. `d` opens the digests, as described below, and `1` and `2` go to the list and the digests
+it, with no prompt. `t` does the same with a terminal. `d` opens the digests, as described below, and `1` and `2` go to the list and the digests
 directly. `D` writes a new digest from either.
 `r` refreshes the list now rather than waiting for the next tick. `o` opens the cockpit, and `m`
-gives an issue a verdict, as described above. `q` detaches, leaving the view and its
+in its issues card gives an issue a verdict, as described above. `q` detaches, leaving the view and its
 sessions running. No key quits the view, since it is the point of the
 app; running `overview` again restarts it in place when it needs to.
 `ctrl+c` is `q` in the list. In the search, the
@@ -457,17 +394,13 @@ over the details scroll them when they run long. When the window is too
 narrow for both, only the issues show. Ready issues
 come first, then the inbox, then those in review, in progress and
 blocked, and by priority within each. Each issue shows its number and
-title, its status and priority, and how many sessions work on it, with a
-blank line between issues. A title too long for one line wraps under
+title, its status and its priority, with a blank line between issues. A title too long for one line wraps under
 itself, so the whole of it shows.
 Typing words narrows the list as search does, on the issue's reference,
 such as `#6` or `overview#6`, and its title. `up` and `down`, or `ctrl+p`
-and `ctrl+n`, move. On an issue that a live session is linked to,
-`enter` moves the list's cursor to the issue's row, or the session's.
-On any other issue it starts a session at the project's root with the
-first prompt `Work on <project>#<n>: <title>`, as `c` does on an issue,
-and shows it beside
-the list. A click selects an issue, a double click acts on it, and `esc`
+and `ctrl+n`, move. `enter` starts a session at the project's root
+with the first prompt `Work on <project>#<n>: <title>`, and shows it
+beside the list. A click selects an issue, a double click acts on it, and `esc`
 closes the picker. Closing it ends the zoom, and so does going to
 another pane, which closes the picker too. In a project without
 `.issues`, `s` says how to start tracking its tasks.
@@ -665,8 +598,8 @@ go build -o bin/overview . && ln -sf "$PWD/bin/overview" ~/.local/bin/overview
 Then add the hook to the config directory's `settings.json`, beside any hooks
 already there, for each of `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 `Notification`, `Stop` and `SessionEnd`. It is what lets the view show an
-interactive session as blocked on a permission prompt. Titles, prompts
-and issue links come from the transcripts, and a background session's
+interactive session as blocked on a permission prompt. Titles and
+prompts come from the transcripts, and a background session's
 blocked state from Claude Code, so those work without it. Until a session
 has loaded it, the list's title says "hook not installed":
 

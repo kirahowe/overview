@@ -51,17 +51,9 @@ func TestTaskRows(t *testing.T) {
 		{"old", nil},
 	}
 	for _, c := range cases {
-		if got := rowIDs(taskRows(open, "app", counted(nil), c.query)); !slices.Equal(got, c.want) {
+		if got := rowIDs(taskRows(open, "app", c.query)); !slices.Equal(got, c.want) {
 			t.Errorf("%q: %v, want %v", c.query, got, c.want)
 		}
-	}
-	rs := taskRows(open, "app", counted(map[int]int{5: 2, 1: 1}), "")
-	counts := map[int]int{}
-	for _, r := range rs {
-		counts[r.issue.ID] = r.sessions
-	}
-	if counts[5] != 2 || counts[1] != 1 || counts[3] != 0 {
-		t.Fatalf("sessions %v", counts)
 	}
 }
 
@@ -86,7 +78,7 @@ func TestTaskListNotes(t *testing.T) {
 		{"rows", some, true, true, true, "", "", 1},
 	}
 	for _, c := range cases {
-		l := taskListOf("app", c.t.world(), c.tracked, c.reading, c.tool, counted(nil), c.query)
+		l := taskListOf("app", c.t.world(), c.tracked, c.reading, c.tool, c.query)
 		if l.note != c.note || len(l.rows) != c.rows {
 			t.Errorf("%s: note %q rows %d, want %q and %d", c.name, l.note, len(l.rows), c.note, c.rows)
 		}
@@ -106,11 +98,6 @@ func TestTaskOpens(t *testing.T) {
 	if open, _ := taskOpens("app", true, false, true); !open {
 		t.Error("a tracked project does not open")
 	}
-}
-
-// counted counts the sessions on an issue from n, by number.
-func counted(n map[int]int) func(issues.Issue) int {
-	return func(i issues.Issue) int { return n[i.ID] }
 }
 
 // pinnedTasksModel has /code/todo pinned, tracked and with nothing
@@ -219,25 +206,26 @@ func TestSOnAnUntrackedProjectOnlySays(t *testing.T) {
 	}
 }
 
-// enter on an issue that sessions already work on goes to the session
-// that holds it and starts nothing.
-func TestTaskPickerGoesToALiveTask(t *testing.T) {
+// enter on an issue already in progress starts a session on it like any
+// other: nothing joins an issue to the sessions that work on it, so the
+// picker has none to go to, and its footer always says enter starts.
+func TestTaskPickerStartsASessionOnAnyIssue(t *testing.T) {
 	f := newFakeMux()
-	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 9, Ref: "app#9", Title: "add threads", Status: issues.Ready, Priority: "p2"})
+	m := selectKey(t, taskModel(t, f), "s2")
 	m.issues = func(...string) ([]byte, error) { return nil, errors.New("not run") }
 	m = resized(t, m, 60, 30)
 	m = pressSettled(t, m, "s")
 	text := ansi.Strip(m.View())
-	if !strings.Contains(text, "in-progress · 1 session p1") {
-		t.Fatalf("no session count:\n%s", text)
+	if !strings.Contains(text, "#6 keep width") || strings.Contains(text, "session p1") {
+		t.Fatalf("the picker:\n%s", text)
 	}
 	m = pressSettled(t, m, typed("width")...)
-	if !strings.Contains(ansi.Strip(m.footer()), "enter go to") {
+	if !strings.Contains(ansi.Strip(m.footer()), "enter start") || strings.Contains(ansi.Strip(m.footer()), "go to") {
 		t.Fatalf("footer %q", ansi.Strip(m.footer()))
 	}
 	m = pressSettled(t, m, "enter")
-	if len(f.spawned) != 0 || m.taskPick.open || m.sel != "s1" {
-		t.Fatalf("spawned %+v, open %v, sel %s", f.spawned, m.taskPick.open, m.sel)
+	if len(f.spawned) != 1 || m.taskPick.open || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#6: keep width"}) {
+		t.Fatalf("spawned %+v, open %v", f.spawned, m.taskPick.open)
 	}
 }
 

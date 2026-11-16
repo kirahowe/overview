@@ -73,7 +73,7 @@ const (
 	cockpitMove   // n issues down the issues card, negative for up
 	cockpitPick   // start a task on the issue under the issues card's cursor
 	enterPanels   // put the client in tmux's panels mode, where the keys move the focus
-	markIssue     // open the verdict box for the selected task's issue, or the issues card's
+	markIssue     // open the verdict box for the issue under the issues card's cursor
 	verdictPick   // choose the verdict, text, in the box
 	verdictType   // add text to the verdict's note
 	verdictBack   // backspace in the note
@@ -279,8 +279,6 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 		return do(startTask)
 	case "o":
 		return do(toCockpit)
-	case "m":
-		return do(markIssue)
 	}
 	return nil
 }
@@ -289,8 +287,8 @@ func (m model) keyActions(msg tea.KeyMsg) []action {
 // cockpit is open, nil for the others: o closes it, and so does esc once
 // no filter is applied to the list, tab moves the keyboard between the
 // list and the issues card, and l and h move it in and out of the card,
-// which is right of the list. In that card the arrows move its cursor and
-// enter acts on its issue. The cockpit has no panels mode: it fills
+// which is right of the list. In that card the arrows move its cursor,
+// enter starts a session on its issue and m gives the issue a verdict. The cockpit has no panels mode: it fills
 // the window, so there is no panel to move to.
 func (m model) cockpitKeys(k string) []action {
 	switch k {
@@ -323,6 +321,8 @@ func (m model) cockpitKeys(k string) []action {
 		return doN(cockpitMove, -1)
 	case "enter":
 		return do(cockpitPick)
+	case "m":
+		return do(markIssue)
 	}
 	return nil
 }

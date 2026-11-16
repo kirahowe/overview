@@ -41,9 +41,6 @@ func TestParseShowFixture(t *testing.T) {
 	if err != nil || i.ID != 1 || !strings.HasPrefix(i.Details, "# Resume a session") {
 		t.Fatalf("got %+v, %v", i, err)
 	}
-	if c := Criteria(i.Details); len(c) == 0 || c[0].Done || !strings.Contains(c[0].Text, "in that session's own directory.") {
-		t.Errorf("criteria %+v", c)
-	}
 }
 
 func TestParseRejectsMalformed(t *testing.T) {
@@ -129,22 +126,6 @@ func TestProjectID(t *testing.T) {
 		if got, ok := ProjectID(c.in); got != c.want || ok != c.ok {
 			t.Errorf("ProjectID(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
 		}
-	}
-}
-
-func TestCriteria(t *testing.T) {
-	d := "# T\n\n## Context\n\n- [ ] not mine\n\n### acceptance CRITERIA\n\n- [ ] one\n      continues here\n- [x] two\n* [X] three\n\n- plain bullet\n- [ ]\n\n## Next\n\n- [ ] after\n"
-	want := []Criterion{{"one continues here", false}, {"two", true}, {"three", true}, {"", false}}
-	if got := Criteria(d); !reflect.DeepEqual(got, want) {
-		t.Errorf("got %+v, want %+v", got, want)
-	}
-	if got := Criteria("no headings\n- [ ] x"); got != nil {
-		t.Errorf("got %+v", got)
-	}
-	// A deeper heading stays inside the section; a same-level one ends it.
-	d = "## Acceptance criteria\n- [ ] a\n### Sub\n- [ ] b\n## Other\n- [ ] c\n"
-	if got := Criteria(d); len(got) != 2 {
-		t.Errorf("got %+v", got)
 	}
 }
 
@@ -275,64 +256,6 @@ func TestPropParseListRoundTrips(t *testing.T) {
 			if !reflect.DeepEqual(a, b) {
 				t.Fatalf("got %+v, want %+v", b, a)
 			}
-		}
-	})
-}
-
-// Criteria never panics, and returns no more items than the text has
-// checklist lines, each made of words from the text.
-func TestPropCriteriaComeFromChecklistLines(t *testing.T) {
-	lines := rapid.OneOf(
-		rapid.StringMatching(`#{1,3} (Acceptance criteria|Other)`),
-		rapid.StringMatching(`[ ]{0,4}[-*+] \[[ xX]\] [a-z ]{0,12}`),
-		rapid.StringMatching(`[ ]{0,6}[a-z ]{0,12}`),
-		rapid.String(),
-	)
-	rapid.Check(t, func(t *rapid.T) {
-		text := strings.Join(rapid.SliceOf(lines).Draw(t, "lines"), "\n")
-		items := 0
-		for _, l := range strings.Split(text, "\n") {
-			if itemRe.MatchString(strings.TrimRight(l, "\r")) {
-				items++
-			}
-		}
-		got := Criteria(text)
-		if len(got) > items {
-			t.Fatalf("%d criteria from %d checklist lines in %q", len(got), items, text)
-		}
-		for _, c := range got {
-			for _, w := range strings.Fields(c.Text) {
-				if !strings.Contains(text, w) {
-					t.Fatalf("word %q is not in the text", w)
-				}
-			}
-		}
-	})
-}
-
-// A done mark and a text written into a section come back as written.
-func TestPropCriteriaRoundTrip(t *testing.T) {
-	item := rapid.Custom(func(t *rapid.T) Criterion {
-		return Criterion{Text: rapid.StringMatching(`[a-z]{1,6}( [a-z]{1,6}){0,4}`).Draw(t, "text"), Done: rapid.Bool().Draw(t, "done")}
-	})
-	rapid.Check(t, func(t *rapid.T) {
-		want := rapid.SliceOfN(item, 0, 6).Draw(t, "items")
-		var b strings.Builder
-		b.WriteString("# T\n\n## Acceptance criteria\n\n")
-		for _, c := range want {
-			mark := " "
-			if c.Done {
-				mark = "x"
-			}
-			b.WriteString("- [" + mark + "] " + c.Text + "\n")
-		}
-		b.WriteString("\n## After\n- [ ] no\n")
-		got := Criteria(b.String())
-		if len(want) == 0 && len(got) == 0 {
-			return
-		}
-		if !slices.Equal(got, want) {
-			t.Fatalf("got %+v, want %+v", got, want)
 		}
 	})
 }

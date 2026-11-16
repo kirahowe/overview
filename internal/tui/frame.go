@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -105,8 +104,6 @@ func (m model) entryTitle(e entry, ok bool) []titleSeg {
 	switch {
 	case !ok:
 		return []titleSeg{{text: "details"}}
-	case e.kind == issueEntry:
-		return []titleSeg{{text: "#" + strconv.Itoa(e.task.ID) + " " + e.task.Issue.Title}}
 	case e.kind == projectEntry:
 		return []titleSeg{{text: e.proj.Name}}
 	case e.kind == terminalEntry:

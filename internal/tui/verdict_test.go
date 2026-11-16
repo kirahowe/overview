@@ -27,9 +27,10 @@ func verdictModel(t *testing.T, f *fakeMux, err error) (model, *[][]string) {
 	return m, &calls
 }
 
-func TestApprovingATaskInReview(t *testing.T) {
+func TestApprovingAnIssueInReview(t *testing.T) {
 	m, calls := verdictModel(t, newFakeMux(), nil)
-	m = pressSettled(t, selectKey(t, m, "task:/code/app#4"), "m")
+	m = resized(t, selectKey(t, m, "s1"), 150, 40)
+	m = pressSettled(t, m, "o", "tab", "m") // #4, in review, is the card's first
 	text := ansi.Strip(m.View())
 	for _, want := range []string{"app#4 show cost", "a approve   c send back   r reject"} {
 		if !strings.Contains(text, want) {
@@ -49,9 +50,10 @@ func TestApprovingATaskInReview(t *testing.T) {
 
 // An issue that is not in review has no work to send back: m offers done
 // and drop, and c, like any other key, cancels.
-func TestMarkingATaskInProgress(t *testing.T) {
+func TestMarkingAnIssueInProgress(t *testing.T) {
 	m, calls := verdictModel(t, newFakeMux(), nil)
-	m = pressSettled(t, selectKey(t, m, "s1"), "m")
+	m = resized(t, selectKey(t, m, "s1"), 150, 40)
+	m = pressSettled(t, m, "o", "tab", "j", "m") // #6
 	text := ansi.Strip(m.View())
 	if !strings.Contains(text, "a done   r drop") || strings.Contains(text, "send back") {
 		t.Fatalf("the box:\n%s", text)
@@ -71,8 +73,8 @@ func TestMarkingATaskInProgress(t *testing.T) {
 func TestRequestingChangesStartsASession(t *testing.T) {
 	f := newFakeMux()
 	m, calls := verdictModel(t, f, nil)
-	m = resized(t, selectKey(t, m, "task:/code/app#4"), 150, 40)
-	m = pressSettled(t, m, "o", "m", "c", "enter")
+	m = resized(t, selectKey(t, m, "s1"), 150, 40)
+	m = pressSettled(t, m, "o", "tab", "m", "c", "enter")
 	if !m.verdict.open() || len(*calls) != 0 || !strings.HasPrefix(m.note, "say what to change") {
 		t.Fatalf("an empty note: open %v, calls %v, note %q", m.verdict.open(), *calls, m.note)
 	}
@@ -86,9 +88,6 @@ func TestRequestingChangesStartsASession(t *testing.T) {
 	prompt := f.spawned[0].command[len(f.spawned[0].command)-1]
 	if !strings.HasPrefix(prompt, "Work on app#4: show cost\n") || !strings.Contains(prompt, "cover the empty case") {
 		t.Fatalf("prompt %q", prompt)
-	}
-	if !opens(prompt, "app", issues.Issue{ID: 4}) {
-		t.Fatalf("prompt %q does not link its session to app#4", prompt)
 	}
 }
 
@@ -107,19 +106,23 @@ func TestMarkingAnIssueInTheIssuesCard(t *testing.T) {
 
 func TestAFailedVerdictSaysWhy(t *testing.T) {
 	m, _ := verdictModel(t, newFakeMux(), errors.New("issues approve 4: exit status 1"))
-	m = pressSettled(t, selectKey(t, m, "task:/code/app#4"), "m", "a", "enter")
+	m = resized(t, selectKey(t, m, "s1"), 150, 40)
+	m = pressSettled(t, m, "o", "tab", "m", "a", "enter")
 	if !strings.HasPrefix(m.note, "couldn't mark app#4: ") {
 		t.Fatalf("note %q", m.note)
 	}
 }
 
-// m on anything but an issue or a session on one task, outside the issues
-// card, says what it is for.
-func TestMarkOffATaskSaysWhatItIsFor(t *testing.T) {
+// m does nothing outside the issues card, in the list or in the cockpit
+// with the keys in the list: only that card has an issue to mark.
+func TestMarkOnlyActsInTheIssuesCard(t *testing.T) {
 	m, _ := verdictModel(t, newFakeMux(), nil)
-	m = pressSettled(t, selectKey(t, m, "s2"), "m")
-	if m.verdict.open() || !strings.HasPrefix(m.note, "m marks an issue") {
-		t.Fatalf("open %v, note %q", m.verdict.open(), m.note)
+	m = resized(t, selectKey(t, m, "s2"), 150, 40)
+	for _, keys := range [][]string{{"m"}, {"o", "m"}} {
+		at := pressSettled(t, m, keys...)
+		if at.verdict.open() || at.note != "" {
+			t.Fatalf("after %v: open %v, note %q", keys, at.verdict.open(), at.note)
+		}
 	}
 }
 
@@ -128,8 +131,8 @@ func TestMarkOffATaskSaysWhatItIsFor(t *testing.T) {
 // note.
 func TestTheFooterOffersTheVerdictBoxsKeys(t *testing.T) {
 	m, _ := verdictModel(t, newFakeMux(), nil)
-	m = resized(t, selectKey(t, m, "task:/code/app#4"), 150, 40)
-	m = pressSettled(t, m, "o", "m")
+	m = resized(t, selectKey(t, m, "s1"), 150, 40)
+	m = pressSettled(t, m, "o", "tab", "m")
 	foot := ansi.Strip(m.footer())
 	if !strings.Contains(foot, "mark app#4") || !strings.Contains(foot, "a approve • c send back • r reject • esc cancel") || strings.Contains(foot, "o close") {
 		t.Fatalf("choosing: %q", foot)

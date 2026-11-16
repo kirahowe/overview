@@ -510,15 +510,12 @@ func (m model) askRefresh(due bool) (model, tea.Cmd) {
 }
 
 // rowsMsg is a refresh of rows, with the roots of the directories it
-// names: the sessions', their task refs', the pinned projects' and the one
-// overview was started in. It reads the disk, so it runs in a Cmd.
+// names: the sessions', the pinned projects' and the one overview was
+// started in. It reads the disk, so it runs in a Cmd.
 func (m model) rowsMsg(rows []fleet.Row, ttys map[int]string, hosts map[int]world.Host, pinned []string) rowsMsg {
 	dirs := append(slices.Clone(pinned), m.cwd)
 	for _, r := range rows {
 		dirs = append(dirs, r.Cwd)
-		for _, ref := range r.Tasks {
-			dirs = append(dirs, ref.Dir)
-		}
 	}
 	written := map[string]time.Time{}
 	for _, r := range rows {
@@ -750,8 +747,7 @@ func filled(old, now []entry, sel string) (string, bool) {
 
 // nearKey is where the cursor goes when sel, the key of an entry in old,
 // is not in now. A session's entry that has gone goes to another entry
-// of the same session, as samePlace finds it, and an issue that has
-// gone to the session that holds it now, so the cursor follows the work. Otherwise it stays in its project,
+// of the same session, as samePlace finds it. Otherwise it stays in its project,
 // as sameProject finds, and else it is nearest: a cursor on an entry of
 // its own stays among those, out of the agents list, while there are
 // any. It lands on a heading only when nothing else is left.
@@ -828,24 +824,14 @@ func sameProject(old, now []entry, sel string) (string, bool) {
 
 // samePlace is the entry in now for the session the entry sel in old
 // showed: the one on the same side, in its project or in the agents list,
-// if there is one, else any. For an issue sel it is the primary entry of
-// the first session that holds the issue now, as when a session picks up
-// an issue that waited on you. ok is false when there is none, or sel is
-// neither.
+// if there is one, else any. ok is false when there is none, or sel is
+// no session's.
 func samePlace(old, now []entry, sel string) (string, bool) {
 	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
 	if i < 0 {
 		return "", false
 	}
 	was := old[i]
-	if was.kind == issueEntry {
-		for _, e := range now {
-			if e.kind == sessionEntry && e.alias == "" && slices.ContainsFunc(e.sess.Holds, func(t *world.Task) bool { return t.Key == was.task.Key }) {
-				return e.key(), true
-			}
-		}
-		return "", false
-	}
 	if was.kind != sessionEntry {
 		return "", false
 	}
@@ -926,19 +912,15 @@ func (m model) unblur() model {
 }
 
 // needy says whether n stops at an entry: a session's primary entry when
-// the session needs you, or an issue, since every issue listed waits on
-// you.
+// the session needs you.
 func needy(e entry) bool {
-	if e.kind == issueEntry {
-		return true
-	}
 	r, ok := e.session()
 	return ok && e.alias == "" && r.NeedsYou()
 }
 
 // place is an entry's key and the window its pane is in, "" when it has
 // no pane on this server. alias marks an entry that shows another's pane:
-// a session's entry in the agents list, or an issue.
+// a session's entry in the agents list.
 type place struct {
 	key, window string
 	alias       bool
@@ -948,10 +930,10 @@ type place struct {
 func (m model) placed(es []entry) []place {
 	out := make([]place, len(es))
 	for i, e := range es {
-		out[i].key, out[i].alias = e.key(), e.alias != "" || e.kind == issueEntry
+		out[i].key, out[i].alias = e.key(), e.alias != ""
 		if e.kind == terminalEntry {
 			out[i].window = e.term.Window
-		} else if p, ok := m.pane(entryPane(es, e)); ok {
+		} else if p, ok := m.pane(entryPane(e)); ok {
 			out[i].window = p.Window
 		}
 	}
@@ -1201,10 +1183,9 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	// enter on an idle issue opens the cockpit, so it stays open.
 	// Going to another screen closes it too, in show, which asks tmux
 	// once for the zoom the screen wants.
-	if m.cockpit.open && closesCockpit(a.do) && a.do != showScreen && a.do != toggleScreen && (a.do != open || !m.idleSelected()) {
+	if m.cockpit.open && closesCockpit(a.do) && a.do != showScreen && a.do != toggleScreen {
 		m, out := m.closeCockpit()
 		m, cmd := m.apply(a)
 		return m, tea.Batch(out, cmd)
@@ -1395,8 +1376,6 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
 			return m.say("x unpins a pinned project, and " + e.proj.Name + " is not pinned"), nil
-		case ok && e.kind == issueEntry:
-			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:
 			return m.say("nothing to stop"), nil
 		default:
@@ -1409,20 +1388,10 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = row.SessionID
 		}
 	case newSession:
-		if t := e.focus(); ok && t != nil {
-			return m.startOn(t.Root, t.Issue)
-		}
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
-		task := ""
-		if ok {
-			task = e.focusKey()
-		}
-		return m.openTerminal(m.rootOf(e, ok), task)
+		return m.openTerminal(m.rootOf(e, ok))
 	case openReview:
-		if ok && e.kind == issueEntry {
-			return m.say(m.moveToSay(e, "v reviews a session's changes")), nil
-		}
 		if !isSession {
 			return m.say("v reviews a session's changes: move to a session"), nil
 		}
@@ -1512,12 +1481,11 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		mux := m.mux
 		return m, func() tea.Msg { return panelsMsg{mux.EnterPanels()} }
 	case cockpitMove:
-		others, _ := m.others(m.target())
-		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(others))-1))
+		m.cockpit.pick = max(0, min(m.cockpit.pick+a.n, len(pickable(m.others(m.target())))-1))
 	case cockpitPick:
 		return m.startPicked()
 	case markIssue:
-		return m.markIssue(e, ok), nil
+		return m.markIssue(), nil
 	case verdictPick:
 		m.verdict.kind = a.text
 	case verdictType:
@@ -1532,9 +1500,6 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.verdict = verdictPrompt{}
 		return m.say("left it as it was"), nil
 	case copyID:
-		if ok && e.kind == issueEntry {
-			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil
-		}
 		if !isSession {
 			return m, nil
 		}
@@ -1626,16 +1591,8 @@ func (m model) rootOf(e entry, ok bool) string {
 		return e.term.Root
 	case e.kind == projectEntry:
 		return e.proj.Root
-	case e.kind == issueEntry:
-		return e.task.Root
 	}
 	return m.root(e.sess.Cwd)
-}
-
-// moveToSay is what a key that acts on a session or terminal says on an
-// issue: what it does, and that the issue is neither.
-func (m model) moveToSay(e entry, does string) string {
-	return does + ", and #" + strconv.Itoa(e.task.ID) + " is an issue"
 }
 
 // copyText puts text on this machine's clipboard. In tmux the view also
@@ -1659,11 +1616,10 @@ func copied(text string, err error) tea.Msg {
 type enterKind int
 
 const (
-	enterSays    enterKind = iota // only a note: how to start something, or why nothing opens
-	enterType                     // the keyboard goes to the entry's pane beside the list
-	enterAttach                   // a background session gets an attach pane first
-	enterApp                      // the app a session runs inside comes forward
-	enterCockpit                  // the cockpit opens, the keyboard staying in the list
+	enterSays   enterKind = iota // only a note: how to start something, or why nothing opens
+	enterType                    // the keyboard goes to the entry's pane beside the list
+	enterAttach                  // a background session gets an attach pane first
+	enterApp                     // the app a session runs inside comes forward
 )
 
 // label is how the footer names what enter does, "" when it only says
@@ -1676,45 +1632,17 @@ func (k enterKind) label() string {
 		return "attach"
 	case enterApp:
 		return "open app"
-	case enterCockpit:
-		return "cockpit"
-	}
-	return ""
-}
-
-// does is a sentence that says what enter does to what, as a note under
-// a heading puts it, "" when enter only says something.
-func (k enterKind) does(what string) string {
-	switch k {
-	case enterType:
-		return " enter types in " + what + "."
-	case enterAttach:
-		return " enter attaches to " + what + "."
-	case enterApp:
-		return " enter brings " + what + " forward in its app."
-	case enterCockpit:
-		return " enter opens the cockpit."
 	}
 	return ""
 }
 
 // enterOn is what enter does on an entry, and the entry it does it to.
-// On an issue it acts on the issue's lead, the entry the stage shows
-// beside it, and with none it opens the cockpit, or in the cockpit says
-// how to start a session. A background session gets an
+// A background session gets an
 // attach pane first. One that runs inside another app brings that app
 // forward, since that is where it is used. A project's heading only says
 // how to start something there.
 func (m model) enterOn(e entry) (entry, enterKind) {
 	switch e.kind {
-	case issueEntry:
-		if c, ok := lead(m.ordered(), e.task); ok {
-			return m.enterOn(c)
-		}
-		if m.cockpit.open {
-			return e, enterSays
-		}
-		return e, enterCockpit
 	case projectEntry:
 		return e, enterSays
 	case terminalEntry:
@@ -1743,8 +1671,6 @@ func (m model) enterOn(e entry) (entry, enterKind) {
 // carry does k, what enterOn decided, to e, the entry it decided on.
 func (m model) carry(e entry, k enterKind) (model, tea.Cmd) {
 	switch k {
-	case enterCockpit:
-		return m.openCockpit()
 	case enterType:
 		if e.kind == terminalEntry {
 			m.entering = e.term.Pane
@@ -1772,8 +1698,6 @@ func (m model) carry(e entry, k enterKind) (model, tea.Cmd) {
 // enterNote is what enter says on an entry where it opens nothing.
 func (m model) enterNote(e entry) string {
 	switch e.kind {
-	case issueEntry:
-		return "No session is linked to #" + strconv.Itoa(e.task.ID) + ". c starts one, t a terminal."
 	case projectEntry:
 		p := e.proj
 		switch {
@@ -1782,7 +1706,7 @@ func (m model) enterNote(e entry) string {
 		case p.Empty():
 			return "Nothing runs in " + p.Name + " yet. c starts Claude here, t a terminal."
 		case p.Tracked:
-			return "c starts Claude in " + p.Name + " on no task, s one on a task, t a terminal."
+			return "c starts Claude in " + p.Name + ", s one on an issue, t a terminal."
 		}
 		return "c starts Claude in " + p.Name + ", t a terminal."
 	case terminalEntry:
@@ -1816,9 +1740,8 @@ func (m model) start(dir string) (model, tea.Cmd) {
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewArgs()})
 }
 
-// startOn runs a new claude at root on a task's issue: its first
-// prompt names the issue, which links the session to it once its
-// transcript is read.
+// startOn runs a new claude at root on issue i: its first prompt names
+// the issue.
 func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
 	return m.startWith(root, i, opening(m.world().IssuesID(root), i))
 }
@@ -1830,25 +1753,19 @@ func (m model) startChanges(root string, i issues.Issue, note string) (model, te
 }
 
 // startWith runs a new claude at root on issue i with prompt, which opens
-// with the line that links it to the issue.
+// with the line that names the issue.
 func (m model) startWith(root string, i issues.Issue, prompt string) (model, tea.Cmd) {
 	if m.mux == nil {
 		return m.say("sessions start only inside overview's tmux"), nil
 	}
 	ref := "#" + strconv.Itoa(i.ID)
-	id := m.world().IssuesID(root)
-	note := "starting a session on " + ref + "…"
-	if !opens(prompt, id, i) {
-		note = "starting a session on " + ref + ", which won't link by itself: the project id has a space or a #"
-	}
-	return m.say(note).startPane(spawn{kind: spawnSession, name: "a session on " + ref,
+	return m.say("starting a session on " + ref + "…").startPane(spawn{kind: spawnSession, name: "a session on " + ref,
 		session: m.session, dir: root, env: m.claudeEnv(), command: m.home.NewArgs(prompt)})
 }
 
 // openTerminal starts tmux's default shell at dir, a project's root, in a
-// window of its own, and the cursor goes to it. task is the task the
-// terminal is for, "" for none.
-func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
+// window of its own, and the cursor goes to it.
+func (m model) openTerminal(dir string) (model, tea.Cmd) {
 	if dir == "" {
 		return m.say("there is no directory to open a terminal in"), nil
 	}
@@ -1857,7 +1774,7 @@ func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
 	}
 	where := m.name(dir)
 	return m.sayAbout("opening a terminal in ", where, "…").startPane(spawn{kind: spawnTerminal, name: "a terminal in " + where,
-		session: m.session, dir: dir, env: m.claudeEnv(), task: task})
+		session: m.session, dir: dir, env: m.claudeEnv()})
 }
 
 // awayNote says where a session that runs inside another app is.

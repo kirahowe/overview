@@ -17,9 +17,7 @@ import (
 
 // The generators draw a small world with collisions on purpose: a
 // relative "alpha" has the name of ~/code/projects/alpha when the user's
-// home is /u, a worktree shares its project's issues id, refs name ids
-// that are and are not tracked, and panes name tasks that do and do not
-// exist.
+// home is /u, and a worktree shares its project's issues id.
 
 var (
 	dirs = []string{
@@ -44,23 +42,6 @@ func genRoots(t *rapid.T) map[string]string {
 	return out
 }
 
-func genRef(t *rapid.T) fleet.TaskRef {
-	r := fleet.TaskRef{
-		Project: rapid.SampledFrom([]string{"", "alpha", "gamma", "nope"}).Draw(t, "rproject"),
-		Dir:     rapid.SampledFrom(dirs).Draw(t, "rdir"),
-		ID:      rapid.IntRange(1, 5).Draw(t, "rid"),
-	}
-	// A start the reader could not place, more often than the draws
-	// above come to one.
-	if rapid.IntRange(0, 3).Draw(t, "runplaced") == 0 {
-		r.Project, r.Dir = "", ""
-	}
-	if rapid.Bool().Draw(t, "rtimed") {
-		r.Linked = time.UnixMilli(int64(rapid.IntRange(1, 9).Draw(t, "rlinked")) * 100)
-	}
-	return r
-}
-
 func genRows(t *rapid.T) []fleet.Row {
 	n := rapid.IntRange(0, 10).Draw(t, "rows")
 	rows := make([]fleet.Row, n)
@@ -80,9 +61,7 @@ func genRows(t *rapid.T) []fleet.Row {
 			r.Kind = "background"
 			r.ID = rapid.SampledFrom([]string{"", "bg1", "bg2"}).Draw(t, "bgid")
 		}
-		for range rapid.IntRange(0, 3).Draw(t, "refs") {
-			r.Tasks = append(r.Tasks, genRef(t))
-		}
+
 		rows[i] = r
 	}
 	return rows
@@ -128,8 +107,6 @@ func genPanes(t *rapid.T) []tmux.Pane {
 			Command: rapid.SampledFrom([]string{"zsh", "-zsh", "node", "vim", ""}).Draw(t, "command"),
 			Path:    rapid.SampledFrom(dirs).Draw(t, "path"),
 			Project: rapid.SampledFrom([]string{"", "", "/w/gamma"}).Draw(t, "project"),
-			Task: rapid.SampledFrom([]string{"", "", "/w/gamma#1", "/w/gamma#2", "/u/code/projects/alpha#3",
-				"/w/gamma/wt#1", "alpha#2"}).Draw(t, "task"),
 		}
 		if a := rapid.SampledFrom([]string{"", "", "bg1", "bg2"}).Draw(t, "attach"); a != "" && !attached[a] {
 			p.Attach, attached[a] = a, true
@@ -199,11 +176,11 @@ func shuffle(t *rapid.T, in Inputs) Inputs {
 
 // canon is a World as plain values, for comparing two Worlds.
 type canon struct {
-	Projects  []canonProject
-	Away      []string
-	Agents    []string
-	Sessions  map[string]canonSession
-	Tasks     map[string]canonTask
+	Projects []canonProject
+	Away     []string
+	Agents   []string
+	Sessions map[string]canonSession
+
 	Terminals []canonTerminal
 	Counts    [3]int
 	NoHook    bool
@@ -211,57 +188,43 @@ type canon struct {
 }
 
 type canonProject struct {
-	Root, Name, ID           string
-	Roots                    []string
-	Tracked, Failed, Pinned  bool
-	Open                     []issues.Issue
-	Waiting, Sessions, Terms []string
+	Root, Name, ID          string
+	Roots                   []string
+	Tracked, Failed, Pinned bool
+	Open                    []issues.Issue
+	InReview                int
+	Sessions, Terms         []string
 }
 
 type canonSession struct {
 	Row       fleet.Row
 	Project   string
-	Tasks     []string
 	Pane      string
 	Host      *Host
 	Elsewhere bool
 }
 
-type canonTask struct {
-	Project   string
-	Issue     issues.Issue
-	Sessions  []string
-	Terminals []string
-	Started   time.Time
-}
-
 type canonTerminal struct {
 	Terminal Terminal
 	Project  string
-	Task     string
 }
 
 func toCanon(w World) canon {
 	c := canon{
 		Away: sessionIDs(w.Away), Agents: sessionIDs(w.Agents), Sessions: map[string]canonSession{},
-		Tasks: map[string]canonTask{}, Counts: [3]int{w.Need, w.Working, w.Idle}, NoHook: w.NoHook, Trackers: w.Trackers,
+		Counts: [3]int{w.Need, w.Working, w.Idle}, NoHook: w.NoHook, Trackers: w.Trackers,
 	}
 	for _, p := range w.Projects {
 		c.Projects = append(c.Projects, canonProject{p.Root, p.Name, p.ID, p.Roots, p.Tracked, p.Failed, p.Pinned, p.Open,
-			taskKeys(p.Waiting), sessionIDs(p.Sessions), windows(p.Terminals)})
+			p.InReview, sessionIDs(p.Sessions), windows(p.Terminals)})
 	}
 	for id, s := range w.Sessions {
-		c.Sessions[id] = canonSession{s.Row, s.Project.Name, taskKeys(s.Holds), s.Pane, s.Host, s.Elsewhere}
-	}
-	for k, s := range w.Tasks {
-		c.Tasks[k.String()] = canonTask{s.Project.Name, s.Issue, sessionIDs(s.Sessions), windows(s.Terminals), s.Started}
+		c.Sessions[id] = canonSession{s.Row, s.Project.Name, s.Pane, s.Host, s.Elsewhere}
 	}
 	for _, tm := range w.Terminals {
 		ct := canonTerminal{Terminal: *tm, Project: tm.Project.Name}
-		ct.Terminal.Project, ct.Terminal.Task = nil, nil
-		if tm.Task != nil {
-			ct.Task = tm.Task.String()
-		}
+		ct.Terminal.Project = nil
+
 		c.Terminals = append(c.Terminals, ct)
 	}
 	return c
@@ -293,8 +256,7 @@ func count[T comparable](xs []T, x T) int {
 
 // Every session but the orchestrator is in Agents once, in order, and in
 // exactly one of its own project's list and Away, in Away exactly when
-// another app runs it, whatever it is linked to. Its tasks are the issues
-// in progress that list it, each once.
+// another app runs it.
 func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -324,24 +286,8 @@ func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 			if inProjects+inAway != 1 || inAway == 1 != (s.Host != nil) || inProjects == 1 && count(s.Project.Sessions, s) != 1 {
 				t.Fatalf("%s: projects %d, away %d, host %v", s.SessionID, inProjects, inAway, s.Host)
 			}
-			for _, st := range s.Holds {
-				if count(st.Sessions, s) != 1 || count(s.Holds, st) != 1 || st.Issue.Status != issues.InProgress {
-					t.Fatalf("%s has %s (%s), which lists it %d times", s.SessionID, st, st.Issue.Status, count(st.Sessions, s))
-				}
-			}
 			if s.Host != nil != (!s.Background() && hasHost(in, s.PID)) {
 				t.Fatalf("%s: host %v", s.SessionID, s.Host)
-			}
-		}
-		for _, st := range w.Tasks {
-			for _, s := range st.Sessions {
-				want := 0
-				if st.Issue.Status == issues.InProgress {
-					want = 1
-				}
-				if count(s.Holds, st) != want || count(st.Sessions, s) != 1 {
-					t.Fatalf("%s (%s) lists %s, which has it %d times", st, st.Issue.Status, s.SessionID, count(s.Holds, st))
-				}
 			}
 		}
 	})
@@ -349,32 +295,13 @@ func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 
 func hasHost(in Inputs, pid int) bool { _, ok := in.Hosts[pid]; return ok }
 
-// Every task is an open issue of its tracker, and one with no session or
-// terminal on it is active by status. An issue waits on you in its own
-// project, and in no other, exactly when it is in review or blocked, or in
-// progress with no session linked to it. Everything in a project is in
-// order.
-func TestPropTasksAndOrder(t *testing.T) {
+// Projects are in name order, each with its least root first and its
+// sessions and terminals in order, and so are Away and the terminals.
+// Pinned projects are projects.
+func TestPropOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
 		w := Derive(in)
-		for k, st := range w.Tasks {
-			if st.Key != k || st.Issue.ID != k.ID || !issues.Open(st.Issue.Status) || !slices.ContainsFunc(in.Trackers[k.Root].Open, func(i issues.Issue) bool { return reflect.DeepEqual(i, st.Issue) }) {
-				t.Fatalf("task %s: %+v", k, st.Issue)
-			}
-			if len(st.Sessions) == 0 && len(st.Terminals) == 0 && !active(st.Issue.Status) {
-				t.Fatalf("%s has no session or terminal and is %s", k, st.Issue.Status)
-			}
-			waits := st.Issue.Status == issues.Review || st.Issue.Status == issues.Blocked ||
-				st.Issue.Status == issues.InProgress && len(st.Sessions) == 0
-			n := 0
-			for _, p := range w.byName {
-				n += count(p.Waiting, st)
-			}
-			if st.Waits() != waits || n != count(st.Project.Waiting, st) || n == 1 != waits || n > 1 || st.Project.Name != w.Name(k.Root) {
-				t.Fatalf("%s (%s, %d sessions) waits in %d projects, in %q", k, st.Issue.Status, len(st.Sessions), n, st.Project.Name)
-			}
-		}
 		for i, p := range w.Projects {
 			if i > 0 && !NameLess(w.Projects[i-1].Name, p.Name) {
 				t.Fatalf("projects out of order: %q then %q", w.Projects[i-1].Name, p.Name)
@@ -382,38 +309,11 @@ func TestPropTasksAndOrder(t *testing.T) {
 			if p.Root != p.Roots[0] || !slices.IsSorted(p.Roots) {
 				t.Fatalf("%q: root %q of %v", p.Name, p.Root, p.Roots)
 			}
-			for j := 1; j < len(p.Waiting); j++ {
-				if !WaitingLess(p.Waiting[j-1], p.Waiting[j]) {
-					t.Fatalf("waiting out of order in %q", p.Name)
-				}
-			}
 			checkSessions(t, p.Name, p.Sessions)
 			checkTerms(t, p.Name, p.Terminals)
 		}
-		for _, st := range w.Tasks {
-			checkTerms(t, st.String(), st.Terminals)
-		}
 		checkSessions(t, "away", w.Away)
 		checkTerms(t, "terminals", w.Terminals)
-		// A terminal has the task it names when that is one of its own
-		// project's, and is in its project either way.
-		for _, tm := range w.Terminals {
-			want := (*Task)(nil)
-			for _, p := range in.Panes {
-				if p.ID == tm.Pane {
-					if k, ok := ParseKey(p.Task); ok && w.Tasks[k] != nil && w.Tasks[k].Project == tm.Project {
-						want = w.Tasks[k]
-					}
-				}
-			}
-			if tm.Task != want {
-				t.Fatalf("terminal %s has %v, want %v", tm.Window, tm.Task, want)
-			}
-			if want != nil && count(want.Terminals, tm) != 1 || count(tm.Project.Terminals, tm) != 1 {
-				t.Fatalf("terminal %s misplaced", tm.Window)
-			}
-		}
-		// Pinned projects are projects.
 		for _, d := range in.Pinned {
 			if p := w.ProjectOf(d); d != "" && (p == nil || !p.Pinned) {
 				t.Fatalf("pinned %q: %+v", d, p)
@@ -448,9 +348,7 @@ func projectOrder(w World) []string {
 	for _, p := range w.Projects {
 		out = append(out, "project "+p.Name)
 		out = append(out, sessionIDs(p.Sessions)...)
-		for _, st := range p.Waiting {
-			out = append(out, "waiting "+st.String())
-		}
+
 	}
 	out = append(out, "away")
 	return append(out, sessionIDs(w.Away)...)
@@ -472,6 +370,8 @@ func checkTerms(t *rapid.T, where string, ts []*Terminal) {
 	}
 }
 
+// The counts are a recount of the sessions, and Need adds the issues in
+// review of every project's tracked roots to the sessions that need you.
 func TestPropCountsAreARecount(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -490,10 +390,20 @@ func TestPropCountsAreARecount(t *testing.T) {
 				idle++
 			}
 		}
-		for _, st := range w.Tasks {
-			if st.Waits() {
-				need++
+		// Every issue in review waits on you, in a project the list shows or not.
+		for _, pr := range w.byName {
+			inReview := 0
+			for _, r := range pr.Roots {
+				for _, i := range in.Trackers[r].Open {
+					if i.Status == issues.Review {
+						inReview++
+					}
+				}
 			}
+			if pr.InReview != inReview {
+				t.Fatalf("%q: %d in review, want %d", pr.Name, pr.InReview, inReview)
+			}
+			need += inReview
 		}
 		if noHook := interactive && !hooked; w.Need != need || w.Working != working || w.Idle != idle || w.NoHook != noHook {
 			t.Fatalf("counts %d %d %d %v, want %d %d %d %v", w.Need, w.Working, w.Idle, w.NoHook, need, working, idle, noHook)
@@ -501,84 +411,8 @@ func TestPropCountsAreARecount(t *testing.T) {
 	})
 }
 
-// A session whose refs name no project and no directory is linked to the
-// issues of its own root that those refs number and that are in progress,
-// in review or blocked, and to nothing else.
-func TestPropUnplacedStartsStayInTheSessionsProject(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genInputs(t)
-		w := Derive(in)
-		for _, s := range w.Sessions {
-			if slices.ContainsFunc(s.Tasks, func(r fleet.TaskRef) bool { return r.Project != "" || r.Dir != "" }) {
-				continue
-			}
-			own := w.Root(s.Cwd)
-			want := map[Key]bool{}
-			for _, i := range in.Trackers[own].Open {
-				if active(i.Status) && slices.ContainsFunc(s.Tasks, func(r fleet.TaskRef) bool { return r.ID == i.ID }) {
-					want[Key{own, i.ID}] = true
-				}
-			}
-			got := map[Key]bool{}
-			for k, st := range w.Tasks {
-				if count(st.Sessions, s) > 0 {
-					got[k] = true
-				}
-			}
-			if !maps.Equal(got, want) {
-				t.Fatalf("%s in %q with refs %+v is under %v, want %v", s.SessionID, own, s.Tasks, got, want)
-			}
-		}
-	})
-}
-
-// Started is the earliest time any session linked to a task took it
-// on: its earliest timed ref to it, else when the session started.
-func TestPropStartedIsTheMinimum(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genInputs(t)
-		w := Derive(in)
-		known := map[string]bool{}
-		for _, s := range w.Sessions {
-			known[w.Root(s.Cwd)] = true
-		}
-		for _, tm := range w.Terminals {
-			known[tm.Root] = true
-		}
-		for _, d := range in.Pinned {
-			if d != "" {
-				known[w.Root(d)] = true
-			}
-		}
-		for k, st := range w.Tasks {
-			var want time.Time
-			for _, s := range st.Sessions {
-				var at time.Time
-				for _, ref := range s.Tasks {
-					if got, ok := resolve(ref, w.Root(s.Cwd), in.Trackers, known, w.Root); ok && got == k &&
-						!ref.Linked.IsZero() && (at.IsZero() || ref.Linked.Before(at)) {
-						at = ref.Linked
-					}
-				}
-				if at.IsZero() && s.StartedAt > 0 {
-					at = time.UnixMilli(s.StartedAt)
-				}
-				if !at.IsZero() && (want.IsZero() || at.Before(want)) {
-					want = at
-				}
-			}
-			if !st.Started.Equal(want) {
-				t.Fatalf("%s started %v, want %v", k, st.Started, want)
-			}
-			if len(st.Sessions) == 0 && !st.Started.IsZero() {
-				t.Fatalf("%s has no sessions yet started %v", k, st.Started)
-			}
-		}
-	})
-}
-
 // Every pointer reachable from a World is to one of its own projects,
-// sessions, tasks and terminals.
+// sessions and terminals.
 func TestPropPointersStayInTheWorld(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -606,11 +440,7 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 				t.Fatalf("session %s is not the world's", s.SessionID)
 			}
 		}
-		task := func(st *Task) {
-			if w.Tasks[st.Key] != st {
-				t.Fatalf("task %s is not the world's", st)
-			}
-		}
+
 		proj := func(p *Project) {
 			if !projects[p] {
 				t.Fatalf("project %+v is not the world's", p)
@@ -635,23 +465,10 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			if s.Project != w.ProjectOf(s.Cwd) {
 				t.Fatalf("%s is in %q, not its cwd's", id, s.Project.Name)
 			}
-			for _, st := range s.Holds {
-				task(st)
-			}
-		}
-		for _, st := range w.Tasks {
-			proj(st.Project)
-			for _, s := range st.Sessions {
-				sess(s)
-			}
-			for _, tm := range st.Terminals {
-				term(tm)
-			}
+
 		}
 		for _, p := range w.byName {
-			for _, st := range p.Waiting {
-				task(st)
-			}
+
 			for _, s := range p.Sessions {
 				sess(s)
 			}
@@ -677,15 +494,12 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			if tm.Project != w.ProjectOf(tm.Root) {
 				t.Fatalf("terminal %s is in %q, not its root's", tm.Window, tm.Project.Name)
 			}
-			if tm.Task != nil {
-				task(tm.Task)
-			}
+
 		}
 	})
 }
 
-// Trackers holds every project's roots and the root of every directory a
-// link names, and nothing else.
+// Trackers holds every project's roots, and nothing else.
 func TestPropTrackerRoots(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -696,11 +510,7 @@ func TestPropTrackerRoots(t *testing.T) {
 				want[r] = true
 			}
 		}
-		for _, s := range w.Sessions {
-			for _, ref := range s.Tasks {
-				want[w.Root(ref.Dir)] = true
-			}
-		}
+
 		delete(want, "")
 		if got := slices.Sorted(maps.Keys(want)); !slices.Equal(w.Trackers, got) {
 			t.Fatalf("trackers %v, want %v", w.Trackers, got)
@@ -803,7 +613,6 @@ func genTermPanes(t *rapid.T) []tmux.Pane {
 			Path:    rapid.SampledFrom([]string{"/w/a", "/w/a/sub", "/w/b", ""}).Draw(t, "path"),
 			Project: rapid.SampledFrom([]string{"", "", "/w/p"}).Draw(t, "project"),
 			Attach:  rapid.SampledFrom([]string{"", "", "", "bg1"}).Draw(t, "attach"),
-			Task:    rapid.SampledFrom([]string{"", "", "/w/p#6"}).Draw(t, "task"),
 		}
 	}
 	return panes
@@ -869,7 +678,7 @@ func TestPropTerminals(t *testing.T) {
 			if wantRoot == "" {
 				wantRoot = root(first.Path)
 			}
-			if tm.Pane != first.ID || tm.Path != first.Path || tm.Root != wantRoot || tm.task != first.Task || tm.Title != termTitle(ps) {
+			if tm.Pane != first.ID || tm.Path != first.Path || tm.Root != wantRoot || tm.Title != termTitle(ps) {
 				t.Fatalf("terminal %+v from panes %+v", tm, ps)
 			}
 		}
@@ -886,9 +695,7 @@ func genIssue(t *rapid.T, label string) issues.Issue {
 
 // IssueLess and StartLess are strict orders, total on issues that differ
 // in status rank, priority rank or number. StartLess puts ready and inbox
-// first and otherwise agrees with IssueLess. WaitingLess puts review,
-// then blocked, then the rest, and then orders by priority, number and
-// root.
+// first and otherwise agrees with IssueLess.
 func TestPropIssueOrders(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		a, b, c := genIssue(t, "a"), genIssue(t, "b"), genIssue(t, "c")
@@ -919,87 +726,6 @@ func TestPropIssueOrders(t *testing.T) {
 		case !startable(a) && !startable(b):
 			if StartLess(a, b) != IssueLess(a, b) {
 				t.Fatalf("StartLess and IssueLess disagree on %+v %+v", a, b)
-			}
-		}
-		ra, rb := rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "ra"), rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "rb")
-		sa, sb := &Task{Key: Key{ra, a.ID}, Issue: a}, &Task{Key: Key{rb, b.ID}, Issue: b}
-		rank := func(x issues.Issue) int {
-			switch x.Status {
-			case issues.Review:
-				return 0
-			case issues.Blocked:
-				return 1
-			}
-			return 2
-		}
-		want := rank(a) < rank(b) || rank(a) == rank(b) && (priorityLess(a, b) || !priorityLess(b, a) && ra < rb)
-		if WaitingLess(sa, sb) != want {
-			t.Fatalf("WaitingLess(%+v, %+v) = %v", sa, sb, !want)
-		}
-	})
-}
-
-// LeadOf picks from what it is given: the first session with a pane, else
-// the first terminal, else the first session. Task.Lead is LeadOf over
-// the whole task.
-func TestPropLeadOf(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		var ss []*Session
-		for i := range rapid.IntRange(0, 4).Draw(t, "sessions") {
-			s := &Session{Row: fleet.Row{Live: fleet.Live{SessionID: fmt.Sprint("s", i)}}}
-			if rapid.Bool().Draw(t, "pane") {
-				s.Pane = fmt.Sprint("%", i)
-			}
-			ss = append(ss, s)
-		}
-		var ts []*Terminal
-		for i := range rapid.IntRange(0, 3).Draw(t, "terminals") {
-			ts = append(ts, &Terminal{Window: fmt.Sprint("@", i), Pane: "%t" + fmt.Sprint(i)})
-		}
-		st := &Task{Sessions: ss, Terminals: ts}
-		ls, lt := st.Lead()
-		if as, at := LeadOf(ss, ts); as != ls || at != lt {
-			t.Fatal("Lead is not LeadOf over the whole task")
-		}
-		// A filtered list shows a subset, in order.
-		sub := func(n int, keep []bool) []int {
-			var out []int
-			for i := range n {
-				if keep[i] {
-					out = append(out, i)
-				}
-			}
-			return out
-		}
-		var fs []*Session
-		for _, i := range sub(len(ss), rapid.SliceOfN(rapid.Bool(), len(ss), len(ss)).Draw(t, "keepS")) {
-			fs = append(fs, ss[i])
-		}
-		var ft []*Terminal
-		for _, i := range sub(len(ts), rapid.SliceOfN(rapid.Bool(), len(ts), len(ts)).Draw(t, "keepT")) {
-			ft = append(ft, ts[i])
-		}
-		s, term := LeadOf(fs, ft)
-		if s != nil && term != nil {
-			t.Fatal("a lead that is both a session and a terminal")
-		}
-		withPane := slices.IndexFunc(fs, func(x *Session) bool { return x.Pane != "" })
-		switch {
-		case withPane >= 0:
-			if s != fs[withPane] {
-				t.Fatalf("lead %v, want the first session with a pane", s)
-			}
-		case len(ft) > 0:
-			if term != ft[0] {
-				t.Fatalf("lead %v, want the first terminal", term)
-			}
-		case len(fs) > 0:
-			if s != fs[0] {
-				t.Fatalf("lead %v, want the first session", s)
-			}
-		default:
-			if s != nil || term != nil {
-				t.Fatal("a lead out of nothing")
 			}
 		}
 	})

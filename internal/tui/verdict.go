@@ -88,26 +88,17 @@ func (m model) verdictKeys(msg tea.KeyMsg) []action {
 	return nil
 }
 
-// markIssue opens the box for the issue under the issues card's cursor,
-// while the keyboard is in that card, or else for the selected entry's
-// focus.
-func (m model) markIssue(e entry, ok bool) model {
+// markIssue opens the box for the issue under the issues card's cursor.
+// Only that card has m.
+func (m model) markIssue() model {
 	if m.issues == nil {
 		return m.say("overview was started without the issues tool")
 	}
-	switch {
-	case m.inIssues():
-		t, i, found := m.picked()
-		if !found {
-			return m.say("no issue to mark")
-		}
-		m.verdict = verdictPrompt{root: t.root, ref: m.issueRef(t.root, i), issue: i}
-	case ok && e.focus() != nil:
-		t := e.focus()
-		m.verdict = verdictPrompt{root: t.Root, ref: t.Ref(), issue: t.Issue}
-	default:
-		return m.say("m marks an issue: select one, a session on one task, or an issue in the cockpit")
+	t, i, found := m.picked()
+	if !found {
+		return m.say("no issue to mark")
 	}
+	m.verdict = verdictPrompt{root: t.root, ref: m.issueRef(t.root, i), issue: i}
 	return m
 }
 
@@ -157,7 +148,7 @@ func (m model) landVerdict(msg verdictMsg) (model, tea.Cmd) {
 }
 
 // changesPrompt is the opening prompt of a session on changes asked for
-// in issue i: the opening that links it to the issue, and the note.
+// in issue i: the opening that names the issue, and the note.
 func changesPrompt(projectID string, i issues.Issue, note string) string {
 	return opening(projectID, i) + "\n\nChanges requested in review: " + note
 }

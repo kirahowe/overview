@@ -6,7 +6,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
@@ -18,14 +17,10 @@ import (
 // their order.
 //
 // The orchestrator is left out everywhere. A session's project is its
-// cwd's root, and its links resolve as resolve has it. A task is an open
-// issue of a tracked project in the world that is in progress, in review
-// or blocked, or that a session is linked to or a terminal was opened
-// for. A session sits in its project, or in Away when it runs inside
-// another app, wherever its tasks are, and has as tasks the issues in
-// progress it is linked to. A terminal sits in its project, with the task
-// its window was opened for when that is one of its own project's. An
-// issue that waits on you sits in its own project.
+// cwd's root. A session sits in its project, or in Away when it runs
+// inside another app, and a terminal sits in its project. Sessions and
+// issues are not joined: an issue's status in its tracker is all the
+// world says of it.
 func Derive(in Inputs) World {
 	root := func(dir string) string { return rootOf(in.Roots, dir) }
 	name := func(dir string) string { return nameOf(in.User, root(dir)) }
@@ -47,7 +42,7 @@ func Derive(in Inputs) World {
 	}
 	terms := terminals(in.Panes, in.Session, in.Self, in.Opening, claude, root)
 
-	// The roots of the projects that hold something before tasks.
+	// The roots of the projects that hold something.
 	known := map[string]bool{}
 	for _, r := range rows {
 		known[root(r.Cwd)] = true
@@ -61,66 +56,11 @@ func Derive(in Inputs) World {
 		}
 	}
 
-	// Links, by session id, and when each was first made.
-	links := map[string][]Key{}
-	linkedAt := map[string]map[Key]time.Time{}
-	targets := map[string]bool{} // roots a link resolves into
-	for _, r := range rows {
-		var keys []Key
-		when := map[Key]time.Time{}
-		for _, ref := range r.Tasks {
-			k, ok := resolve(ref, root(r.Cwd), in.Trackers, known, root)
-			if !ok {
-				continue
-			}
-			keys = slices.DeleteFunc(keys, func(o Key) bool { return o == k })
-			keys = append(keys, k)
-			// Two refs, such as a prompt's and a command's, can name the
-			// same issue: the earlier link counts.
-			if t := ref.Linked; !t.IsZero() && (when[k].IsZero() || t.Before(when[k])) {
-				when[k] = t
-			}
-			targets[k.Root] = true
-		}
-		if len(keys) > 0 {
-			links[r.SessionID] = keys
-		}
-		linkedAt[r.SessionID] = when
-	}
-
-	// The trackers in the world: those of the known roots and the roots
-	// links resolve into.
+	// The trackers in the world: those of the known roots.
 	tracked := map[string]Tracker{}
 	for r := range known {
 		if t, ok := in.Trackers[r]; ok {
 			tracked[r] = t
-		}
-	}
-	for r := range targets {
-		tracked[r] = in.Trackers[r]
-	}
-
-	// The tasks.
-	linked := map[Key]bool{}
-	for _, keys := range links {
-		for _, k := range keys {
-			linked[k] = true
-		}
-	}
-	// A terminal's task is one of its own project's, which is by name.
-	for _, t := range terms {
-		if k, ok := ParseKey(t.task); ok && nameOf(in.User, k.Root) == nameOf(in.User, t.Root) {
-			linked[k] = true
-		}
-	}
-	tasks := map[Key]*Task{}
-	for r, t := range tracked {
-		for _, i := range t.Open {
-			k := Key{r, i.ID}
-			if _, dup := tasks[k]; dup || !issues.Open(i.Status) || !active(i.Status) && !linked[k] {
-				continue
-			}
-			tasks[k] = &Task{Key: k, Issue: i}
 		}
 	}
 
@@ -136,9 +76,6 @@ func Derive(in Inputs) World {
 	for r := range known {
 		add(r)
 	}
-	for k := range tasks {
-		add(k.Root)
-	}
 	pinned := map[string][]string{} // root → the pinned directories with it
 	for _, p := range in.Pinned {
 		if p != "" && !slices.Contains(pinned[root(p)], p) {
@@ -147,7 +84,6 @@ func Derive(in Inputs) World {
 	}
 	w := World{
 		Sessions:     map[string]*Session{},
-		Tasks:        tasks,
 		Orchestrator: in.Orchestrator,
 		Loaded:       in.Loaded,
 		RefreshErr:   in.RefreshErr,
@@ -173,6 +109,9 @@ func Derive(in Inputs) World {
 				if issues.Open(i.Status) {
 					p.Open = append(p.Open, i)
 				}
+				if i.Status == issues.Review {
+					p.InReview++
+				}
 			}
 		}
 		if p.ID == "" {
@@ -184,10 +123,6 @@ func Derive(in Inputs) World {
 		// stable sort by number leaves equal numbers in root order.
 		slices.SortStableFunc(p.Open, func(a, b issues.Issue) int { return a.ID - b.ID })
 		w.byName[n] = p
-	}
-	for _, t := range tasks {
-		t.Project = w.byName[nameOf(in.User, t.Root)]
-		t.IssuesID = w.IssuesID(t.Root)
 	}
 
 	// The sessions, in the places they sit.
@@ -203,24 +138,6 @@ func Derive(in Inputs) World {
 		if h, ok := in.Hosts[r.PID]; ok && !r.Background() {
 			s.Host = &h
 		}
-		for _, k := range links[r.SessionID] {
-			t := tasks[k]
-			if t.Issue.Status == issues.InProgress {
-				s.Holds = append(s.Holds, t)
-			}
-			t.Sessions = append(t.Sessions, s)
-			at := linkedAt[r.SessionID][k]
-			if at.IsZero() && r.StartedAt > 0 {
-				at = time.UnixMilli(r.StartedAt)
-			}
-			if !at.IsZero() && (t.Started.IsZero() || at.Before(t.Started)) {
-				t.Started = at
-			}
-		}
-		// A session's tasks keep the order it took them on in, so its
-		// labels stay put as it links to them again.
-		at := func(t *Task) time.Time { return linkedAt[r.SessionID][t.Key] }
-		slices.SortStableFunc(s.Holds, func(a, b *Task) int { return at(a).Compare(at(b)) })
 		switch {
 		case s.Host != nil:
 			w.Away = append(w.Away, s)
@@ -233,21 +150,8 @@ func Derive(in Inputs) World {
 
 	for _, t := range terms {
 		t.Project = w.byName[nameOf(in.User, t.Root)]
-		if k, ok := ParseKey(t.task); ok {
-			if task := tasks[k]; task != nil && task.Project == t.Project {
-				t.Task = task
-				task.Terminals = append(task.Terminals, &t.Terminal)
-			}
-		}
-		t.Project.Terminals = append(t.Project.Terminals, &t.Terminal)
-		w.Terminals = append(w.Terminals, &t.Terminal)
-	}
-
-	// The issues that wait on you, each in its own project.
-	for _, t := range tasks {
-		if t.Waits() {
-			t.Project.Waiting = append(t.Project.Waiting, t)
-		}
+		t.Project.Terminals = append(t.Project.Terminals, t)
+		w.Terminals = append(w.Terminals, t)
 	}
 
 	// The order of everything.
@@ -258,7 +162,6 @@ func Derive(in Inputs) World {
 		sort.Slice(ts, func(i, j int) bool { return WindowLess(ts[i].Window, ts[j].Window) })
 	}
 	for _, p := range w.byName {
-		sort.Slice(p.Waiting, func(i, j int) bool { return WaitingLess(p.Waiting[i], p.Waiting[j]) })
 		bySession(p.Sessions)
 		bySession(p.Members)
 		byWindow(p.Terminals)
@@ -268,18 +171,6 @@ func Derive(in Inputs) World {
 		}
 	}
 	sort.Slice(w.Projects, func(i, j int) bool { return NameLess(w.Projects[i].Name, w.Projects[j].Name) })
-	for _, t := range tasks {
-		// The session linked to it last comes first, as its lead.
-		at := func(s *Session) time.Time { return linkedAt[s.SessionID][t.Key] }
-		sort.Slice(t.Sessions, func(i, j int) bool {
-			a, b := t.Sessions[i], t.Sessions[j]
-			if c := at(a).Compare(at(b)); c != 0 {
-				return c > 0
-			}
-			return StartedLess(a.Row, b.Row)
-		})
-		byWindow(t.Terminals)
-	}
 	bySession(w.Away)
 	byWindow(w.Terminals)
 	sort.Slice(w.Agents, func(i, j int) bool { return needsFirst(w.Agents[i].Row, w.Agents[j].Row) })
@@ -300,88 +191,20 @@ func Derive(in Inputs) World {
 	}
 	w.NoHook = interactive && !hooked
 	for _, p := range w.byName {
-		w.Need += len(p.Waiting)
+		w.Need += p.InReview
 	}
 
 	// The trackers a refresh reads: the roots of every project, listed or
-	// not, and of the directories links name, whose ids a link may need.
+	// not.
 	trackerRoots := map[string]bool{}
 	for _, p := range w.byName {
 		for _, r := range p.Roots {
 			trackerRoots[r] = true
 		}
 	}
-	for _, r := range rows {
-		for _, ref := range r.Tasks {
-			trackerRoots[root(ref.Dir)] = true
-		}
-	}
 	delete(trackerRoots, "")
 	w.Trackers = slices.Sorted(maps.Keys(trackerRoots))
 	return w
-}
-
-// resolve is the task a session's ref links it to, ok false for
-// none. The ref names its project by id, or else by its directory, whose
-// tracker gives the id. The task is in the known project with that
-// id, preferring the session's own (own), and else in the ref's
-// directory's project: a subagent's `issues --dir <worktree> start 6`
-// names a worktree, which is a root of its own with the same id. The ref
-// links only if that project lists the issue as open.
-//
-// A ref with neither a project nor a directory is a start the reader of
-// the transcript could not place. It links to the session's own project,
-// and only to an issue that is in progress, in review or blocked there. A
-// start puts its issue in progress, so an issue of that number still
-// waiting in the session's own project is not the one that was started.
-func resolve(ref fleet.TaskRef, own string, ts map[string]Tracker, known map[string]bool, root func(string) string) (Key, bool) {
-	if ref.Project == "" && ref.Dir == "" {
-		for _, i := range ts[own].Open {
-			if i.ID == ref.ID && active(i.Status) {
-				return Key{own, i.ID}, true
-			}
-		}
-		return Key{}, false
-	}
-	dirRoot := root(ref.Dir)
-	id := ref.Project
-	if id == "" {
-		id = ts[dirRoot].ID
-	}
-	target := ""
-	if id != "" {
-		var hits []string
-		for r, t := range ts {
-			if known[r] && t.ID == id {
-				hits = append(hits, r)
-			}
-		}
-		slices.Sort(hits)
-		switch {
-		case slices.Contains(hits, own):
-			target = own
-		case len(hits) > 0:
-			target = hits[0]
-		}
-	}
-	if target == "" {
-		target = dirRoot
-	}
-	t, ok := ts[target]
-	if !ok || id != "" && t.ID != id {
-		return Key{}, false
-	}
-	for _, i := range t.Open {
-		if i.ID == ref.ID && issues.Open(i.Status) {
-			return Key{target, i.ID}, true
-		}
-	}
-	return Key{}, false
-}
-
-// active says whether an issue's status makes it a task by itself.
-func active(status string) bool {
-	return status == issues.InProgress || status == issues.Review || status == issues.Blocked
 }
 
 // paneOf is the pane that shows a session in the view's session, "" when
@@ -417,12 +240,6 @@ func elsewhere(in Inputs, r fleet.Row) bool {
 	return false
 }
 
-// term is a Terminal as terminals finds it, with its window's task option.
-type term struct {
-	Terminal
-	task string
-}
-
 // shells are the commands a terminal's title skips over, since a shell is
 // what every terminal runs.
 var shells = map[string]bool{
@@ -437,7 +254,7 @@ var shells = map[string]bool{
 // agents' pane under it, so a window with only the list's column is no
 // terminal. A terminal's root is its window's project
 // option, or else the root of its first pane's directory.
-func terminals(panes []tmux.Pane, session, self, opened string, claude map[string]bool, root func(string) string) []*term {
+func terminals(panes []tmux.Pane, session, self, opened string, claude map[string]bool, root func(string) string) []*Terminal {
 	byWindow := map[string][]tmux.Pane{}
 	skip := map[string]bool{}
 	var order []string
@@ -453,7 +270,7 @@ func terminals(panes []tmux.Pane, session, self, opened string, claude map[strin
 			skip[p.Window] = true
 		}
 	}
-	var out []*term
+	var out []*Terminal
 	for _, w := range order {
 		if skip[w] {
 			continue
@@ -464,7 +281,7 @@ func terminals(panes []tmux.Pane, session, self, opened string, claude map[strin
 		if r == "" {
 			r = root(first.Path)
 		}
-		out = append(out, &term{Terminal{Window: w, Pane: first.ID, Title: termTitle(ps), Path: first.Path, Root: r}, first.Task})
+		out = append(out, &Terminal{Window: w, Pane: first.ID, Title: termTitle(ps), Path: first.Path, Root: r})
 	}
 	sort.Slice(out, func(i, j int) bool { return WindowLess(out[i].Window, out[j].Window) })
 	return out

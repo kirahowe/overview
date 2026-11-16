@@ -157,15 +157,3 @@ func keepLast[T any](xs []T) []T {
 	}
 	return xs
 }
-
-// sessionsOn counts the sessions working on issue i of the project at
-// root, as the cockpit's issues card and the task picker show them.
-func (m model) sessionsOn(root string) func(issues.Issue) int {
-	w := m.world()
-	return func(i issues.Issue) int {
-		if st := w.Tasks[world.Key{Root: root, ID: i.ID}]; st != nil {
-			return len(st.Sessions)
-		}
-		return 0
-	}
-}

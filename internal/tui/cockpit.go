@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"overview/internal/fleet"
 	"overview/internal/issues"
-	"overview/internal/review"
 	"overview/internal/vcs"
 	"overview/internal/world"
 )
 
 // The cockpit is the view's own pane zoomed to fill its window: the list
 // down the left, as it always is, and cards about the selected entry's
-// task or project beside it. tmux keeps every other pane of the
+// project beside it. tmux keeps every other pane of the
 // window as it was under the zoom, so the session there comes back as it
 // was when the cockpit closes. While it is open the list stays in its
 // window, and the cards follow the cursor.
@@ -154,40 +152,17 @@ func closesCockpit(v verb) bool {
 	return false
 }
 
-// idleIssue says whether e is an issue with no session the list shows
-// linked to it. The holder shows its cockpit's cards, and enter opens the
-// cockpit.
-func idleIssue(es []entry, e entry) bool {
-	if e.kind != issueEntry {
-		return false
-	}
-	c, ok := lead(es, e.task)
-	return !ok || c.kind != sessionEntry
-}
-
-// idleSelected says whether the cursor is on an idle issue.
-func (m model) idleSelected() bool {
-	es := m.ordered()
-	e, _, ok := m.selected(es)
-	return ok && idleIssue(es, e)
-}
-
-// target is what the cockpit shows: a task, when task is set, or else the
-// project at root, which is nil when the World has none there. root is
-// where its reads run: the task's tracker's root, or the project's.
+// target is what the cockpit shows: the project at root, which is nil
+// when the World has none there. root is where its reads run.
 type target struct {
 	root    string
-	task    *world.Task
 	project *world.Project
 }
 
-// cockpitTarget is the cockpit's target for the selected entry in w: its
-// focus, or else the project it belongs to, as rootOf finds it. ok says
-// whether anything is selected.
+// cockpitTarget is the cockpit's target for the selected entry in w: the
+// project it belongs to, as rootOf finds it. ok says whether anything is
+// selected.
 func cockpitTarget(w *world.World, e entry, ok bool, rootOf func(entry, bool) string) target {
-	if t := e.focus(); ok && t != nil {
-		return target{root: t.Root, task: t, project: t.Project}
-	}
 	root := rootOf(e, ok)
 	return target{root: root, project: w.ProjectOf(root)}
 }
@@ -198,37 +173,20 @@ func (m model) target() target {
 	return cockpitTarget(m.world(), e, ok, m.rootOf)
 }
 
-// sessions are the target's sessions: those linked to its task, or every
-// one in its project.
+// sessions are the target's sessions: every one in its project.
 func (t target) sessions() []*world.Session {
-	switch {
-	case t.task != nil:
-		return t.task.Sessions
-	case t.project != nil:
+	if t.project != nil {
 		return t.project.Members
 	}
 	return nil
 }
 
-// terminals are the target's terminals: those opened for its task, or
-// every one in its project.
+// terminals are the target's terminals: every one in its project.
 func (t target) terminals() []*world.Terminal {
-	switch {
-	case t.task != nil:
-		return t.task.Terminals
-	case t.project != nil:
+	if t.project != nil {
 		return t.project.Terminals
 	}
 	return nil
-}
-
-// start is when a task's work began, in Unix milliseconds, 0 when nothing
-// says or for a project, whose changes are its working copy's.
-func (t target) start() int64 {
-	if t.task == nil || t.task.Started.IsZero() {
-		return 0
-	}
-	return t.task.Started.UnixMilli()
 }
 
 // cockpitListWidth is the list's width in the cockpit, 0 when the window
@@ -304,9 +262,9 @@ func (m model) inCockpitList(x int) bool {
 }
 
 // The cockpit's reads run in Cmds and land in caches by target: the
-// issue's details, read again when its project's .issues changes, and the
 // changes, read on opening and when what the target's sessions are doing
-// changes. A timer would run jj, which snapshots the working copy, every
+// changes. The task picker's issue details land in a cache by issue, read
+// again when its project's .issues changes. A timer would run jj, which snapshots the working copy, every
 // few seconds for nothing.
 
 // issueRead is an issue's details as last read, for the .issues stamp
@@ -318,13 +276,10 @@ type issueRead struct {
 }
 
 // changesRead is a target's changes as last read. sig is what its sessions
-// were doing when they were asked for, and base the commit a task's
-// changes are read from, found once for its start. fresh says they were
-// asked for since the cockpit opened.
+// were doing when they were asked for. fresh says they were asked for
+// since the cockpit opened.
 type changesRead struct {
 	sig     string
-	start   int64
-	base    string
 	fresh   bool
 	pending bool
 	kind    string // the repository's, "" when there is none
@@ -337,19 +292,13 @@ type (
 		info       issueInfo
 	}
 	changesReadMsg struct {
-		key, sig, base, kind string
-		start                int64
-		info                 changeInfo
+		key, sig, kind string
+		info           changeInfo
 	}
 )
 
 // cockpitKey names a target in the caches.
-func cockpitKey(t target) string {
-	if t.task != nil {
-		return taskPrefix + t.task.Key.String()
-	}
-	return "project:" + t.root
-}
+func cockpitKey(t target) string { return "project:" + t.root }
 
 // sessionsSig is what rows are doing, so a change to any of them, as a
 // hook reports it, reads the changes again.
@@ -373,53 +322,26 @@ func withRead[V any](mp map[string]V, k string, v V) map[string]V {
 	return out
 }
 
-// cockpitReads asks for what the cockpit's target lacks, while it is open
-// or the holder shows its cards: its issue's
-// details when they are missing or older than its .issues, and its
-// changes when they are missing, not yet read since the cockpit opened,
-// or from before its sessions last changed. A task's base is kept
-// once found, and found again only when its start moves earlier, as when
-// a session that took it on sooner is listed: a session ending must not
-// move it later.
+// cockpitReads asks for the target's changes while the cockpit is open,
+// when they are missing, not yet read since the cockpit opened, or from
+// before its sessions last changed.
 func (m model) cockpitReads() (model, tea.Cmd) {
-	if !m.cockpit.open && !m.idleSelected() {
+	if !m.cockpit.open {
 		return m, nil
 	}
 	t := m.target()
-	var cmds []tea.Cmd
-	if t.task != nil {
-		var read tea.Cmd
-		m, read = m.readIssue(t.root, t.task.ID)
-		cmds = append(cmds, read)
-	}
-	key := cockpitKey(t)
-	sig, start := sessionsSig(t.sessions()), t.start()
+	key, sig := cockpitKey(t), sessionsSig(t.sessions())
 	c, ok := m.changeReads[key]
 	if c.pending || (ok && c.sig == sig && c.fresh) {
-		return m, tea.Batch(cmds...)
-	}
-	stream := t.task != nil
-	if stream && start == 0 && c.base == "" {
-		c.sig, c.fresh, c.info = sig, true, changeInfo{noStart: true}
-		m.changeReads = withRead(m.changeReads, key, c)
-		return m, tea.Batch(cmds...)
-	}
-	base := c.base
-	switch {
-	case base == "" || (start > 0 && start < c.start):
-		base = ""
-	default:
-		start = c.start
+		return m, nil
 	}
 	c.sig, c.fresh, c.pending = sig, true, true
-	c.info.noStart = false
 	m.changeReads = withRead(m.changeReads, key, c)
-	return m, tea.Batch(append(cmds, changesCmd(key, sig, t.root, start, base, stream, m.deps))...)
+	return m, changesCmd(key, sig, t.root, m.deps)
 }
 
 // readIssue asks for the details of issue id of the project at root when
-// they are missing or older than its .issues, for the cockpit's issue
-// card and the task picker.
+// they are missing or older than its .issues, for the task picker.
 func (m model) readIssue(root string, id int) (model, tea.Cmd) {
 	if m.issues == nil {
 		return m, nil
@@ -437,15 +359,14 @@ func (m model) readIssue(root string, id int) (model, tea.Cmd) {
 		if err != nil {
 			return issueReadMsg{key, stamp, issueInfo{err: err}}
 		}
-		return issueReadMsg{key, stamp, issueInfo{summary: issueSummary(i.Details), criteria: issues.Criteria(i.Details), details: i.Details}}
+		return issueReadMsg{key, stamp, issueInfo{details: i.Details}}
 	}
 }
 
-// changesCmd reads what changed at root: since start, from base when it is
-// known, for a task, and in the working copy for a project.
-func changesCmd(key, sig, root string, start int64, base string, stream bool, d deps) tea.Cmd {
+// changesCmd reads what is uncommitted at root.
+func changesCmd(key, sig, root string, d deps) tea.Cmd {
 	return func() tea.Msg {
-		msg := changesReadMsg{key: key, sig: sig, start: start, base: base}
+		msg := changesReadMsg{key: key, sig: sig}
 		repo, ok := vcs.Find(root, d.exists)
 		if !ok {
 			msg.info.noRepo = true
@@ -465,20 +386,7 @@ func changesCmd(key, sig, root string, start int64, base string, stream bool, d 
 		if err != nil {
 			return fail(err)
 		}
-		if !stream {
-			msg.info = changeInfo{files: fileStats(open), uncommitted: -1}
-			return msg
-		}
-		if msg.base == "" {
-			if msg.base, err = repo.BaseAt(d.vcs, time.UnixMilli(start)); err != nil {
-				return fail(err)
-			}
-		}
-		files, err := repo.Diff(d.vcs, d.untracked, msg.base)
-		if err != nil {
-			return fail(err)
-		}
-		msg.info = changeInfo{files: fileStats(files), uncommitted: len(open)}
+		msg.info = changeInfo{files: fileStats(open)}
 		return msg
 	}
 }
@@ -493,21 +401,17 @@ func (m model) landRead(msg tea.Msg) model {
 	case changesReadMsg:
 		c := m.changeReads[msg.key]
 		c.pending, c.kind, c.info = false, msg.kind, msg.info
-		if msg.info.err == nil {
-			c.start, c.base = msg.start, msg.base
-		}
 		m.changeReads = withRead(m.changeReads, msg.key, c)
 	}
 	return m
 }
 
 // stale is the changes with every read made old, so opening the cockpit
-// reads its target's again while showing what it read last. A new
-// cockpit finds each task's base afresh.
+// reads its target's again while showing what it read last.
 func stale(mp map[string]changesRead) map[string]changesRead {
 	out := make(map[string]changesRead, len(mp))
 	for k, v := range mp {
-		v.fresh, v.base, v.start = false, "", 0
+		v.fresh = false
 		out[k] = v
 	}
 	return out
@@ -529,37 +433,15 @@ func (m model) members(rows []*world.Session, terms []*world.Terminal) []member 
 	return out
 }
 
-// others are the open issues of the target's tracker other than its own,
-// and how many sessions are linked to each, by number.
-func (m model) others(t target) ([]issues.Issue, map[int]int) {
-	var out []issues.Issue
-	linked := map[int]int{}
-	count := m.sessionsOn(t.root)
+// others are the open issues of the target's tracker.
+func (m model) others(t target) []issues.Issue {
 	tr, _ := m.world().Tracker(t.root)
-	for _, i := range tr.Open {
-		if t.task == nil || i.ID != t.task.ID {
-			out = append(out, i)
-			if n := count(i); n > 0 {
-				linked[i.ID] = n
-			}
-		}
-	}
-	return out, linked
-}
-
-// changeStart is when the target's changes are counted from: the start
-// its base was found for, once it has one, and else its start now.
-func (m model) changeStart(t target) int64 {
-	if c := m.changeReads[cockpitKey(t)]; c.base != "" && c.start > 0 {
-		return c.start
-	}
-	return t.start()
+	return tr.Open
 }
 
 // cockpitRows is the cards for target t, in rows from the top.
 func (m model) cockpitRows(t target) [][]card {
-	rows := t.sessions()
-	ms := m.members(rows, t.terminals())
+	ms := m.members(t.sessions(), t.terminals())
 	// The header offers enter only as the footer does, from enterOn on
 	// the selected entry, which the target is of. While the issues card
 	// has the keys, enter acts on its issue, and the footer says so, so
@@ -568,102 +450,52 @@ func (m model) cockpitRows(t target) [][]card {
 	if e, _, ok := m.selected(m.ordered()); ok && !m.inIssues() {
 		enter = m.enterHint(e)
 	}
-	ch := m.changeReads[cockpitKey(t)]
+	ch, ok := m.changeReads[cockpitKey(t)]
 	info := ch.info
-	if _, ok := m.changeReads[cockpitKey(t)]; !ok {
+	if !ok {
 		info.loading = true
 	}
 	tr, tracked := m.world().Tracker(t.root)
-	others, linked := m.others(t)
+	others := m.others(t)
 	pick := max(0, min(m.cockpit.pick, len(pickable(others))-1))
-	issuesRow := []card{issuesCard(others, linked, m.inIssues(), pick, tr.Err)}
-	if !tracked {
+	issuesRow := []card{issuesCard(others, m.inIssues(), pick, tr.Err)}
+	open := -1
+	if tracked {
+		open = len(others)
+	} else {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}
-	if t.task == nil {
-		kind := ch.kind
-		if info.noRepo {
-			kind = "no repository"
-		}
-		open := -1
-		if tracked {
-			open = len(others)
-		}
-		return [][]card{
-			{projectHeader(m.name(t.root), m.short(t.root), kind, open, ms, enter)},
-			{changesCard("Uncommitted", "", info)},
-			issuesRow,
-		}
-	}
-	since := ""
-	if s := m.changeStart(t); s > 0 {
-		since = m.ago(time.UnixMilli(s))
-	}
-	ir, ok := m.issueReads[t.task.Key.String()]
-	details := ir.info
-	if !ok {
-		details.loading = true
-	}
-	var sum review.Summary
-	for _, r := range rows {
-		s := r.Review
-		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
+	kind := ch.kind
+	if info.noRepo {
+		kind = "no repository"
 	}
 	return [][]card{
-		{streamHeader(t.task.Ref(), t.task.Issue.Status, t.task.Issue.Priority, t.task.Issue.Title, since, ms, enter, !m.inIssues())},
-		{issueCard(t.task.ID, details)},
-		{changesCard("Changes", since, info), reviewCard(sum)},
+		{projectHeader(m.name(t.root), m.short(t.root), kind, open, ms, enter)},
+		{changesCard(info)},
 		issuesRow,
 	}
 }
 
-// startPicked acts on the issue under the issues card's cursor. An issue
-// a session is linked to gets the cursor, on the issue's own row or its
-// lead's, and the cockpit follows it there, so enter never starts a second
-// session on work under way. Any other issue gets a session: claude at the
-// project's root with the opening prompt that names the issue, shown as c
-// shows a new session, once the cockpit has closed.
+// startPicked starts a session on the issue under the issues card's
+// cursor: claude at the project's root with the opening prompt that
+// names the issue, shown as c shows a new session, once the cockpit has
+// closed. Nothing says which session works on an issue already, so this
+// is always a new one.
 func (m model) startPicked() (model, tea.Cmd) {
 	t, i, ok := m.picked()
 	if !ok {
 		return m.say("no issue to start"), nil
 	}
-	if m.pickStarts() {
-		m, out := m.closeCockpit()
-		m, cmd := m.startOn(t.root, i)
-		return m, tea.Batch(out, cmd)
-	}
-	es := m.ordered()
-	j := taskAt(m.world(), es, taskKey(t.root, i.ID))
-	if j < 0 && m.filter != "" {
-		// The filter hides it: show everything, so the cursor can go.
-		m.filter, m.filtering = "", false
-		es = m.ordered()
-		j = taskAt(m.world(), es, taskKey(t.root, i.ID))
-	}
-	if j >= 0 {
-		m = m.moveTo(es, j)
-	}
-	m.cockpit.pick = 0
-	m.cockpit.issues = false
-	return m, nil
-}
-
-// pickStarts says whether enter in the issues card starts a session: no
-// session works on the issue under its cursor yet, whatever its status, so
-// a paused task is resumed. With one working, enter goes to it instead.
-// The task picker decides the same way, through taskGoes.
-func (m model) pickStarts() bool {
-	t, i, ok := m.picked()
-	return ok && !taskGoes(taskRow{sessions: m.sessionsOn(t.root)(i)})
+	m, out := m.closeCockpit()
+	m, cmd := m.startOn(t.root, i)
+	return m, tea.Batch(out, cmd)
 }
 
 // picked is the issue under the issues card's cursor, and the cockpit's
 // target it belongs to.
 func (m model) picked() (target, issues.Issue, bool) {
 	t := m.target()
-	others, _ := m.others(t)
-	ps := pickable(others)
+	ps := pickable(m.others(t))
 	if len(ps) == 0 {
 		return t, issues.Issue{}, false
 	}
@@ -680,7 +512,6 @@ func (m model) keepCockpit() model {
 		m.cockpit.issues = false
 		return m
 	}
-	others, _ := m.others(m.target())
-	m.cockpit.pick = max(0, min(m.cockpit.pick, len(pickable(others))-1))
+	m.cockpit.pick = max(0, min(m.cockpit.pick, len(pickable(m.others(m.target())))-1))
 	return m
 }

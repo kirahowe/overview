@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -263,53 +262,6 @@ func readString(s string, i int) (string, int) {
 		}
 	}
 	return b.String(), i
-}
-
-// Criterion is one checklist item of an issue's acceptance criteria.
-type Criterion struct {
-	Text string
-	Done bool
-}
-
-var (
-	headingRe = regexp.MustCompile(`^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$`)
-	itemRe    = regexp.MustCompile(`^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]*(.*)$`)
-	bulletRe  = regexp.MustCompile(`^[ \t]*([-*+]|\d+[.)])[ \t]`)
-)
-
-// Criteria returns the checklist items under the "Acceptance criteria"
-// heading of details, of any level and case. The section ends at the next
-// heading of the same or a higher level. A line that follows an item and
-// is neither blank, a heading nor another list item continues it.
-func Criteria(details string) []Criterion {
-	var out []Criterion
-	level, last := 0, -1 // the section's heading level, 0 outside one; the open item
-	for _, line := range strings.Split(details, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if m := headingRe.FindStringSubmatch(line); m != nil {
-			last = -1
-			switch {
-			case strings.EqualFold(strings.TrimSpace(m[2]), "acceptance criteria"):
-				level = len(m[1])
-			case level > 0 && len(m[1]) <= level:
-				level = 0
-			}
-			continue
-		}
-		if level == 0 {
-			continue
-		}
-		switch m := itemRe.FindStringSubmatch(line); {
-		case m != nil:
-			out = append(out, Criterion{Text: strings.TrimSpace(m[2]), Done: m[1] != " "})
-			last = len(out) - 1
-		case strings.TrimSpace(line) == "" || bulletRe.MatchString(line):
-			last = -1
-		case last >= 0:
-			out[last].Text = strings.TrimSpace(out[last].Text + " " + strings.TrimSpace(line))
-		}
-	}
-	return out
 }
 
 // Rank orders statuses for display, lowest first: what waits on you,

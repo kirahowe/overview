@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
@@ -514,7 +514,7 @@ func TestPropPlanTargetsTheWantedWindow(t *testing.T) {
 }
 
 // genTerms draws the panes of terminals in distinct windows of the view's
-// session, in the rows' projects, some of them opened for a workstream.
+// session, in the rows' projects.
 func genTerms(t *rapid.T) []tmux.Pane {
 	n := rapid.IntRange(0, 6).Draw(t, "terms")
 	wins := rapid.SliceOfNDistinct(rapid.IntRange(0, 30), n, n, rapid.ID[int]).Draw(t, "wins")
@@ -526,9 +526,6 @@ func genTerms(t *rapid.T) []tmux.Pane {
 			Command: rapid.SampledFrom([]string{"zsh", "node", "vite", "make"}).Draw(t, "command"),
 			Path:    rapid.SampledFrom([]string{"/w/alpha/web", "/x/api", "/"}).Draw(t, "path"),
 		}
-		if rapid.Bool().Draw(t, "termtask") {
-			out[i].Task = genKey().Draw(t, "ttask")
-		}
 	}
 	return out
 }
@@ -537,9 +534,8 @@ func genPinned(t *rapid.T) []string {
 	return rapid.SliceOfDistinct(rapid.SampledFrom([]string{"/w/alpha", "/w/delta", "/w/Beta", "/p/omega", "/w/gamma"}), rapid.ID[string]).Draw(t, "pinned")
 }
 
-// The workstreams. Two of the rows' projects track their issues; their
-// issues have numbers 1 to 5 and any status, and sessions link to them,
-// or to issues that are closed or not there at all, by project id.
+// The issues. Two of the rows' projects track their issues, which have
+// numbers 1 to 5 and any status.
 
 var (
 	trackedRoots = []string{"/w/alpha", "/w/gamma"}
@@ -575,36 +571,16 @@ func worldTrackers(is map[string][]issues.Issue) map[string]world.Tracker {
 	return out
 }
 
-// genLinks gives each row up to three refs to issues by project id.
-func genLinks(t *rapid.T, rows []fleet.Row) {
-	for i := range rows {
-		for range rapid.IntRange(0, 3).Draw(t, "links") {
-			rows[i].Tasks = append(rows[i].Tasks, fleet.TaskRef{
-				Project: rapid.SampledFrom([]string{"alpha", "gamma", "Beta"}).Draw(t, "rproject"),
-				ID:      rapid.IntRange(1, 6).Draw(t, "rid"),
-			})
-		}
-	}
-}
-
-func genKey() *rapid.Generator[string] {
-	return rapid.Custom(func(t *rapid.T) string {
-		return taskKey(rapid.SampledFrom(append(trackedRoots, "/w/Beta")).Draw(t, "kroot"), rapid.IntRange(1, 6).Draw(t, "kid"))
-	})
-}
-
-// genListWorld draws a whole World: sessions linked to workstreams,
-// terminals, pinned projects and trackers.
+// genListWorld draws a whole World: sessions, terminals, pinned projects
+// and trackers.
 func genListWorld(t *rapid.T) *world.World {
 	rows := genRows(t)
-	genLinks(t, rows)
 	return listWorld(rows, genTerms(t), genPinned(t), worldTrackers(genIssues(t)))
 }
 
 // presented is what the World holds that the list shows, in the World's
-// order: each listed project's heading, its sessions, its terminals and
-// the issues that wait on you there, then the away sessions, then the
-// agents.
+// order: each listed project's heading, its sessions and its terminals,
+// then the away sessions, then the agents.
 func presented(w *world.World) []string {
 	var out []string
 	for _, p := range w.Projects {
@@ -614,9 +590,6 @@ func presented(w *world.World) []string {
 		}
 		for _, tm := range p.Terminals {
 			out = append(out, tm.Window)
-		}
-		for _, st := range p.Waiting {
-			out = append(out, "task:"+st.Key.String())
 		}
 	}
 	for _, s := range w.Away {
@@ -637,7 +610,7 @@ func keys(es []entry) []string {
 }
 
 // With an empty query the list is the whole World, in its order: every
-// listed project, session, terminal, waiting issue and away session, a
+// listed project, session, terminal and away session, a
 // placeholder for each project with nothing in it, and every session once
 // in the agents list. Each entry points at what it shows.
 func TestPropPresentShowsTheWholeWorld(t *testing.T) {
@@ -658,10 +631,6 @@ func TestPropPresentShowsTheWholeWorld(t *testing.T) {
 				case sessionEntry:
 					if w.Sessions[e.sess.SessionID] != e.sess {
 						t.Fatalf("%s is not the World's session", e.key())
-					}
-				case issueEntry:
-					if w.Tasks[e.task.Key] != e.task || e.task.Project.Name != s.Title || !e.task.Waits() {
-						t.Fatalf("%s is not the World's waiting issue in %q", e.key(), s.Title)
 					}
 				case terminalEntry:
 					if !slices.Contains(w.Terminals, e.term) || e.term.Project.Name != s.Title {
@@ -1006,9 +975,8 @@ func TestPropFitList(t *testing.T) {
 	})
 }
 
-// Each session has exactly two entries, however many tasks it holds: its
-// primary one, in its project or among the sessions other apps run, and
-// one in the agents list.
+// Each session has exactly two entries: its primary one, in its project
+// or among the sessions other apps run, and one in the agents list.
 func TestPropSessionEntries(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
@@ -1018,7 +986,7 @@ func TestPropSessionEntries(t *testing.T) {
 				t.Fatalf("key %s twice", e.key())
 			}
 		}
-		for id, s := range w.Sessions {
+		for id := range w.Sessions {
 			n := 0
 			for k, c := range count {
 				if k == id || strings.HasSuffix(k, "/"+id) {
@@ -1026,59 +994,15 @@ func TestPropSessionEntries(t *testing.T) {
 				}
 			}
 			if n != 2 || count[id] != 1 || count["agents/"+id] != 1 {
-				t.Fatalf("%s is listed %d times, holding %d tasks", id, n, len(s.Holds))
+				t.Fatalf("%s is listed %d times", id, n)
 			}
 		}
 	})
 }
 
-// A search shows an issue exactly when it matches on its ref, number,
-// title or project name, and a session whenever one of the tasks it holds
-// matches on its ref, number or title, so searching for an issue finds
-// the session on it.
-func TestPropSearchFindsIssuesAndWhoHoldsThem(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		w := genListWorld(t)
-		q := rapid.OneOf(rapid.Just(genQuery(t)), rapid.SampledFrom([]string{"#2", "alpha#3", "gamma", "#4 alpha"})).Draw(t, "q")
-		all := present(w, "")
-		words := strings.Fields(strings.ToLower(q))
-		shown := map[string]bool{}
-		for _, e := range flatten(present(w, q)) {
-			shown[e.key()] = true
-		}
-		for _, s := range all {
-			for _, e := range s.Entries {
-				switch {
-				case e.kind == issueEntry:
-					i := e.task.Issue
-					self := matchFields(words, e.task.Ref(), fmt.Sprintf("#%d", i.ID), i.Title, e.task.Project.Name)
-					if shown[e.key()] != self {
-						t.Fatalf("%q: %s shown %v, matches %v", q, e.key(), shown[e.key()], self)
-					}
-				case e.kind == sessionEntry:
-					for _, st := range e.sess.Holds {
-						if matchFields(words, st.Ref(), fmt.Sprintf("#%d", st.ID), st.Issue.Title) && !shown[e.key()] {
-							t.Fatalf("%q matches %s, which %s holds, yet hides it", q, st.Ref(), e.key())
-						}
-					}
-				}
-			}
-		}
-	})
-}
-
-// workRows are rows whose task refs name the tracked projects by id, and
-// trackers for those projects, for a model.
+// workRows are rows and trackers for the tracked projects, for a model.
 func workRows(t *rapid.T) ([]fleet.Row, map[int]string, trackers) {
 	rows, ttys := genStateRows(t)
-	for i := range rows {
-		for range rapid.IntRange(0, 2).Draw(t, "refs") {
-			rows[i].Tasks = append(rows[i].Tasks, fleet.TaskRef{
-				Project: rapid.SampledFrom([]string{"alpha", "gamma"}).Draw(t, "rproject"),
-				ID:      rapid.IntRange(1, 5).Draw(t, "rid"),
-			})
-		}
-	}
 	is := genIssues(t)
 	ts := trackers{}
 	for _, root := range slices.Sorted(maps.Keys(is)) {
@@ -1116,8 +1040,8 @@ func parsedIssues(t *rapid.T, list []issues.Issue) []issues.Issue {
 }
 
 // j from the top, which g and k reach, visits every entry once,
-// aliases, workstreams and headings too, and n only ever stops at a
-// session's own entry that needs you or at a workstream in review.
+// aliases and headings too, and n only ever stops at a session's own entry
+// that needs you.
 func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	root := t.TempDir()
 	rapid.Check(t, func(t *rapid.T) {
@@ -1155,33 +1079,21 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	})
 }
 
-// The cockpit's target for an issue is the issue, for a terminal opened
-// for one that one, and for a session the task it holds when it holds
-// exactly one. For anything else it is the entry's project.
-func TestPropCockpitTargetIsTheFocus(t *testing.T) {
+// The cockpit's target is always the project of the entry under the
+// cursor, as rootOf finds it, or the root rootOf gives with nothing
+// selected.
+func TestPropCockpitTargetIsTheProject(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
 		es := flatten(present(w, ""))
 		rootOf := func(e entry, ok bool) string { return "/root/of/" + e.key() }
 		for _, e := range es {
 			got := cockpitTarget(w, e, true, rootOf)
-			var want *world.Task
-			switch {
-			case e.kind == issueEntry:
-				want = e.task
-			case e.kind == terminalEntry:
-				want = e.term.Task
-			case e.kind == sessionEntry && len(e.sess.Holds) == 1:
-				want = e.sess.Holds[0]
-			}
-			switch {
-			case want != nil && (got.task != want || got.root != want.Root || got.project != want.Project):
-				t.Fatalf("%s on %s has target %+v", e.key(), want.Key, got)
-			case want == nil && (got.task != nil || got.root != rootOf(e, true) || got.project != w.ProjectOf(got.root)):
-				t.Fatalf("%s on no one task has target %+v", e.key(), got)
+			if got.root != rootOf(e, true) || got.project != w.ProjectOf(got.root) {
+				t.Fatalf("%s has target %+v", e.key(), got)
 			}
 		}
-		if got := cockpitTarget(w, entry{}, false, rootOf); got.task != nil || got.root != rootOf(entry{}, false) {
+		if got := cockpitTarget(w, entry{}, false, rootOf); got.root != rootOf(entry{}, false) {
 			t.Fatalf("with nothing selected: %+v", got)
 		}
 	})
@@ -1200,10 +1112,6 @@ func genCards(t *rapid.T) [][]card {
 		files = append(files, fileStat{path: text.Draw(t, "path"), add: rapid.IntRange(0, 5000).Draw(t, "add"), del: rapid.IntRange(0, 50).Draw(t, "del"),
 			binary: rapid.Bool().Draw(t, "binary")})
 	}
-	var crit []issues.Criterion
-	for range rapid.IntRange(0, 5).Draw(t, "crit") {
-		crit = append(crit, issues.Criterion{Text: text.Draw(t, "ctext"), Done: rapid.Bool().Draw(t, "done")})
-	}
 	statuses := []string{issues.Inbox, issues.Ready, issues.InProgress, issues.Review, issues.Blocked}
 	var others []issues.Issue
 	for i := range rapid.IntRange(0, 8).Draw(t, "others") {
@@ -1211,13 +1119,10 @@ func genCards(t *rapid.T) [][]card {
 			Priority: rapid.SampledFrom([]string{"p0", "p2", ""}).Draw(t, "oprio")})
 	}
 	cards := []card{
-		streamHeader(text.Draw(t, "ref"), "review", "p1", text.Draw(t, "title"), text.Draw(t, "since"), ms, nil, rapid.Bool().Draw(t, "mark")),
 		projectHeader(text.Draw(t, "name"), text.Draw(t, "root"), "jj", rapid.IntRange(-1, 9).Draw(t, "open"), ms, nil),
-		issueCard(6, issueInfo{summary: text.Draw(t, "summary"), criteria: crit, loading: rapid.Bool().Draw(t, "loading")}),
-		changesCard("Changes", text.Draw(t, "csince"), changeInfo{files: files, uncommitted: rapid.IntRange(-1, 9).Draw(t, "unc"),
-			noRepo: rapid.Bool().Draw(t, "norepo")}),
+		changesCard(changeInfo{files: files, noRepo: rapid.Bool().Draw(t, "norepo"), loading: rapid.Bool().Draw(t, "loading")}),
 		reviewCard(review.Summary{Open: rapid.IntRange(0, 9).Draw(t, "ropen"), Waiting: rapid.IntRange(0, 3).Draw(t, "rwait")}),
-		issuesCard(others, map[int]int{1: 2}, rapid.Bool().Draw(t, "focused"), rapid.IntRange(0, 8).Draw(t, "pick"),
+		issuesCard(others, rapid.Bool().Draw(t, "focused"), rapid.IntRange(0, 8).Draw(t, "pick"),
 			rapid.SampledFrom([]string{"", "issues list: exit status 1: " + strings.Repeat("bad ", 30)}).Draw(t, "err")),
 		tasksCard(text.Draw(t, "troot"), rapid.Bool().Draw(t, "tool")),
 	}
@@ -1288,8 +1193,7 @@ func TestPropCockpitCardsFitAndDropTheLast(t *testing.T) {
 	})
 }
 
-// The whole view fits any size with the cockpit open, on a workstream and
-// on a project.
+// The whole view fits any size with the cockpit open.
 func TestPropCockpitFitsAnySize(t *testing.T) {
 	base := workModel(t, 150, 40)
 	base.cockpit = cockpit{open: true}
@@ -1351,31 +1255,29 @@ func TestPropTheFocusedCardIsShown(t *testing.T) {
 }
 
 // When the entry under the cursor goes, the cursor stays with its
-// session while the session is listed: an issue that closes or links
-// that change move its entries, never the cursor to another session.
+// session while the session is listed: a session that moves to another
+// project, or issues that close, change its entries, never the cursor to
+// another session.
 func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, query := genRows(t), genTerms(t), genQuery(t)
-		genLinks(t, rows)
 		is := genIssues(t)
 		old := flatten(present(listWorld(rows, terms, nil, worldTrackers(is)), query))
 		if len(old) == 0 {
 			return
 		}
-		// Issues close and sessions link again, or everything changes.
+		// Issues close and sessions move project, or everything changes.
 		next := map[string][]issues.Issue{}
 		for _, root := range slices.Sorted(maps.Keys(is)) {
 			next[root] = slices.DeleteFunc(slices.Clone(is[root]), func(issues.Issue) bool { return rapid.Bool().Draw(t, "close") })
 		}
 		rows = slices.Clone(rows)
 		for i := range rows {
-			rows[i].Tasks = rapid.Permutation(rows[i].Tasks).Draw(t, "relink")
+			if rapid.Bool().Draw(t, "move") {
+				rows[i].Cwd = rapid.SampledFrom(cwds).Draw(t, "cwd")
+			}
 		}
 		if rapid.IntRange(0, 4).Draw(t, "anew") == 0 {
-			for i := range rows {
-				rows[i].Tasks = nil
-			}
-			genLinks(t, rows)
 			next, query = genIssues(t), genQuery(t)
 		}
 		now := flatten(present(listWorld(rows, terms, nil, worldTrackers(next)), query))
@@ -1414,7 +1316,6 @@ func TestPropTheCursorStaysWithItsSession(t *testing.T) {
 func TestPropTheCursorStaysInItsProject(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rows, terms, pinned := genRows(t), genTerms(t), genPinned(t)
-		genLinks(t, rows)
 		is := genIssues(t)
 		old := flatten(present(listWorld(rows, terms, pinned, worldTrackers(is)), ""))
 		left := slices.DeleteFunc(slices.Clone(terms), func(tmux.Pane) bool { return rapid.Bool().Draw(t, "close") })
@@ -1478,21 +1379,6 @@ func TestTheFooterCutsAWideGlyph(t *testing.T) {
 	}
 }
 
-// Every opening prompt overview writes for a project id without spaces or
-// a #, whatever the issue's title, is one the hook reads back as that
-// issue, so the session it starts links itself. An id with them is the
-// one case it cannot, and startOn says so.
-func TestPropOpeningRoundTrips(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		id := rapid.String().Draw(t, "id")
-		i := issues.Issue{ID: rapid.IntRange(1, 1_000_000).Draw(t, "n"), Title: rapid.String().Draw(t, "title")}
-		plain := id != "" && !strings.ContainsFunc(id, func(c rune) bool { return c == '#' || unicode.IsSpace(c) })
-		if got := opens(opening(id, i), id, i); got != plain {
-			t.Fatalf("opening(%q, #%d %q) reads back %v", id, i.ID, i.Title, got)
-		}
-	})
-}
-
 // pickKey is where the task picker puts an issue, stated apart from the
 // code: ready, then inbox, then review, in progress and blocked, then by
 // priority p0 to p3 and anything else last, then by number.
@@ -1515,11 +1401,10 @@ func TestPropTaskRows(t *testing.T) {
 				Status:   rapid.SampledFrom(statuses).Draw(t, "status"),
 				Priority: rapid.SampledFrom([]string{"p0", "p1", "p2", "p3", "", "px"}).Draw(t, "priority")})
 		}
-		sessions := rapid.MapOf(rapid.IntRange(1, 30), rapid.IntRange(0, 3)).Draw(t, "sessions")
 		words := rapid.SliceOfN(rapid.OneOf(rapid.SampledFrom([]string{"fix", "THE", "li", "app#", "#1", "#2"}),
 			rapid.Custom(func(t *rapid.T) string { return phrase(t, "word") })), 0, 3).Draw(t, "query")
 		query := strings.Join(words, " ")
-		rows := taskRows(list, "app", counted(sessions), query)
+		rows := taskRows(list, "app", query)
 		terms := strings.Fields(strings.ToLower(query))
 		seen := map[int]bool{}
 		for k, r := range rows {
@@ -1529,9 +1414,6 @@ func TestPropTaskRows(t *testing.T) {
 			seen[r.issue.ID] = true
 			if !issues.Open(r.issue.Status) {
 				t.Fatalf("a %s issue is offered", r.issue.Status)
-			}
-			if r.sessions != sessions[r.issue.ID] {
-				t.Fatalf("#%d has %d sessions, want %d", r.issue.ID, r.sessions, sessions[r.issue.ID])
 			}
 			for _, w := range terms {
 				if !matchFields([]string{w}, "#"+strconv.Itoa(r.issue.ID), "app#"+strconv.Itoa(r.issue.ID), r.issue.Title) {
@@ -1898,8 +1780,8 @@ func TestPropKeepEnd(t *testing.T) {
 // Every heading's note names its units, and a search never changes one:
 // it shows the parts the whole list shows, with the same totals, in the
 // same order, showing no more than all of them, and a part shows only
-// for a kind the project has. The
-// search's count is the same with the agents list or without it, so a
+// for a kind the project has. The issues in review, which are no rows,
+// are counted whole under any search. The search's count is the same with the agents list or without it, so a
 // session it shows twice counts once.
 func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
@@ -1921,10 +1803,10 @@ func TestPropHeadingCountsKeepTheirUnit(t *testing.T) {
 				t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, ps, whole[sec.Title])
 			}
 			for i, p := range ps {
-				if p.unit == "" || !strings.Contains(p.String(), p.unit) {
+				if name := cmp.Or(p.unit, p.phrase); name == "" || !strings.Contains(p.String(), name) {
 					t.Fatalf("%q's part %+v names no unit", sec.Title, p)
 				}
-				if o := whole[sec.Title][i]; o.unit != p.unit || o.total != p.total || p.shown > p.total {
+				if o := whole[sec.Title][i]; o.unit != p.unit || o.phrase != p.phrase || o.total != p.total || p.shown > p.total {
 					t.Fatalf("%q under %q says %+v, %+v without it", sec.Title, q, ps, whole[sec.Title])
 				}
 				if p.total == 0 && len(ps) > 1 {
@@ -1948,7 +1830,7 @@ func TestPropAHeadingKeepsItsTitleBeforeItsNote(t *testing.T) {
 		w := rapid.IntRange(2, 120).Draw(t, "w")
 		m = update(m, tea.WindowSizeMsg{Width: w, Height: 10})
 		title := rapid.StringMatching(`[a-z][a-z-]{0,40}`).Draw(t, "title")
-		sec := section{Title: title, Tracked: rapid.Bool().Draw(t, "tracked"), Waiting: rapid.IntRange(0, 12).Draw(t, "waiting"),
+		sec := section{Title: title, Tracked: rapid.Bool().Draw(t, "tracked"), InReview: rapid.IntRange(0, 12).Draw(t, "inreview"),
 			Sessions: rapid.IntRange(1, 12).Draw(t, "sessions"), Terminals: rapid.IntRange(1, 3).Draw(t, "terms"), Open: 7,
 			Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}}}
 		notes := sectionNotes(sec)
@@ -2024,7 +1906,7 @@ func TestPropCardsAreDroppedOnlyForWantOfRoom(t *testing.T) {
 			others = append(others, issues.Issue{ID: i + 1, Title: "issue", Status: rapid.SampledFrom([]string{issues.Ready, issues.InProgress, issues.Review, issues.Blocked}).Draw(t, "status")})
 		}
 		pick := rapid.IntRange(0, len(pickable(others))-1).Draw(t, "pick")
-		focused := issuesCard(others, nil, true, pick, "")
+		focused := issuesCard(others, true, pick, "")
 		focused.title = "focused"
 		rows = append(rows, []card{focused})
 		w, h := rapid.IntRange(0, 200).Draw(t, "w"), rapid.IntRange(0, 60).Draw(t, "h")
@@ -2310,8 +2192,7 @@ func TestPropSideIsTheCursorsOwn(t *testing.T) {
 }
 
 // The entries that echo the cursor's are the other entries of the session
-// it stands for, its own or its issue's lead's: each of them, and
-// never the cursor's own. The first of them on a side is where across
+// it stands for: each of them, and never the cursor's own. The first of them on a side is where across
 // puts the cursor, so the row marked there is the row the cursor crosses
 // to, and the part of the list that holds the cursor scrolls to it.
 func TestPropEchoesAreTheCursorsSession(t *testing.T) {
@@ -2326,10 +2207,6 @@ func TestPropEchoesAreTheCursorsSession(t *testing.T) {
 		switch e := es[i]; e.kind {
 		case sessionEntry:
 			id = e.sess.SessionID
-		case issueEntry:
-			if c, ok := lead(es, e.task); ok && c.kind == sessionEntry {
-				id = c.sess.SessionID
-			}
 		}
 		same := func(j int) bool {
 			return j != i && id != "" && es[j].kind == sessionEntry && es[j].sess.SessionID == id

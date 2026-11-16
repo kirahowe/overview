@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,14 +84,6 @@ func TestFactsFromARealisticTranscript(t *testing.T) {
 	if !ok {
 		t.Fatal("no facts")
 	}
-	want := []TaskRef{
-		{Project: "relay", Dir: "/w/relay", ID: 54, Linked: ts("2026-10-23T17:44:47.677Z")},
-		{Dir: "~/code/x", ID: 6, Linked: ts("2026-10-23T17:46:02Z")},
-		{Dir: "/w/other", ID: 64, Linked: ts("2026-10-23T17:49:05Z")},
-	}
-	if !reflect.DeepEqual(got.Links, want) {
-		t.Fatalf("links %+v, want %+v", got.Links, want)
-	}
 	if got.Title != "Roles keep cards" || got.LastPrompt != "Work on relay#54: Let roles keep cards" {
 		t.Fatalf("title and prompt: %+v", got)
 	}
@@ -156,53 +147,12 @@ func TestAnUnfinishedLineWaitsForItsEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := NewTranscripts()
-	if f, _ := idx.Facts(path); len(f.Links) != 0 {
-		t.Fatalf("linked from half a line: %+v", f.Links)
+	if f, _ := idx.Facts(path); f.LastReply != "" {
+		t.Fatalf("read half a line: %+v", f)
 	}
-	appendLines(t, path, line[40:])
-	if f, _ := idx.Facts(path); len(f.Links) != 1 || f.Links[0].ID != 3 {
-		t.Fatalf("links %+v", f.Links)
-	}
-}
-
-func TestSubagentsLinkTheirParentInTimeOrder(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "projects", "-w")
-	path := filepath.Join(dir, "s-1.jsonl")
-	subs := filepath.Join(dir, "s-1", "subagents")
-	writeLines(t, path,
-		bashCall("2026-10-23T10:00:00Z", "/w/a", "m1", "issues start 1"),
-		bashResult("2026-10-23T10:00:01Z", "m1", false),
-	)
-	idx := NewTranscripts()
-	if f, _ := idx.Facts(path); len(f.Links) != 1 {
-		t.Fatalf("links %+v", f.Links)
-	}
-	// A subagent appears after the first read. Its prompt links nothing,
-	// its Bash call links the parent, and an errored call links nothing.
-	sidechain := func(s string) string { return strings.Replace(s, `{"type"`, `{"isSidechain":true,"type"`, 1) }
-	writeLines(t, filepath.Join(subs, "agent-a1.jsonl"),
-		sidechain(userPrompt("2026-10-23T10:00:02Z", "/w/a", "Work on p#9: sub")),
-		sidechain(bashCall("2026-10-23T10:00:03Z", "/w/b", "a1", "issues start 2")),
-		sidechain(bashResult("2026-10-23T10:00:05Z", "a1", false)),
-		sidechain(bashCall("2026-10-23T10:00:06Z", "/w/b", "a2", "issues start 3")),
-		sidechain(bashResult("2026-10-23T10:00:07Z", "a2", true)),
-	)
-	// The main session links 1 again after the subagent linked 2.
-	appendLines(t, path,
-		bashCall("2026-10-23T10:00:08Z", "/w/a", "m2", "issues start 1"),
-		bashResult("2026-10-23T10:00:09Z", "m2", false),
-	)
-	f, _ := idx.Facts(path)
-	want := []TaskRef{
-		{Dir: "/w/b", ID: 2, Linked: ts("2026-10-23T10:00:05Z")},
-		{Dir: "/w/a", ID: 1, Linked: ts("2026-10-23T10:00:01Z")},
-	}
-	if !reflect.DeepEqual(f.Links, want) {
-		t.Fatalf("links %+v, want %+v", f.Links, want)
-	}
-	// A subagent's own words are not the session's.
-	if f.LastReply != "" || f.Title != "" {
-		t.Fatalf("facts leaked from a subagent: %+v", f)
+	appendLines(t, path, line[40:], reply("2026-10-23T10:00:05Z", "Done."))
+	if f, _ := idx.Facts(path); f.LastReply != "Done." {
+		t.Fatalf("facts %+v", f)
 	}
 }
 
@@ -225,7 +175,7 @@ func TestReadingOnlyWhatWasAppended(t *testing.T) {
 	writeLines(t, path, userPrompt("2026-10-23T10:00:00Z", "/w", "Work on p#1"))
 	idx := NewTranscripts()
 	idx.Facts(path)
-	s := idx.sessions[path].main
+	s := idx.sessions[path]
 	size, _ := os.Stat(path)
 	if s.off != size.Size() || len(s.tail) != 0 {
 		t.Fatalf("read to %d of %d, tail %q", s.off, size.Size(), s.tail)
@@ -261,21 +211,10 @@ echo '[{"pid":1,"cwd":"/w/a","kind":"interactive","startedAt":1000,"sessionId":"
 	if r.Title != "The title" || r.LastPrompt != "x" || r.LastReply != "Done?" || !r.LastReplyAt.Equal(ts("2026-10-23T10:00:05Z")) {
 		t.Fatalf("row %+v", r)
 	}
-	// A directory the command wrote from ~ is under the user's home, and
-	// one the reader could not place stays empty.
-	at := ts("2026-10-23T10:00:02Z")
-	want := []TaskRef{
-		{Project: "p", Dir: "/w/a", ID: 4, Linked: ts("2026-10-23T10:00:00Z")},
-		{Dir: "/u/code/x", ID: 6, Linked: at},
-		{ID: 7, Linked: at},
-	}
-	if !reflect.DeepEqual(r.Tasks, want) {
-		t.Fatalf("tasks %+v, want %+v", r.Tasks, want)
-	}
 	if r.Hooked || r.Since.IsZero() {
 		t.Fatalf("hooked %v since %v", r.Hooked, r.Since)
 	}
-	if rows[1].Tasks != nil || rows[1].Title != "" || !rows[1].Since.Equal(time.UnixMilli(2000)) {
+	if rows[1].Title != "" || !rows[1].Since.Equal(time.UnixMilli(2000)) {
 		t.Fatalf("a session with no transcript: %+v", rows[1])
 	}
 }
@@ -319,7 +258,7 @@ echo '[{"pid":1,"cwd":"/w","kind":"interactive","startedAt":1000,"sessionId":"me
 
 // synthetic builds about size bytes of transcript the way a long session
 // looks: mostly large tool results and progress records, with prompts,
-// replies and a few issue links among them.
+// and replies among them.
 func synthetic(size int) []byte {
 	var b strings.Builder
 	pad := strings.Repeat("lorem ipsum dolor sit amet ", 300)
@@ -327,9 +266,6 @@ func synthetic(size int) []byte {
 		at := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format("2006-01-02T15:04:05.000Z")
 		id := fmt.Sprintf("toolu_%d", i)
 		cmd := "go test ./..."
-		if i%50 == 0 {
-			cmd = fmt.Sprintf("cd /w/a && issues start %d", i/50%9+1)
-		}
 		b.WriteString(userPrompt(at, "/w/a", fmt.Sprintf("prompt %d %s", i, pad[:200])) + "\n")
 		b.WriteString(bashCall(at, "/w/a", id, cmd) + "\n")
 		fmt.Fprintf(&b, `{"type":"user","timestamp":%q,"message":{"content":[{"tool_use_id":%q,"type":"tool_result","content":%q,"is_error":false}]}}`+"\n", at, id, pad)
@@ -351,7 +287,7 @@ func BenchmarkFirstRead(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		f, ok := NewTranscripts().Facts(path)
-		if !ok || len(f.Links) == 0 {
+		if !ok || f.LastReply == "" {
 			b.Fatalf("facts %+v", f)
 		}
 	}

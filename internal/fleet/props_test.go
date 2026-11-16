@@ -360,177 +360,9 @@ func TestPropSessionIDStaysInsideSessionsDir(t *testing.T) {
 	})
 }
 
-// quote wraps s so splitCommands reads it back as one word.
-func quote(t *rapid.T, s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t\n\"'\\;&|$`") && rapid.Bool().Draw(t, "bare") {
-		return s
-	}
-	if !strings.Contains(s, "'") && rapid.Bool().Draw(t, "single") {
-		return "'" + s + "'"
-	}
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
-
-func genDirWord() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-z]{1,5}([ ;&|][a-z]{1,4}){0,2}`)
-}
-
-// A well-formed invocation, built from drawn parts, reads back as the ref
-// it was built from.
-func TestPropIssuesStartsRoundTrip(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		cwd := "/" + rapid.StringMatching(`[a-z]{1,6}(/[a-z]{1,6}){0,2}`).Draw(t, "cwd")
-		id := rapid.IntRange(1, 1_000_000).Draw(t, "id")
-		want := TaskRef{Dir: cwd, ID: id}
-		words := []string{"issues"}
-		if rapid.Bool().Draw(t, "bin") {
-			words[0] = "/opt/bin/issues"
-		}
-		if rapid.Bool().Draw(t, "json") {
-			words = append(words, "--json")
-		}
-		if rapid.Bool().Draw(t, "project") {
-			want.Project = rapid.StringMatching(`[a-z][a-z0-9.-]{0,8}`).Draw(t, "p")
-			if rapid.Bool().Draw(t, "eq") {
-				words = append(words, "--project="+want.Project)
-			} else {
-				words = append(words, "--project", quote(t, want.Project))
-			}
-		}
-		if rapid.Bool().Draw(t, "dir") {
-			rel := genDirWord().Draw(t, "dirword")
-			abs := "/" + rel
-			dir, flag := abs, rapid.SampledFrom([]string{"-C", "--dir"}).Draw(t, "flag")
-			want.Dir = abs
-			if rapid.Bool().Draw(t, "relative") {
-				dir, want.Dir = rel, filepath.Join(cwd, rel)
-			}
-			words = append(words, flag, quote(t, dir))
-		}
-		words = append(words, "start", strconv.Itoa(id))
-		prefix := rapid.SampledFrom([]string{"", "FOO=1 ", "A='x y' B=2 ", "echo hi && ", "true;\n", "x | ", "if true; then ", "true; do ", "false; else ", "command ", "builtin ", "exec "}).Draw(t, "prefix")
-		suffix := rapid.SampledFrom([]string{"", " && echo done", " | cat", " &", "\necho x"}).Draw(t, "suffix")
-
-		// Something before the start can move the directory or make it
-		// unknown, or comment the start out.
-		var dirAbs, dirRel bool
-		for i, w := range words {
-			if w == "-C" || w == "--dir" {
-				dirAbs = strings.HasPrefix(words[i+1], "/") || strings.HasPrefix(words[i+1], "'/") || strings.HasPrefix(words[i+1], `"/`)
-				dirRel = !dirAbs
-			}
-		}
-		lost := false
-		switch before := rapid.SampledFrom([]string{"", "pushd", "home", "unknown", "comment"}).Draw(t, "before"); before {
-		case "pushd", "home":
-			to := "/" + rapid.StringMatching(`[a-z]{1,6}`).Draw(t, "to")
-			if before == "home" {
-				to = "~" + rapid.SampledFrom([]string{"", to}).Draw(t, "under")
-			}
-			prefix = rapid.SampledFrom([]string{"pushd ", "cd "}).Draw(t, "move") + to + " && " + prefix
-			switch {
-			case dirRel:
-				rel, _ := filepath.Rel(cwd, want.Dir)
-				want.Dir = to + "/" + rel
-			case !dirAbs:
-				want.Dir = to
-			}
-		case "unknown":
-			// The start still reads, and its ref has a directory only
-			// when the command names an absolute one.
-			prefix = rapid.SampledFrom([]string{"popd; ", "pushd ~sam/x && ", "cd $X && ", "cd - && ", "(cd /q); ", "{ cd /q; } && ", "( cd /q; ", "{cd /q; ", "if true; then cd /q; fi; ", "for d in /q; do cd $d; done; ", "command cd /q && ", "builtin cd /q && ", "while true; do break; done; "}).Draw(t, "group") + prefix
-			if !dirAbs {
-				want.Dir = ""
-			}
-		case "comment":
-			// The comment runs to the end of its line only.
-			lost = !strings.Contains(prefix, "\n")
-			prefix = "echo x # see " + prefix
-		}
-
-		// The same start through a function that hands its arguments to
-		// issues reads as the start itself. A wrapper such as `command`
-		// runs a program, so it is left to call issues.
-		cmd := prefix + strings.Join(words, " ") + suffix
-		program := strings.HasSuffix(prefix, "command ") || strings.HasSuffix(prefix, "builtin ") || strings.HasSuffix(prefix, "exec ")
-		if !program && rapid.Bool().Draw(t, "function") {
-			split := rapid.IntRange(1, len(words)-2).Draw(t, "split")
-			def := rapid.SampledFrom([]string{"w() { %s \"$@\"; }\n", "w(){ %s \"$@\" >/dev/null || echo \"FAILED: $*\"; }; ", "function w {\n  %s \"${@}\"\n}\n"}).Draw(t, "def")
-			cmd = fmt.Sprintf(def, strings.Join(words[:split], " ")) + prefix + "w " + strings.Join(words[split:], " ") + suffix
-		}
-		got := IssuesStarts(cmd, cwd)
-		if lost {
-			if len(got) != 0 {
-				t.Fatalf("IssuesStarts(%q) = %+v, want nothing", cmd, got)
-			}
-			return
-		}
-		if len(got) != 1 || got[0] != want {
-			t.Fatalf("IssuesStarts(%q) = %+v, want [%+v]", cmd, got, want)
-		}
-	})
-}
-
-func TestPropParsersNeverPanic(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		s := rapid.OneOf(
-			text(),
-			rapid.StringMatching(`[a-z ='"\;&|\n$~/#.:0-9-]{0,40}`),
-			rapid.StringMatching(`([a-z]{1,2}\(\) ?\{ ?| ?\} ?|"\$@"|\$[1@]|issues |start [0-9] |cd [~/a-z.]{1,4}|[;\n ]|[a-z]{1,2} ){0,14}`),
-			rapid.SampledFrom([]string{`issues start 3`, `issues -C "`, `Work on a#1`, `\`, `'`, `"\`,
-				`f() {`, `function f {`, `f() { f; }; f`, `a() { b; }; b() { a; }; a`, `function`, `f() { }`, `() {`}),
-		).Draw(t, "s")
-		cwd := rapid.OneOf(text(), rapid.SampledFrom([]string{"/w/app", "~", "~/x", ""})).Draw(t, "cwd")
-		for _, r := range IssuesStarts(s, cwd) {
-			if r.ID <= 0 {
-				t.Fatalf("IssuesStarts(%q) gave id %d", s, r.ID)
-			}
-			// A ref's directory is absolute, written from ~, or unknown.
-			if r.Dir != "" && !filepath.IsAbs(r.Dir) && r.Dir != "~" && !strings.HasPrefix(r.Dir, "~/") {
-				t.Fatalf("IssuesStarts(%q) in %q gave the directory %q", s, cwd, r.Dir)
-			}
-		}
-		// Under an absolute home, every directory comes out absolute or
-		// unknown, and nothing else about the refs changes.
-		refs := IssuesStarts(s, cwd)
-		for i, r := range HomeDirs(refs, "/u") {
-			if r.Dir != "" && !filepath.IsAbs(r.Dir) {
-				t.Fatalf("HomeDirs left %q for %q", r.Dir, refs[i].Dir)
-			}
-			if o := refs[i]; r.ID != o.ID || r.Project != o.Project || (r.Dir != o.Dir && !strings.HasPrefix(o.Dir, "~")) {
-				t.Fatalf("HomeDirs made %+v of %+v", r, o)
-			}
-		}
-		if r, ok := OpeningTask(s, cwd); ok && (r.ID <= 0 || r.Project == "" || r.Dir != cwd) {
-			t.Fatalf("OpeningTask(%q) = %+v", s, r)
-		}
-		_ = splitCommands(s)
-	})
-}
-
-// OpeningTask accepts exactly the form overview writes.
-func TestPropOpeningTaskRoundTrip(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		project := rapid.StringMatching(`[^\s#]{1,12}`).Filter(func(p string) bool {
-			return !strings.ContainsFunc(p, unicode.IsSpace)
-		}).Draw(t, "project")
-		id := rapid.IntRange(1, 1_000_000).Draw(t, "id")
-		lead := rapid.StringMatching(`[ \t\n]{0,3}`).Draw(t, "lead")
-		tail := rapid.SampledFrom([]string{"", ": Title", " more", ".", "\nmore"}).Draw(t, "tail")
-		cwd := "/" + rapid.StringMatching(`[a-z]{1,6}`).Draw(t, "cwd")
-		prompt := lead + "Work on " + project + "#" + strconv.Itoa(id) + tail
-		got, ok := OpeningTask(prompt, cwd)
-		if !ok || got != (TaskRef{Project: project, Dir: cwd, ID: id}) {
-			t.Fatalf("OpeningTask(%q) = %+v, %v", prompt, got, ok)
-		}
-	})
-}
-
-// A generated transcript: its lines, each ending in a newline, and the
-// links the two link shapes make in it, in the order their results arrive.
+// A generated transcript: its lines, each ending in a newline.
 type genTr struct {
 	lines []string
-	want  []TaskRef
 }
 
 func (g genTr) bytes() []byte { return []byte(strings.Join(g.lines, "")) }
@@ -546,83 +378,41 @@ func trLine(v map[string]any) string {
 }
 
 // genTranscript draws a transcript in the shape Claude Code writes it,
-// with prompts, replies, titles, Bash calls and their results (answered
-// in any order, some of them errors), lines of kinds the fold ignores,
-// and sidechain and meta lines.
+// with prompts, replies, titles, Bash calls and their results, lines of
+// kinds the fold ignores, and sidechain and meta lines.
 func genTranscript() *rapid.Generator[genTr] {
-	type call struct {
-		id   string
-		refs []TaskRef
-	}
 	return rapid.Custom(func(t *rapid.T) genTr {
 		var g genTr
-		var open []call
 		n := rapid.IntRange(0, 40).Draw(t, "n")
 		for i := 0; i < n; i++ {
 			at := trBase.Add(time.Duration(i) * time.Second).Format("2006-01-02T15:04:05.000Z")
-			cwd := rapid.SampledFrom([]string{"/w/a", "/w/b"}).Draw(t, "cwd")
-			num := rapid.IntRange(1, 9).Draw(t, "num")
-			ns := strconv.Itoa(num)
 			var line string
-			switch rapid.IntRange(0, 11).Draw(t, "kind") {
-			case 0, 1: // an opening prompt, as a string or as text blocks
-				var content any = "Work on p#" + ns + ": " + text().Draw(t, "title")
+			switch rapid.IntRange(0, 8).Draw(t, "kind") {
+			case 0, 1: // a prompt, as a string or as text blocks
+				var content any = text().Draw(t, "prompt")
 				if rapid.Bool().Draw(t, "blocks") {
 					content = []any{map[string]any{"type": "text", "text": content}}
 				}
-				line = trLine(map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"role": "user", "content": content}})
-				g.want = append(g.want, TaskRef{Project: "p", Dir: cwd, ID: num, Linked: mustTime(at)})
-			case 2: // prompts that only mention an issue, or are not the user's
-				prompt := rapid.SampledFrom([]string{"please work on p#" + ns, "Work on p#" + ns + "x", text().Draw(t, "text"), "issues start " + ns}).Draw(t, "prompt")
-				line = trLine(map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": prompt}})
-			case 3: // an opening prompt in a sidechain or a meta line
-				v := map[string]any{"type": "user", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": "Work on p#" + ns}}
+				line = trLine(map[string]any{"type": "user", "timestamp": at, "message": map[string]any{"role": "user", "content": content}})
+			case 2: // a prompt in a sidechain or a meta line
+				v := map[string]any{"type": "user", "timestamp": at, "message": map[string]any{"content": text().Draw(t, "aside")}}
 				v[rapid.SampledFrom([]string{"isSidechain", "isMeta"}).Draw(t, "flag")] = true
 				line = trLine(v)
-			case 4, 5: // Bash calls
-				cmd, refs := "", []TaskRef(nil)
-				switch rapid.IntRange(0, 5).Draw(t, "cmd") {
-				case 0:
-					cmd, refs = "issues start "+ns, []TaskRef{{Dir: cwd, ID: num}}
-				case 1:
-					cmd, refs = "cd /z && issues start "+ns, []TaskRef{{Dir: "/z", ID: num}}
-				case 2:
-					cmd, refs = "issues -C /y start "+ns, []TaskRef{{Dir: "/y", ID: num}}
-				case 3:
-					cmd = `echo "issues start ` + ns + `"`
-				case 4:
-					cmd = "cat <<EOF\nissues start " + ns + "\nEOF"
-				default:
-					cmd = "ls -la # issues start " + ns
-				}
+			case 3: // a Bash call
 				id := "toolu_" + strconv.Itoa(i)
-				line = trLine(map[string]any{"type": "assistant", "timestamp": at, "cwd": cwd, "message": map[string]any{"content": []any{
-					map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": cmd}},
+				line = trLine(map[string]any{"type": "assistant", "timestamp": at, "message": map[string]any{"content": []any{
+					map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": text().Draw(t, "cmd")}},
 				}}})
-				open = append(open, call{id, refs})
-			case 6, 7: // a result, in any order
-				if len(open) == 0 {
-					continue
-				}
-				k := rapid.IntRange(0, len(open)-1).Draw(t, "which")
-				c := open[k]
-				open = slices.Delete(open, k, k+1)
-				isErr := rapid.Bool().Draw(t, "error")
+			case 4: // a result
 				line = trLine(map[string]any{"type": "user", "timestamp": at, "message": map[string]any{"content": []any{
-					map[string]any{"tool_use_id": c.id, "type": "tool_result", "content": "ok", "is_error": isErr},
+					map[string]any{"tool_use_id": "toolu_0", "type": "tool_result", "content": "ok", "is_error": rapid.Bool().Draw(t, "error")},
 				}}})
-				if !isErr {
-					for _, r := range c.refs {
-						r.Linked = mustTime(at)
-						g.want = append(g.want, r)
-					}
-				}
-			case 8:
+			case 5:
 				line = trLine(map[string]any{"type": "assistant", "timestamp": at, "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": text().Draw(t, "reply")}}}})
-			case 9:
+			case 6:
 				line = trLine(map[string]any{"type": rapid.SampledFrom([]string{"ai-title", "last-prompt"}).Draw(t, "meta"),
 					"aiTitle": text().Draw(t, "title"), "lastPrompt": text().Draw(t, "last")})
-			case 10: // a kind of line the fold ignores
+			case 7: // a kind of line the fold ignores
 				line = trLine(map[string]any{"type": "progress", "timestamp": at, "data": text().Draw(t, "data")})
 			default:
 				line = "not json at all\n"
@@ -644,20 +434,15 @@ func mustTime(s string) time.Time {
 // factsOf is what a file's lines have added up to, without the file.
 func factsOf(f *tfile) Facts {
 	g := f.fold
-	return Facts{Title: g.title, LastPrompt: g.lastPrompt, LastReply: g.reply, ReplyAt: g.replyAt, Links: FoldTasks(g.links)}
+	return Facts{Title: g.title, LastPrompt: g.lastPrompt, LastReply: g.reply, ReplyAt: g.replyAt}
 }
 
 // sameFacts compares facts, taking times by their instant and not by their
 // representation, and leaving out the modification time.
 func sameFacts(a, b Facts) bool {
 	a.Modified, b.Modified = time.Time{}, time.Time{}
-	if !a.ReplyAt.Equal(b.ReplyAt) || len(a.Links) != len(b.Links) {
+	if !a.ReplyAt.Equal(b.ReplyAt) {
 		return false
-	}
-	for i := range a.Links {
-		if !a.Links[i].Same(b.Links[i]) || !a.Links[i].Linked.Equal(b.Links[i].Linked) {
-			return false
-		}
 	}
 	return a.Title == b.Title && a.LastPrompt == b.LastPrompt && a.LastReply == b.LastReply
 }
@@ -684,31 +469,14 @@ func splits(t *rapid.T, b []byte) [][]byte {
 func TestPropFoldChunksEqualWhole(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		g := genTranscript().Draw(t, "transcript")
-		whole := newTfile(false)
+		whole := &tfile{}
 		whole.feed(g.bytes())
-		parts := newTfile(false)
+		parts := &tfile{}
 		for _, p := range splits(t, g.bytes()) {
 			parts.feed(p)
 		}
 		if !sameFacts(factsOf(whole), factsOf(parts)) {
 			t.Fatalf("chunked:\n%+v\nwhole:\n%+v", factsOf(parts), factsOf(whole))
-		}
-	})
-}
-
-// Links come from the two shapes and no others: what the fold links is
-// what the generator knows it wrote as a prompt or as a Bash call whose
-// result was not an error. A command that only mentions `issues start`,
-// an errored result, a sidechain or meta prompt link nothing.
-func TestPropLinksComeOnlyFromTheTwoShapes(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		g := genTranscript().Draw(t, "transcript")
-		f := newTfile(false)
-		f.feed(g.bytes())
-		got := factsOf(f)
-		want := Facts{Links: FoldTasks(g.want)}
-		if !sameFacts(Facts{Links: got.Links}, want) {
-			t.Fatalf("links %+v, want %+v", got.Links, want.Links)
 		}
 	})
 }
@@ -788,38 +556,6 @@ func TestPropShrunkOrReplacedFileIsReadAgain(t *testing.T) {
 		got, _ := idx.Facts(path)
 		if want := freshFacts(t, path); !sameFacts(got, want) {
 			t.Fatalf("after the rewrite:\n%+v\nnew content read once:\n%+v", got, want)
-		}
-	})
-}
-
-// Subagent transcripts link their parent only through Bash calls. Their
-// prompts, sidechain or not, link nothing.
-func TestPropSubagentPromptsNeverLink(t *testing.T) {
-	root, n := t.TempDir(), 0
-	rapid.Check(t, func(t *rapid.T) {
-		n++
-		path := filepath.Join(root, fmt.Sprintf("s%d.jsonl", n))
-		g := genTranscript().Draw(t, "main")
-		if err := os.WriteFile(path, g.bytes(), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		before := freshFacts(t, path)
-
-		dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		var sub strings.Builder
-		for i, p := range rapid.SliceOfN(rapid.IntRange(1, 9), 1, 6).Draw(t, "prompts") {
-			sub.WriteString(trLine(map[string]any{"type": "user", "isSidechain": rapid.Bool().Draw(t, "sidechain"),
-				"timestamp": trBase.Add(time.Duration(i) * time.Second).Format(time.RFC3339), "cwd": "/w/a",
-				"message": map[string]any{"role": "user", "content": "Work on p#" + strconv.Itoa(p) + ": x"}}))
-		}
-		if err := os.WriteFile(filepath.Join(dir, "agent-1.jsonl"), []byte(sub.String()), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if after := freshFacts(t, path); !sameFacts(before, after) {
-			t.Fatalf("subagent prompts changed the facts:\n%+v\n%+v", before, after)
 		}
 	})
 }

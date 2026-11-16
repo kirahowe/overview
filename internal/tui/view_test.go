@@ -23,24 +23,20 @@ const (
 	webRoot = "/u/code/projects/website"
 )
 
-// workModel is the mockup's list: overview tracks its issues, with a
-// review that nobody works on, a task with two sessions and a terminal,
-// and one with a session that asks something; website does not.
+// workModel is the mockup's list: overview tracks its issues, two of them
+// in review, and has four sessions and a terminal, one of them asking
+// something; website does not.
 func workModel(t *testing.T, w, h int) model {
 	t.Helper()
 	now := time.Now()
-	sess := func(id, name, cwd string, st fleet.State, ago time.Duration, pid int, refs ...int) fleet.Row {
-		r := fleet.Row{Live: fleet.Live{SessionID: id, Name: name, PID: pid, Cwd: cwd, Kind: "interactive", StartedAt: now.Add(-ago).UnixMilli()}, State: st, Since: now.Add(-ago)}
-		for _, n := range refs {
-			r.Tasks = append(r.Tasks, fleet.TaskRef{Project: "overview", Dir: cwd, ID: n})
-		}
-		return r
+	sess := func(id, name, cwd string, st fleet.State, ago time.Duration, pid int) fleet.Row {
+		return fleet.Row{Live: fleet.Live{SessionID: id, Name: name, PID: pid, Cwd: cwd, Kind: "interactive", StartedAt: now.Add(-ago).UnixMilli()}, State: st, Since: now.Add(-ago)}
 	}
-	asking := sess("s3", "reply on view.go note", ovRoot, fleet.Idle, 10*time.Minute, 13, 5)
+	asking := sess("s3", "reply on view.go note", ovRoot, fleet.Idle, 10*time.Minute, 13)
 	asking.LastReply, asking.LastReplyAt = "Which one?", now.Add(-2*time.Minute)
 	rows := []fleet.Row{
-		sess("s1", "list squeeze", ovRoot, fleet.Working, 3*time.Minute, 11, 6),
-		sess("s2", "squeeze e2e", ovRoot, fleet.Working, time.Minute+5*time.Second, 12, 6),
+		sess("s1", "list squeeze", ovRoot, fleet.Working, 3*time.Minute, 11),
+		sess("s2", "squeeze e2e", ovRoot, fleet.Working, time.Minute+5*time.Second, 12),
 		asking,
 		sess("s4", "digest prompt tweaks", ovRoot, fleet.Idle, time.Hour, 14),
 		sess("s5", "deploy blog post", webRoot, fleet.Blocked, 5*time.Minute, 15),
@@ -49,7 +45,7 @@ func workModel(t *testing.T, w, h int) model {
 	m := newTestModel(t)
 	m.user, m.session = "/u", "ov"
 	m.in.Panes = []tmux.Pane{
-		{ID: "%7", Session: "ov", Window: "@7", Command: "go", Path: ovRoot, Project: ovRoot, Task: ovRoot + "#6"},
+		{ID: "%7", Session: "ov", Window: "@7", Command: "go", Path: ovRoot, Project: ovRoot},
 		{ID: "%8", Session: "ov", Window: "@8", Command: "npm", Path: webRoot, Project: webRoot},
 	}
 	ttys := map[int]string{}
@@ -87,14 +83,12 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	}
 	// tmux draws the rule above, with the list's title in it.
 	want := []string{
-		rule("overview", "2 waiting issues"),
-		l("⠋ squeeze e2e", "#6  working 1m"),
-		"▌" + l("⠋ list squeeze", "#6  working 3m")[1:],
+		rule("overview", "2 to review"),
+		l("⠋ squeeze e2e", "working 1m"),
+		"▌" + l("⠋ list squeeze", "working 3m")[1:],
 		l("? reply on view.go note", "asking 2m"),
 		l("○ digest prompt tweaks", "idle 1h"),
-		l("$ go", "#6  overview"),
-		l("#4 show session cost", "review p2"),
-		l("#5 answer notes in threads", "review p2"),
+		l("$ go", "overview"),
 		l("", ""),
 		rule("website", "2 sessions · 1 terminal"),
 		l("! deploy blog post", "blocked 5m"),
@@ -110,8 +104,8 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 		"── agents "+strings.Repeat("─", 44-10-12)+" priority ──",
 		l("? reply on view.go note", "overview"),
 		l("! deploy blog post", "website"),
-		l("⠋ squeeze e2e", "overview #6"),
-		"▎"+l("⠋ list squeeze", "overview #6")[1:],
+		l("⠋ squeeze e2e", "overview"),
+		"▎"+l("⠋ list squeeze", "overview")[1:],
 		l("○ rss feed", "website"),
 		l("○ digest prompt tweaks", "overview"),
 		l("orchestrator off  s task • c claude", ""), // no tmux, so enter only says so
@@ -274,29 +268,22 @@ func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 }
 
 // A row of the agents says where the list has its session: its project,
-// or the app that runs it, and the tasks it holds, by number when they
-// are its project's and by ref when they are another's.
+// or the app that runs it.
 func TestAnAgentsRowNamesItsProject(t *testing.T) {
 	app, site := &world.Project{Name: "app"}, &world.Project{Name: "website"}
-	st := &world.Task{Key: world.Key{Root: "/u/app", ID: 6}, Project: app, IssuesID: "app"}
-	st2 := &world.Task{Key: world.Key{Root: "/u/app", ID: 7}, Project: app, IssuesID: "app"}
-	st3 := &world.Task{Key: world.Key{Root: "/u/app", ID: 8}, Project: app, IssuesID: "app"}
 	zed := &world.Host{Name: "Zed"}
 	for _, c := range []struct {
-		what       string
-		sess       world.Session
-		place, ref string
+		what  string
+		sess  world.Session
+		place string
 	}{
-		{"on no task", world.Session{Project: site}, "website", ""},
-		{"on its project's task", world.Session{Project: app, Holds: []*world.Task{st}}, "app", "#6"},
-		{"on another project's task", world.Session{Project: site, Holds: []*world.Task{st}}, "website", "app#6"},
-		{"on three tasks", world.Session{Project: app, Holds: []*world.Task{st, st2, st3}}, "app", "#6 #7 +1"},
-		{"another app's", world.Session{Project: site, Host: zed}, "Zed", ""},
-		{"another app's, on a task", world.Session{Project: site, Host: zed, Holds: []*world.Task{st}}, "Zed", "app#6"},
+		{"in a project", world.Session{Project: site}, "website"},
+		{"in another", world.Session{Project: app}, "app"},
+		{"another app's", world.Session{Project: site, Host: zed}, "Zed"},
 	} {
 		e := entry{kind: sessionEntry, sess: &c.sess, alias: agentsPrefix}
-		if place, ref := agentsNote(e, zed.Label()); place != c.place || ref != c.ref {
-			t.Errorf("a session %s is at %q %q, want %q %q", c.what, place, ref, c.place, c.ref)
+		if place := agentsNote(e, zed.Label()); place != c.place {
+			t.Errorf("a session %s is at %q, want %q", c.what, place, c.place)
 		}
 	}
 }
@@ -304,22 +291,20 @@ func TestAnAgentsRowNamesItsProject(t *testing.T) {
 // The project in a row of the agents gives way by its width on the
 // screen, which for wide characters is less than its length in bytes. It
 // shows whole while ten cells of the session's name fit beside it, then
-// by its end, and the task's number is the last of the note to go.
+// by its end.
 func TestAnAgentsRowFitsItsProjectByDisplayWidth(t *testing.T) {
 	m := newTestModel(t)
-	st := &world.Task{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
-	s := &world.Session{Row: row("s", "fix-parser-overflow", "", 1), Project: st.Project, Holds: []*world.Task{st}}
+	s := &world.Session{Row: row("s", "fix-parser-overflow", "", 1), Project: &world.Project{Name: "日本語日本"}}
 	e := entry{kind: sessionEntry, sess: s, alias: agentsPrefix}
-	// The mark and ten cells of the name take 12 columns and the note 13:
-	// ten of project, which are 15 bytes, a space and the number.
+	// The project's four wide characters are 8 cells and 15 bytes.
 	for _, c := range []struct {
 		w    int
 		want string
 	}{
-		{36, "○ fix-parser-overflow 日本語日本 #6"},
-		{26, "○ fix-parse… 日本語日本 #6"},
-		{25, "○ fix-parse… …本語日本 #6"},
-		{21, "○ fix-parser-over… #6"},
+		{36, "○ fix-parser-overflow 日本語日本"},
+		{26, "○ fix-parser-o… 日本語日本"},
+		{25, "○ fix-parser-… 日本語日本"},
+		{21, "○ fix-parser… …語日本"},
 		{14, "○ fix-parser-…"},
 	} {
 		m.w = c.w + 2
@@ -334,9 +319,9 @@ func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 	if got := sectionNote(idle); got != "4 open issues" {
 		t.Errorf("idle tracked project: %q, want 4 open issues", got)
 	}
-	busy := section{Title: "app", Tracked: true, Open: 4, Waiting: 1, Sessions: 1, Entries: []entry{{kind: sessionEntry}, {kind: issueEntry}}}
-	if got := sectionNote(busy); got != "1 waiting issue · 1 session" {
-		t.Errorf("project with an issue that waits: %q, want 1 waiting issue · 1 session", got)
+	busy := section{Title: "app", Tracked: true, Open: 4, InReview: 1, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}
+	if got := sectionNote(busy); got != "1 to review · 1 session" {
+		t.Errorf("project with an issue in review: %q, want 1 to review · 1 session", got)
 	}
 }
 
@@ -353,14 +338,16 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 		{section{Title: "pinned", Entries: []entry{{kind: projectEntry}}}, "no sessions"},
 		{section{Title: "web", Sessions: 1, Terminals: 2, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}, {kind: terminalEntry}}}, "1 session · 2 terminals"},
 		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions · 0 of 1 terminal"},
-		// "/digest" and "/fix" on one project say the same parts.
-		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 1, Entries: []entry{{kind: issueEntry}}}, "1 of 3 waiting issues · 0 of 1 session"},
-		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 waiting issues · 1 session"},
+		// "/digest" and "/fix" on one project say the same parts: issues
+		// are not rows, so a search never hides one.
+		{section{Title: "app", Tracked: true, InReview: 3, Sessions: 1, Entries: []entry{}}, "3 to review · 0 of 1 session"},
+		{section{Title: "app", Tracked: true, InReview: 3, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "3 to review · 1 session"},
 		{section{Title: "app", Tracked: true, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "1 session"},
-		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 waiting issues · 1 of 2 sessions"},
+		{section{Title: "app", Tracked: true, InReview: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "3 to review · 1 of 2 sessions"},
 		{section{Title: "away", Away: true, Sessions: 2, Entries: []entry{{kind: sessionEntry}, {kind: sessionEntry}}}, "2 sessions"},
-		{section{Title: "app", Tracked: true, Open: 6, Waiting: 3, Entries: []entry{{kind: issueEntry}}}, "1 of 3 waiting issues"},
-		{section{Title: "app", Tracked: true, Open: 6, Waiting: 3}, "0 of 3 waiting issues"},
+		{section{Title: "app", Tracked: true, Open: 6, InReview: 3}, "3 to review"},
+		{section{Title: "app", Tracked: true, Open: 6, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "6 open issues · 1 session"},
+		{section{Title: "app", Tracked: true, Open: 6}, "6 open issues"},
 		{section{Title: "app", Tracked: true}, "no open issues"},
 	}
 	for _, c := range cases {
@@ -374,7 +361,7 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 		m = update(m, keyMsg(k))
 	}
 	text := strings.Join(screenText(m), "\n")
-	if !strings.Contains(text, "0 of 2 waiting issues · 1 of 4 sessions") || !strings.Contains(text, "· 1 match ") {
+	if !strings.Contains(text, "2 to review · 1 of 4 sessions") || !strings.Contains(text, "· 1 match ") {
 		t.Errorf("a search for one session:\n%s", text)
 	}
 }
@@ -665,23 +652,20 @@ func TestTagTitleKeepsTheTag(t *testing.T) {
 }
 
 // In the 24-column list a row keeps ten cells of its name: a session
-// drops its review badge's words before the name is cut further, an
-// issue its priority, and the agents show a long project by its end
-// rather than not at all.
+// drops its review badge's words before the name is cut further, and the
+// agents show a long project by its end rather than not at all.
 func TestNarrowRowsKeepTheirNames(t *testing.T) {
 	m := newTestModel(t)
 	m.w = 24
 	r := row("s", "fix-parser-overflow", "", 1)
 	r.LastReply = "ok?"
 	s := &world.Session{Row: r, Project: &world.Project{Name: "/private/tmp/qa2/work/alpha"}, Review: review.Summary{Open: 1, Waiting: 1}}
-	st := &world.Task{Key: world.Key{Root: "/a", ID: 7}, Issue: issues.Issue{ID: 7, Title: "Digest scheduling", Status: issues.Review, Priority: "p0"}}
 	for _, c := range []struct {
 		e    entry
 		want string
 	}{
 		{entry{kind: sessionEntry, sess: s}, "? fix-parse… ✎1 asking"},
 		{entry{kind: sessionEntry, sess: s, alias: agentsPrefix}, "? fix-parse… …rk/alpha"},
-		{entry{kind: issueEntry, task: st}, "#7 Digest sche… review"},
 	} {
 		if got := strings.TrimSpace(ansi.Strip(m.entryLine(c.e, unmarked))); got != c.want {
 			t.Errorf("%q, want %q", got, c.want)

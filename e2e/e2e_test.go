@@ -750,15 +750,12 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 	}
 }
 
-// Tasks, end to end: a project with .issues lists its issue in progress
-// that no session is linked to as stalled, after its session. c on it
-// starts claude with the opening prompt that names the issue. Once that
-// prompt is in the session's transcript, the session holds the issue: its
-// row says #6, the issue's own row goes, and the cursor follows it to the
-// session. t there opens a terminal for the task, and an issues start in
-// the other session's transcript gives that session the task too. Last, s
-// on a tracked project pinned with nothing running opens the task picker,
-// and enter on the issue typed for starts claude on it.
+// Tasks, end to end: a project with .issues lists no issue as a row of
+// its own, whatever sessions run there, and its issue in review counts
+// as needing you in the list's title. The project's cockpit lists its
+// issues. s on a tracked project pinned with nothing
+// running opens the task picker, and enter on the issue typed for starts
+// claude on it with the opening prompt that names it.
 func TestTasks(t *testing.T) {
 	r := launchWith(t, "w", func(r *rig) string {
 		for _, d := range []string{".jj", ".issues"} {
@@ -766,7 +763,7 @@ func TestTasks(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		for name, text := range map[string]string{"project.edn": `{:id "work"}`, "6-keep-width.edn": `{:id 6}`} {
+		for name, text := range map[string]string{"project.edn": `{:id "work"}`, "6-keep-width.edn": `{:id 6}`, "7-trim-rows.edn": `{:id 7}`} {
 			if err := os.WriteFile(filepath.Join(r.work, ".issues", name), []byte(text), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -785,7 +782,8 @@ func TestTasks(t *testing.T) {
 			}
 		}
 		fake := filepath.Join(r.dir, "issues")
-		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "in-progress", "title": "keep width", "priority": "p1"}]}`
+		list := `{"issues": [{"id": 6, "ref": "work#6", "status": "review", "title": "keep width", "priority": "p1"},` +
+			`{"id": 7, "ref": "work#7", "status": "in-progress", "title": "trim rows", "priority": "p2"}]}`
 		blist := `{"issues": [{"id": 3, "ref": "zbacklog#3", "status": "ready", "title": "add threads", "priority": "p2"},` +
 			`{"id": 4, "ref": "zbacklog#4", "status": "inbox", "title": "fix scroll", "priority": "p1"}]}`
 		show := `{"id": 3, "details-text": "# Add threads\n\nReplies nest under the\nmessage they answer.\n"}`
@@ -796,98 +794,34 @@ func TestTasks(t *testing.T) {
 		return "issues = " + fake + "\n"
 	})
 	isSleep := func(p pane) bool { return p.command == "sleep" && !p.ours() }
-	isShell := func(p pane) bool {
-		return p.command != "sleep" && p.command != "overview" && !p.ours() && p.id != r.holder
-	}
-
-	// line is the line of the list's screen s that holds text, "" for none.
-	line := func(s, text string) string {
-		for _, l := range strings.Split(s, "\n") {
-			if strings.Contains(l, text) {
-				return l
-			}
-		}
-		return ""
-	}
 
 	before := r.ov.panes()
 	r.press("c")
 	session := r.fresh(t, "a session window", before, isSleep)
+	if got := r.ov.must("display-message", "-p", "-t", session.id, "#{pane_start_command}"); strings.Contains(got, "Work on") {
+		t.Fatalf("c on a project started a session on an issue: %q", got)
+	}
 	r.lists(t, r.work, session)
 	r.ov.must("select-pane", "-t", r.list.id)
-	waitFor(t, "the stalled issue after the session", func() (bool, string) {
+	// The issue in review needs you, and the list's title counts it with
+	// the sessions that do, though no row shows it. The rule's own count,
+	// "1 to review", gives way to the long temporary path here.
+	waitFor(t, "the title counting the issue in review, and no issue rows", func() (bool, string) {
 		s := r.screen()
-		i, k := strings.Index(s, "#6 keep width"), strings.Index(s, "e2e-0")
-		return k >= 0 && i > k && strings.Contains(line(s, "#6 keep width"), "stalled"), s
+		title := r.ov.must("show-options", "-pqv", "-t", r.list.id, "@overview-title") + r.ov.must("show-options", "-pqv", "-t", r.list.id, "@overview-note")
+		return strings.Contains(s, "e2e-0") && strings.Contains(title, "! 1") &&
+			!strings.Contains(s, "keep width") && !strings.Contains(s, "trim rows"), title + "\n" + s
 	})
-
-	// n stops at the issue, since it waits on you.
-	r.press("n")
-	waitFor(t, "the cursor on #6", func() (bool, string) {
+	// The issues are in the project's cockpit.
+	r.press("o")
+	waitFor(t, "the cockpit listing both issues", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(selectedLine(s), "#6 keep width"), s
+		return strings.Contains(s, "#6 keep width") && strings.Contains(s, "#7 trim rows"), s
 	})
-	waitFor(t, "the holder for the issue", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
-	before = r.ov.panes()
-	r.press("c")
-	started := r.fresh(t, "a session on the task", before, isSleep)
-	if got := r.ov.must("display-message", "-p", "-t", started.id, "#{pane_start_command}"); !strings.Contains(got, "Work on work#6: keep width") {
-		t.Fatalf("the session started as %q", got)
-	}
-
-	// Nothing has been written to the new session's transcript yet, so it
-	// holds nothing and #6 still waits.
-	r.lists(t, r.work, session, started)
-	r.ov.must("select-pane", "-t", r.list.id)
-	waitFor(t, "the new session in the list", func() (bool, string) {
+	r.press("Escape")
+	waitFor(t, "the cockpit closed", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(s, "e2e-1") && strings.Contains(s, "#6 keep width"), s
-	})
-
-	// The session's transcript opens with the prompt that names the issue,
-	// as Claude Code writes it: the session holds #6, which leaves the
-	// rows that wait on you.
-	r.ov.must("select-pane", "-t", r.list.id)
-	r.press("n")
-	waitFor(t, "the cursor back on #6", func() (bool, string) {
-		s := r.screen()
-		return strings.Contains(selectedLine(s), "#6 keep width"), s
-	})
-	r.transcript(t, "s-1", map[string]any{"type": "user", "isSidechain": false, "timestamp": "2026-10-23T17:44:47.677Z",
-		"cwd": r.work, "message": map[string]any{"role": "user", "content": "Work on work#6: keep width"}})
-	waitFor(t, "the linked session holding #6", func() (bool, string) {
-		s := r.screen()
-		return strings.Contains(line(s, "e2e-1"), "#6") && !strings.Contains(line(s, "e2e-0"), "#6") &&
-			!strings.Contains(s, "keep width"), s
-	})
-
-	// The cursor was on #6, and followed it to the session, beside which
-	// the list is now.
-	waitFor(t, "the list beside the linked session", func() (bool, string) { return beside(r.ov.panes(), started.id, 0) })
-	before = r.ov.panes()
-	r.press("t")
-	shell := r.fresh(t, "a terminal for the task", before, isShell)
-	// The view marks the window once the pane is there, its project and
-	// then its task, each in a command of its own.
-	waitFor(t, "the terminal's window marked with its task", func() (bool, string) {
-		got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-task")
-		return got == r.work+"#6", got
-	})
-	waitFor(t, "the terminal labelled with its task", func() (bool, string) {
-		s := r.screen()
-		return strings.Contains(line(s, "$ "), "#6"), s
-	})
-
-	// An issues start that ran and succeeded in the other session's
-	// transcript gives it #6 too.
-	r.transcript(t, "s-0",
-		map[string]any{"type": "assistant", "timestamp": "2026-10-23T17:50:00.000Z", "cwd": r.work, "message": map[string]any{"content": []any{
-			map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": map[string]any{"command": "issues start 6"}}}}},
-		map[string]any{"type": "user", "timestamp": "2026-10-23T17:50:02.000Z", "message": map[string]any{"content": []any{
-			map[string]any{"tool_use_id": "toolu_1", "type": "tool_result", "content": "started", "is_error": false}}}})
-	waitFor(t, "both sessions holding #6", func() (bool, string) {
-		s := r.screen()
-		return strings.Contains(line(s, "e2e-0"), "#6") && strings.Contains(line(s, "e2e-1"), "#6"), s
+		return !strings.Contains(s, "keep width"), s
 	})
 
 	// A tracked project pinned with nothing running offers s, and the
@@ -939,30 +873,6 @@ func TestTasks(t *testing.T) {
 		ok, say := beside(r.ov.panes(), picked.id, 0)
 		return ok && zoomed() == "0", zoomed() + " " + say
 	})
-}
-
-// transcript appends lines to a session's transcript, as Claude Code
-// writes them, under the rig's config directory.
-func (r *rig) transcript(t *testing.T, session string, lines ...map[string]any) {
-	t.Helper()
-	path := filepath.Join(r.home, "projects", "work", session+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	for _, l := range lines {
-		b, err := json.Marshal(l)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.Write(append(b, '\n')); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 // The cockpit, end to end: o zooms the list's pane to fill its window and

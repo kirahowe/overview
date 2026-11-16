@@ -5,26 +5,26 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"overview/internal/fleet"
 	"overview/internal/issues"
-	"overview/internal/world"
 )
 
-// A task is an open issue of a project that tracks its work with the
-// issues tool. The refresh reads each project's open issues into a
-// tracker, and the World works out from them which issues each session
-// holds and which wait on you.
+// A project that tracks its work with the issues tool has a tracker: the
+// refresh reads each project's open issues into one. The cockpit and the
+// task picker list them, and start sessions on them, but nothing joins an
+// issue to the sessions that work on it.
 
 // retryAfter is how long a failed issues run is kept before the refresh
 // tries again, when nothing in .issues has changed.
 const retryAfter = 10 * time.Second
 
-// taskKey names a task: its project's root and its issue's number.
-func taskKey(root string, id int) string { return world.Key{Root: root, ID: id}.String() }
+// taskKey names an issue in the caches: its project's root and its
+// number, "/w/app#6".
+func taskKey(root string, id int) string { return root + "#" + strconv.Itoa(id) }
 
 // tracker is one project's issues as the refreshes read them. A run that
 // failed keeps the issues of the last that worked, and its error.
@@ -179,16 +179,8 @@ func fallbackID(readFile func(string) ([]byte, error), root string) string {
 // reads in flight.
 func (m model) trackerReading(root string) bool { return m.reading[root] }
 
-// opening is the first prompt of a session started on a task, which
-// its transcript links it by: "Work on overview#6: <title>".
+// opening is the first prompt of a session started on an issue, which
+// names it for the agent: "Work on overview#6: <title>".
 func opening(projectID string, i issues.Issue) string {
 	return fmt.Sprintf("Work on %s#%d: %s", projectID, i.ID, i.Title)
-}
-
-// opens says whether a transcript's reader takes prompt back as the
-// opening of a session on project id's issue i, so it links the session by
-// itself.
-func opens(prompt, id string, i issues.Issue) bool {
-	r, ok := fleet.OpeningTask(prompt, "")
-	return ok && r.Project == id && r.ID == i.ID
 }

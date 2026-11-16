@@ -3,7 +3,6 @@ package tui
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -27,11 +26,11 @@ type section struct {
 	Tracked bool // the project tracks its work with issues
 	Failed  bool // and the last read of its issues failed
 	Open    int  // and how many of its issues are open
-	// Waiting, Sessions and Terminals count what the World has in the
-	// section, before any search: its issues that wait on you, its
-	// sessions and its terminals.
-	Waiting, Sessions, Terminals int
-	Entries                      []entry
+	// InReview, Sessions and Terminals count what the World has in the
+	// section, before any search: its issues in review, its sessions and
+	// its terminals.
+	InReview, Sessions, Terminals int
+	Entries                       []entry
 }
 
 type entryKind int
@@ -40,18 +39,15 @@ const (
 	sessionEntry  entryKind = iota
 	terminalEntry           // a window of plain shells, or a dev server
 	projectEntry            // a project's heading
-	issueEntry              // an issue that waits on you
 )
 
-// The prefixes of the keys of the entries that are not a session's own.
-const (
-	taskPrefix   = "task:"
-	agentsPrefix = "agents"
-)
+// agentsPrefix is the prefix of the key of a session's entry in the
+// agents list.
+const agentsPrefix = "agents"
 
-// entry is one thing the cursor can be on: a Claude session, a terminal,
-// a project's heading, or an issue that waits on you. It points into the
-// World the list was presented from.
+// entry is one thing the cursor can be on: a Claude session, a terminal
+// or a project's heading. It points into the World the list was presented
+// from.
 //
 // A session is listed twice: in its project, or among the sessions other
 // apps run, and in the agents list. Its entry in the agents list has the
@@ -61,22 +57,18 @@ type entry struct {
 	sess  *world.Session  // sessionEntry
 	term  *world.Terminal // terminalEntry
 	proj  *world.Project  // projectEntry
-	task  *world.Task     // issueEntry
 	alias string          // agentsPrefix for a session's entry in the agents list, else ""
 }
 
 // key names an entry for the cursor and for clicks, across refreshes: a
-// session's id, a terminal's window ("@7"), "project:" and the project's
-// root, or "task:" and the issue's key. A session's entry in the agents
-// list is "agents/<id>".
+// session's id, a terminal's window ("@7"), or "project:" and the
+// project's root. A session's entry in the agents list is "agents/<id>".
 func (e entry) key() string {
 	switch e.kind {
 	case terminalEntry:
 		return e.term.Window
 	case projectEntry:
 		return "project:" + e.proj.Root
-	case issueEntry:
-		return taskPrefix + e.task.Key.String()
 	}
 	if e.sess == nil {
 		return "" // no entry at all, as selected gives with nothing listed
@@ -105,8 +97,6 @@ func (e entry) projectName() string {
 		p = e.proj
 	case e.kind == terminalEntry:
 		p = e.term.Project
-	case e.kind == issueEntry:
-		p = e.task.Project
 	case e.sess != nil && e.sess.Host == nil:
 		p = e.sess.Project
 	}
@@ -116,77 +106,9 @@ func (e entry) projectName() string {
 	return p.Name
 }
 
-// focus is the task the keys that act on one act on from the entry: an
-// issue's own, a terminal's, or a session's when it has exactly one. nil
-// for none, and for a session with several, which leaves the choice to
-// the project's cockpit.
-func (e entry) focus() *world.Task {
-	switch {
-	case e.kind == issueEntry:
-		return e.task
-	case e.kind == terminalEntry:
-		return e.term.Task
-	case e.kind == sessionEntry && e.sess != nil && len(e.sess.Holds) == 1:
-		return e.sess.Holds[0]
-	}
-	return nil
-}
-
-// focusKey is the key of the entry's focus, "" for none.
-func (e entry) focusKey() string {
-	if t := e.focus(); t != nil {
-		return t.Key.String()
-	}
-	return ""
-}
-
 // session is the entry's session, and whether it is a session at all.
 func (e entry) session() (*world.Session, bool) {
 	return e.sess, e.kind == sessionEntry && e.sess != nil
-}
-
-// lead is the primary entry in es of what stands for task t, as
-// Task.Lead picks it: the session linked to it last that has a pane, which
-// the stage shows beside an issue and enter goes to. ok is false when t
-// has neither a session nor a terminal, or es does not show it.
-func lead(es []entry, t *world.Task) (entry, bool) {
-	s, tm := t.Lead()
-	for _, e := range es {
-		if e.alias == "" && (s != nil && e.kind == sessionEntry && e.sess == s || tm != nil && e.kind == terminalEntry && e.term == tm) {
-			return e, true
-		}
-	}
-	return entry{}, false
-}
-
-// taskAt is where the cursor goes for task key in es, -1 when nowhere:
-// the issue's own entry, when it waits on you, else its lead's.
-func taskAt(w *world.World, es []entry, key string) int {
-	if i := slices.IndexFunc(es, func(e entry) bool { return e.kind == issueEntry && e.task.Key.String() == key }); i >= 0 {
-		return i
-	}
-	k, ok := world.ParseKey(key)
-	if t := w.Tasks[k]; ok && t != nil {
-		if l, ok := lead(es, t); ok {
-			return slices.IndexFunc(es, func(e entry) bool { return e.key() == l.key() })
-		}
-	}
-	return -1
-}
-
-// labels are the refs of the tasks a session holds, as its row shows
-// them: "#6" for an issue of the project it is listed in, here, and the
-// whole ref for another project's.
-func labels(s *world.Session, here *world.Project) []string {
-	var out []string
-	for _, t := range s.Holds {
-		if t.Project == here {
-			out = append(out, "#"+strconv.Itoa(t.ID))
-		} else {
-			out = append(out, t.Ref())
-		}
-	}
-	return out
 }
 
 // issueRef is how an issue is named: its ref as the CLI gives it, or the
@@ -204,7 +126,7 @@ func issueRef(id string, i issues.Issue) string {
 // the header all read it.
 //
 // Each of the World's projects is a section: its heading, then its
-// sessions, its terminals, and the issues that wait on you there. The
+// sessions and its terminals. The
 // heading is shown with anything else the section shows, and a pinned
 // project with nothing in it has only its heading, which the query
 // matches on the project's name. Then come the sessions other apps run,
@@ -212,9 +134,8 @@ func issueRef(id string, i issues.Issue) string {
 // World's order.
 //
 // A session matches the query on its project's name, title, last prompt,
-// name, host app, and the refs and titles of the tasks it holds. A
-// terminal matches on its project's name, title and directory, and an
-// issue on its ref, number, title and project name.
+// name and host app. A terminal matches on its project's name, title and
+// directory.
 func present(w *world.World, query string) []section {
 	words := strings.Fields(strings.ToLower(query))
 	shown := map[*world.Session]bool{}
@@ -223,11 +144,7 @@ func present(w *world.World, query string) []section {
 		if s.Host != nil {
 			app = s.Host.Label()
 		}
-		fields := []string{s.Project.Name, s.Title, s.LastPrompt, s.Name, app}
-		for _, t := range s.Holds {
-			fields = append(fields, t.Ref(), "#"+strconv.Itoa(t.ID), t.Issue.Title)
-		}
-		return matchFields(words, fields...)
+		return matchFields(words, s.Project.Name, s.Title, s.LastPrompt, s.Name, app)
 	}
 	terminal := func(t *world.Terminal) bool {
 		return matchFields(words, t.Project.Name, t.Title, w.Short(t.Path))
@@ -235,7 +152,7 @@ func present(w *world.World, query string) []section {
 	var out []section
 	for _, p := range w.Projects {
 		sec := section{Title: p.Name, Tracked: p.Tracked, Failed: p.Failed, Open: len(p.Open),
-			Waiting: len(p.Waiting), Sessions: len(p.Sessions), Terminals: len(p.Terminals)}
+			InReview: p.InReview, Sessions: len(p.Sessions), Terminals: len(p.Terminals)}
 		if p.Empty() {
 			if matchFields(words, p.Name) {
 				sec.Entries = []entry{{kind: projectEntry, proj: p}}
@@ -252,11 +169,6 @@ func present(w *world.World, query string) []section {
 		for _, t := range p.Terminals {
 			if terminal(t) {
 				sec.Entries = append(sec.Entries, entry{kind: terminalEntry, term: t})
-			}
-		}
-		for _, t := range p.Waiting {
-			if matchFields(words, t.Ref(), "#"+strconv.Itoa(t.ID), t.Issue.Title, p.Name) {
-				sec.Entries = append(sec.Entries, entry{kind: issueEntry, task: t})
 			}
 		}
 		if len(sec.Entries) > 0 {

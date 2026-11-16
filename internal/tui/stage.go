@@ -2,7 +2,6 @@ package tui
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -87,14 +86,12 @@ type spawn struct {
 	name    string // what to call it in a note
 	session string
 	dir     string // the project root, for spawnSession and spawnTerminal
-	task    string // the task a spawnTerminal is for, "" for none
 	env     []string
 	command []string
 }
 
 // marked is the spawned pane as the listing will show it once the Cmd has
 // set its options: a session's or a terminal's window names its project,
-// a terminal's the task it is for, if any,
 // an attach pane names its background session, and the holder is marked
 // as such. It also says which option to set, as a pane or a window option.
 func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
@@ -103,14 +100,8 @@ func (sp spawn) marked(p tmux.Pane) (tmux.Pane, func(multiplexer) error) {
 		p.Holder = true
 		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.HolderOption, "1") }
 	case spawnSession, spawnTerminal:
-		p.Project, p.Task = sp.dir, sp.task
-		return p, func(mux multiplexer) error {
-			err := mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir)
-			if err == nil && sp.task != "" {
-				err = mux.SetWindowOption(p.ID, tmux.TaskOption, sp.task)
-			}
-			return err
-		}
+		p.Project = sp.dir
+		return p, func(mux multiplexer) error { return mux.SetWindowOption(p.ID, tmux.ProjectOption, sp.dir) }
 	case spawnAttach:
 		p.Attach = sp.key
 		return p, func(mux multiplexer) error { return mux.SetPaneOption(p.ID, tmux.AttachOption, sp.key) }
@@ -475,7 +466,7 @@ func (m model) want() string {
 	}
 	es := m.ordered()
 	if e, _, ok := m.selected(es); ok {
-		if id := entryPane(es, e); id != "" {
+		if id := entryPane(e); id != "" {
 			return id
 		}
 	}
@@ -486,19 +477,14 @@ func (m model) want() string {
 }
 
 // entryPane is the pane that shows an entry, "" when it has none: a
-// session's own pane, a terminal's first pane, or for an issue its
-// lead's. All three are the World's, which is derived from the panes
-// listed now.
-func entryPane(es []entry, e entry) string {
+// session's own pane or a terminal's first pane. Both are the World's,
+// which is derived from the panes listed now.
+func entryPane(e entry) string {
 	switch e.kind {
 	case sessionEntry:
 		return e.sess.Pane
 	case terminalEntry:
 		return e.term.Pane
-	case issueEntry:
-		if c, ok := lead(es, e.task); ok {
-			return entryPane(es, c)
-		}
 	}
 	return ""
 }
@@ -940,8 +926,7 @@ func closeCmd(mux multiplexer, find func(...string) roots, self, holder string, 
 func (m model) holderText(w, h int) string {
 	cw := max(w-2, 1)
 	var lines []string
-	es := m.ordered()
-	e, _, ok := m.selected(es)
+	e, _, ok := m.selected(m.ordered())
 	switch {
 	case !m.world().Loaded && m.world().RefreshErr != nil:
 		lines = wrap(red.Render(m.world().RefreshErr.Error()), cw)
@@ -949,9 +934,8 @@ func (m model) holderText(w, h int) string {
 		lines = []string{dim.Render("reading sessions…")}
 	case !ok:
 		lines = wrap(dim.Render("Nothing is listed. c starts Claude where overview was started, t a terminal, and a adds a project."), cw)
-	case e.kind == projectEntry && !e.proj.Empty(), idleIssue(es, e):
-		// No session to show: the cockpit's cards, where o goes, or
-		// enter on an issue.
+	case e.kind == projectEntry && !e.proj.Empty():
+		// No session to show: the cockpit's cards, where o goes.
 		cards, _, _ := layoutCards(m.cockpitRows(m.target()), w, h, "")
 		return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(cards, "\r\n")
 	case e.kind == projectEntry:
@@ -962,8 +946,6 @@ func (m model) holderText(w, h int) string {
 		lines = wrap(dim.Render("No sessions in "+e.proj.Name+hint), cw)
 	case e.kind == terminalEntry:
 		lines = wrap(dim.Render("The terminal "+e.term.Title+" has closed."), cw)
-	case e.kind == issueEntry:
-		lines = m.issueLines(e, cw)
 	default:
 		if hint := m.stageHint(e.sess); hint != "" {
 			lines = append(wrap(dim.Render(hint), cw), "")
@@ -992,23 +974,6 @@ func (m model) holderText(w, h int) string {
 	// Home, clear, hide the cursor, then the lines. The pane is raw, so
 	// each line ends in its own carriage return.
 	return "\x1b[H\x1b[2J\x1b[?25l" + strings.Join(out, "\r\n")
-}
-
-// issueLines is what the holder shows for an issue whose sessions have no
-// pane to show: the issue, and where enter goes.
-func (m model) issueLines(e entry, w int) []string {
-	st := e.task
-	ref := st.Ref()
-	out := wrap(heading.Render(ref)+" "+bold.Foreground(pal.Text).Render(st.Issue.Title), w)
-	out = append(out, wrap(dim.Render(st.Issue.Status+" · "+st.Issue.Priority+" · "+st.Project.Name), w)...)
-	out = append(out, "")
-	n := len(st.Sessions)
-	// What enter does is enterOn's, as the footer says it.
-	_, k := m.enterOn(e)
-	if n == 1 {
-		return append(out, wrap(dim.Render("One session is linked to this issue, and it has no pane here."+k.does("it")), w)...)
-	}
-	return append(out, wrap(dim.Render(fmt.Sprintf("%d sessions are linked to this issue, and none has a pane here.", n)+k.does("the first")), w)...)
 }
 
 // stageHint says why the holder shows a session instead of its terminal.

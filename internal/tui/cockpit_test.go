@@ -290,16 +290,10 @@ func TestTheCockpitOutsideTmuxOnlyDraws(t *testing.T) {
 
 func TestCockpitTarget(t *testing.T) {
 	m := taskModel(t, newFakeMux())
-	for _, c := range []struct{ key, root, task string }{
-		{"task:/code/app#4", "/code/app", "/code/app#4"},
-		{"s1", "/code/app", "/code/app#6"},
-		{"s2", "/code/app", ""},
-		{"agents/s1", "/code/app", "/code/app#6"},
-		{"project:/code/app", "/code/app", ""},
-	} {
-		got := selectKey(t, m, c.key).target()
-		if got.root != c.root || targetTask(got) != c.task {
-			t.Errorf("%s: target %+v, want root %s task %s", c.key, got, c.root, c.task)
+	for _, key := range []string{"s1", "s2", "agents/s1", "project:/code/app"} {
+		got := selectKey(t, m, key).target()
+		if got.root != "/code/app" || got.project == nil || len(got.sessions()) != 2 {
+			t.Errorf("%s: target %+v, want the project /code/app with its two sessions", key, got)
 		}
 	}
 }
@@ -323,8 +317,7 @@ func TestTabMovesTheKeyboardToTheIssuesCard(t *testing.T) {
 	m := selectKey(t, taskModel(t, f), "s2")
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab")
-	// The first issue listed has no session working on it, so enter would
-	// start one.
+	// enter on the issue under the card's cursor starts a session on it.
 	if !m.inIssues() || !strings.Contains(ansi.Strip(m.footer()), "enter start") {
 		t.Fatalf("after tab: issues %v, footer %q", m.inIssues(), ansi.Strip(m.footer()))
 	}
@@ -355,7 +348,7 @@ func withIssues(m model, more ...issues.Issue) model {
 	return m
 }
 
-func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
+func TestEnterOnAnIssueStartsASession(t *testing.T) {
 	f := newFakeMux()
 	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 9, Ref: "app#9", Title: "add threads", Status: issues.Ready, Priority: "p2"})
 	m = resized(t, m, 150, 40)
@@ -379,18 +372,19 @@ func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
 	}
 }
 
-// enter on an issue already in progress starts nothing: the list's cursor
-// goes to the session that holds it, and the cockpit stays open on it.
-func TestEnterOnAnIssueInProgressGoesToItsSession(t *testing.T) {
+// enter on an issue already in progress starts a session on it as well:
+// nothing joins an issue to the sessions that work on it, so the cockpit
+// has no session to go to instead.
+func TestEnterOnAnIssueInProgressStartsASession(t *testing.T) {
 	f := newFakeMux()
 	m := selectKey(t, taskModel(t, f), "s2")
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab", "j", "enter")
-	if len(f.spawned) != 0 {
-		t.Fatalf("started a session on #6: %+v", f.spawned)
+	if len(f.spawned) != 1 || !slices.Equal(f.spawned[0].command[1:], []string{"Work on app#6: keep width"}) {
+		t.Fatalf("spawned %+v, want a session on #6", f.spawned)
 	}
-	if m.sel != "s1" || !m.cockpit.open || m.inIssues() || targetTask(m.target()) != "/code/app#6" {
-		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.inIssues(), m.target())
+	if m.cockpit.open {
+		t.Fatal("the cockpit stays open after starting a session")
 	}
 }
 
@@ -499,24 +493,22 @@ func TestAPendingOIsCancelled(t *testing.T) {
 // The cockpit's header marks each session's state as the list does, with
 // the asking mark for a session that asks, not a dot in its colour.
 func TestTheCockpitHeaderMarksStatesAsTheListDoes(t *testing.T) {
-	m := workModel(t, 120, 30)
-	m.sel = "task:" + ovRoot + "#5"
+	m := workModel(t, 200, 30)
+	m.sel = "s3"
 	m = update(m, keyMsg("o"))
 	text := strings.Join(screenText(m), "\n")
 	if !strings.Contains(text, "? reply on view.go note asking") || strings.Contains(text, "● reply") {
-		t.Fatalf("the header of #5:\n%s", text)
+		t.Fatalf("the header of the project:\n%s", text)
 	}
 }
 
 // The cockpit's header offers enter exactly when the footer does, with
 // the same label, on every kind of entry: a session in a pane, one with
-// no pane, a background one, an issue whose only session has no
-// pane, and a project, and while the issues card has the keys.
+// no pane, a background one, and a project, and while the issues card has
+// the keys.
 func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	s1, s3 := row("s1", "red", "", 11), row("s3", "green", "", 0)
 	s1.Cwd, s3.Cwd = "/code/app", "/code/app"
-	s1.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
-	s3.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 7}}
 	bg := fleet.Row{Live: fleet.Live{SessionID: "b1", ID: "b1", Name: "bg", Kind: "background", Cwd: "/code/app"}, State: fleet.Idle}
 	m := stagedModel(t, newFakeMux(), s1, s3, bg)
 	m.trackers = trackers{"/code/app": tracked("app",
@@ -540,7 +532,7 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 			}
 		}
 		var head []string
-		for _, label := range []string{"type", "attach", "open app", "cockpit", "start", "go to"} {
+		for _, label := range []string{"type", "attach", "open app"} {
 			if strings.Contains(header, " enter  "+label) {
 				head = append(head, label)
 			}
@@ -548,15 +540,8 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 		if !slices.Equal(head, foot) {
 			t.Errorf("on %s the header offers enter %v and the footer %v:\n%s", e.key(), head, foot, header)
 		}
-		if e.kind == issueEntry {
-			// The holder's note on an issue says the same.
-			lines := ansi.Strip(strings.Join(m.issueLines(e, 200), " "))
-			if strings.Contains(lines, "enter") != (len(foot) > 0) {
-				t.Errorf("on %s the holder says %q, the footer offers enter %v", e.key(), strings.TrimSpace(lines), foot)
-			}
-		}
 		kinds[e.kind] = true
-		says = says || (e.kind == issueEntry && len(foot) == 0)
+		says = says || (e.kind == projectEntry && len(foot) == 0)
 		// With the issues card's keys, enter and m act on its issue: the
 		// footer says so, and the header offers neither of its own.
 		if k := update(m, keyMsg("tab")); k.inIssues() {
@@ -572,19 +557,19 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	if keyed == 0 {
 		t.Fatal("the issues card never took the keys")
 	}
-	if !kinds[sessionEntry] || !kinds[issueEntry] || !kinds[projectEntry] || !says {
-		t.Fatalf("the cases did not cover the kinds: %v, an issue with a silent enter %v", kinds, says)
+	if !kinds[sessionEntry] || !kinds[projectEntry] || !says {
+		t.Fatalf("the cases did not cover the kinds: %v, a project with a silent enter %v", kinds, says)
 	}
 }
 
 // A cockpit too short for its last card uses the row it has: the card's
 // rule says how much is under it, rather than a blank line.
 func TestTheCockpitUsesItsLastRow(t *testing.T) {
-	m := workModel(t, 100, 12)
-	m.sel = "task:" + ovRoot + "#6"
+	m := workModel(t, 100, 8)
+	m.sel = "s1"
 	m.cockpit.open = true
 	text := screenText(m)
-	if last := text[len(text)-2]; !strings.Contains(last, "── Issues ─") || !strings.Contains(last, "↓ 3 more issues ──") {
+	if last := text[len(text)-2]; !strings.Contains(last, "── Issues ─") || !strings.Contains(last, "↓ 4 more issues ──") {
 		t.Fatalf("the last row of the cards:\n%s", strings.Join(text, "\n"))
 	}
 	for h := 6; h <= 30; h++ {

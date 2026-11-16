@@ -35,25 +35,25 @@ func TestPanelsSessionsFollowsTheLatestClient(t *testing.T) {
 }
 
 func TestParsePanes(t *testing.T) {
-	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t\t1\t0\t1\t1\ttop\t\t\t50\t1\t/w\n" +
-		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t/w/app#6\t\t61\t0\t0\toff\t1\t1\t24\t0\t/w/app/odd\tdir\n" +
+	out := "%0\t/dev/ttys004\toverview-work\t@0\t60\t40\t200\t1\toverview\t\t\t\t\"--theme\" \"x\"\t\t1\t0\t1\t1\ttop\t\t\t50\t1\t/w\n" +
+		"%3\t/dev/ttys009\toverview-other\t@2\t80\t24\t80\t\tnode\t/w/app\tbg1\t1\t\tsid-1\t\t61\t0\t0\toff\t1\t1\t24\t0\t/w/app/odd\tdir\n" +
 		"garbage\n" +
-		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t/\n" +
-		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t24\t1\t/\n" +
-		"%8\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\ttall\t1\t/\n" +
+		"%4\t/dev/ttys010\ts\t@3\twide\t24\t80\t\tzsh\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t/\n" +
+		"%6\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\tleft\t0\t0\ttop\t\t\t24\t1\t/\n" +
+		"%8\t/dev/ttys010\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\ttall\t1\t/\n" +
 		"%5\t/dev/ttys011\ts\t@3\t1\t24\t\n" +
 		// A line one field short, as the listing was before it said which
 		// window its session shows.
-		"%9\t/dev/ttys012\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t/\n" +
+		"%9\t/dev/ttys012\ts\t@3\t1\t24\t80\t\tzsh\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t/\n" +
 		// An empty pane, which runs nothing and so has no tty.
-		"%7\t\ts\t@3\t60\t24\t80\t\t''\t\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t\n" +
+		"%7\t\ts\t@3\t60\t24\t80\t\t''\t\t\t\t\t\t\t0\t0\t0\ttop\t\t\t24\t1\t\n" +
 		"\n"
 	got := ParsePanes(out)
 	want := []Pane{
 		{ID: "%0", TTY: "ttys004", Session: "overview-work", Window: "@0", W: 60, H: 40, WinW: 200, WinH: 50, List: true, Command: "overview",
 			View: `"--theme" "x"`, Zoomed: true, Y: 1, Active: true, Framed: true, Current: true, Path: "/w"},
 		{ID: "%3", TTY: "ttys009", Session: "overview-other", Window: "@2", W: 80, H: 24, WinW: 80, WinH: 24,
-			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", Task: "/w/app#6", X: 61, Dead: true, Agents: true, Path: "/w/app/odd\tdir"},
+			Command: "node", Project: "/w/app", Attach: "bg1", Holder: true, Review: "sid-1", X: 61, Dead: true, Agents: true, Path: "/w/app/odd\tdir"},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
@@ -80,7 +80,6 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 				Holder:  rapid.Bool().Draw(t, "holder"),
 				View:    rapid.SampledFrom([]string{"", `"--theme" "a b"`}).Draw(t, "view"),
 				Review:  rapid.SampledFrom([]string{"", "5f2c-1d"}).Draw(t, "review"),
-				Task:    rapid.SampledFrom([]string{"", "/w/app#6", "/w/a b#12"}).Draw(t, "task"),
 				Zoomed:  rapid.Bool().Draw(t, "zoomed"),
 				X:       rapid.IntRange(0, 500).Draw(t, "x"),
 				Y:       rapid.IntRange(0, 200).Draw(t, "y"),
@@ -104,8 +103,8 @@ func TestPropParsePanesReadsWhatTmuxWrites(t *testing.T) {
 			if p.Framed {
 				status = "top"
 			}
-			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
-				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, p.Task, flag(p.Zoomed),
+			fmt.Fprintf(&b, "%s\t/dev/%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+				p.ID, p.TTY, p.Session, p.Window, p.W, p.H, p.WinW, flag(p.List), p.Command, p.Project, p.Attach, flag(p.Holder), p.View, p.Review, flag(p.Zoomed),
 				p.X, p.Y, flag(p.Active), status, flag(p.Dead), flag(p.Agents), p.WinH, flag(p.Current), p.Path)
 		}
 		if got := ParsePanes(b.String()); fmt.Sprint(got) != fmt.Sprint(panes) {
@@ -435,9 +434,6 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	if err := s.SetWindowOption(a.ID, ProjectOption, "/w/a b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetWindowOption(a.ID, TaskOption, "/w/a b#6"); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.SetPaneOption(b.ID, AttachOption, "bg1"); err != nil {
 		t.Fatal(err)
 	}
@@ -459,12 +455,12 @@ func TestPaneFieldsFromRealTmux(t *testing.T) {
 	})
 	for _, id := range []string{a.ID, split} {
 		p := panes[id]
-		if p.Project != "/w/a b" || p.Task != "/w/a b#6" || p.Attach != "" || p.Holder != (id == split) || p.Window != a.Window {
+		if p.Project != "/w/a b" || p.Attach != "" || p.Holder != (id == split) || p.Window != a.Window {
 			t.Fatalf("%s: %+v", id, p)
 		}
 	}
 	shell := panes[b.ID]
-	if shell.Project != "" || shell.Task != "" || shell.Attach != "bg1" || shell.Holder {
+	if shell.Project != "" || shell.Attach != "bg1" || shell.Holder {
 		t.Fatalf("the shell: %+v", shell)
 	}
 	if err := s.KillWindow(a.Window); err != nil {

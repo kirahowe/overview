@@ -99,8 +99,6 @@ type Row struct {
 	// Hooked is false for a session that has not reported through the hook,
 	// which leaves only Claude Code's own busy or idle to go on.
 	Hooked bool
-	// Tasks are the issues its transcripts show it taking on, oldest first.
-	Tasks []TaskRef
 }
 
 // Rows builds the view's rows, ordered by directory and then name. t reads
@@ -125,7 +123,7 @@ func (h Home) Rows(t *Transcripts) ([]Row, error) {
 		}
 		r.Transcript = path
 		if f, ok := t.Facts(path); ok {
-			r.Title, r.LastPrompt, r.Tasks = f.Title, f.LastPrompt, HomeDirs(f.Links, h.User)
+			r.Title, r.LastPrompt = f.Title, f.LastPrompt
 			r.LastReply, r.LastReplyAt = f.LastReply, f.ReplyAt
 			r.State, r.Since, r.Reason = limited(r.State, r.Since, r.Reason, f.Limit, now)
 			if r.Since.IsZero() {

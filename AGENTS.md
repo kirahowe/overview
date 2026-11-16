@@ -29,11 +29,10 @@ See README.md for behaviour and docs/ for design notes.
   session under the keyboard; and `q` detaching only the terminal it was
   typed in; and a review, from `v` through a note sent into a fake
   session's prompt, the agent's reply and `x` resolving it; and a
-  task, from a project's stalled issue through `c` starting a session
-  with the prompt that names it, that session holding the issue and the
-  cursor following it there, and `t` opening a terminal labelled with
-  it, and `s` zooming the list with an issue's details beside the
-  picker; and `o` zooming the list into the cockpit and `esc` putting it
+  tracked project's heading counting its issues in review with no
+  issue rows, and `s` zooming the list with an issue's details beside
+  the picker and `enter` starting a session with the prompt that names
+  it; and `o` zooming the list into the cockpit and `esc` putting it
   back; and, in a tracked project's cockpit, `l` moving the keyboard into
   the issues card, `j` moving its cursor, `m` marking the issue under
   it done, `h` returning to the list and `esc` closing the cockpit; and the panels mode, typed at the outer terminal: `esc` in the

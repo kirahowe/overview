@@ -383,42 +383,10 @@ func membersLine(ms []member) string {
 	return strings.Join(parts, "   ")
 }
 
-// streamHeader is the first card of a task's cockpit. enter is
-// enter's chip as the footer has it, from enterOn, none when enter only
-// says something. mark says whether m acts on the task's issue,
-// which it does unless the issues card has the keyboard.
-func streamHeader(ref, status, priority, title, started string, ms []member, enter []hint, mark bool) card {
-	right := []string{}
-	for _, s := range []string{status, priority} {
-		if s != "" {
-			right = append(right, s)
-		}
-	}
-	return card{title: ref, right: dim.Render(strings.Join(right, " · ")), body: func(w int) []string {
-		when := ""
-		if started != "" {
-			when = dim.Render("started " + agoPhrase(started))
-		}
-		var review []hint
-		if slices.ContainsFunc(ms, func(mb member) bool { return !mb.term }) {
-			review = []hint{{"v", "review"}}
-		}
-		var m []hint
-		if mark {
-			m = []hint{{"m", "mark"}}
-		}
-		keys := chips(slices.Concat(enter, review, []hint{{"c", "claude"}, {"t", "term"}}, m)...)
-		return []string{
-			spread(bold.Foreground(pal.Text).Render(title), when, w),
-			membersLine(ms),
-			keys,
-		}
-	}}
-}
-
 // projectHeader is the first card of a project's cockpit. open is how many
 // open issues it has, -1 when it does not track them, and enter is
-// enter's chip as for streamHeader.
+// enter's chip as the footer has it, from enterOn, none when enter only
+// says something.
 func projectHeader(name, root, kind string, open int, ms []member, enter []hint) card {
 	right := "no issues"
 	if open >= 0 {
@@ -439,91 +407,12 @@ func projectHeader(name, root, kind string, open int, ms []member, enter []hint)
 	}}
 }
 
-// issueSummaryLines is how many lines of an issue's summary its card shows.
-const issueSummaryLines = 4
-
-// issueSummary is the first paragraph of an issue's details, after its
-// "# Title" heading and any "## Context" heading, on one line.
-func issueSummary(details string) string {
-	var para []string
-	for _, line := range strings.Split(details, "\n") {
-		t := strings.TrimSpace(line)
-		switch {
-		case t == "" && len(para) > 0:
-			return strings.Join(para, " ")
-		case t == "":
-		case strings.HasPrefix(t, "#") && len(para) > 0:
-			return strings.Join(para, " ")
-		case strings.HasPrefix(t, "#"):
-			h := strings.ToLower(strings.TrimSpace(strings.TrimLeft(t, "#")))
-			if !strings.HasPrefix(t, "# ") && h != "context" {
-				return "" // another section comes before any paragraph
-			}
-		default:
-			para = append(para, t)
-		}
-	}
-	return strings.Join(para, " ")
-}
-
-// issueInfo is what the issue card and the task picker's details show,
-// read with issues show.
+// issueInfo is what the task picker's details show, read with issues
+// show.
 type issueInfo struct {
-	loading  bool
-	err      error
-	summary  string
-	criteria []issues.Criterion
-	details  string
-}
-
-// issueCard is the issue's details: its summary and all its acceptance
-// criteria, those still to do first.
-func issueCard(id int, info issueInfo) card {
-	return card{title: "Issue", right: dim.Render("issues show " + strconv.Itoa(id)), body: func(w int) []string {
-		switch {
-		case info.loading:
-			return []string{dim.Render("reading…")}
-		case info.err != nil:
-			return wrap(dim.Render(info.err.Error()), w)
-		}
-		var out []string
-		if info.summary != "" {
-			lines := wrap(fg(pal.Text).Render(info.summary), w)
-			if len(lines) > issueSummaryLines {
-				lines = lines[:issueSummaryLines]
-				last := ansi.Truncate(lines[issueSummaryLines-1], max(w-1, 0), "")
-				lines[issueSummaryLines-1] = last + dim.Render("…")
-			}
-			out = append(out, lines...)
-		}
-		if len(info.criteria) == 0 {
-			if len(out) == 0 {
-				out = append(out, dim.Render("no details"))
-			}
-			return out
-		}
-		if len(out) > 0 {
-			out = append(out, "")
-		}
-		done := 0
-		for _, c := range info.criteria {
-			if c.Done {
-				done++
-			}
-		}
-		out = append(out, heading.Render("acceptance")+"  "+dim.Render(fmt.Sprintf("%d of %d", done, len(info.criteria))))
-		for _, c := range info.criteria {
-			if !c.Done {
-				out = append(out, dim.Render("○")+" "+dim.Render(c.Text))
-			}
-		}
-		for _, c := range info.criteria {
-			if c.Done {
-				out = append(out, green.Render("✓")+" "+fg(pal.Text).Render(c.Text))
-			}
-		}
-		return out
-	}}
+	loading bool
+	err     error
+	details string
 }
 
 // fileStat is one file's lines added and removed.
@@ -553,19 +442,14 @@ func fileStats(files []diff.File) []fileStat {
 	return out
 }
 
-// changeInfo is what a changes card shows. uncommitted is how many of the
-// files have changes not yet committed, -1 to leave it out.
+// changeInfo is what a changes card shows.
 type changeInfo struct {
-	loading     bool
-	noRepo      bool
-	noStart     bool // a task no session has started on
-	err         error
-	files       []fileStat
-	uncommitted int
+	loading bool
+	noRepo  bool
+	err     error
+	files   []fileStat
 }
 
-// shownFiles is how many files a changes card lists before it says how
-// many more there are.
 // agoPhrase is an age from Ago as a phrase: "3m ago", or "just now".
 func agoPhrase(age string) string {
 	if age == "now" {
@@ -574,23 +458,17 @@ func agoPhrase(age string) string {
 	return age + " ago"
 }
 
+// shownFiles is how many files a changes card lists before it says how
+// many more there are.
 const shownFiles = 6
 
-// changesCard lists the files changed, the most changed first.
-func changesCard(title, since string, info changeInfo) card {
-	right := ""
-	if since != "" {
-		right = dim.Render("since " + since)
-		if since == "now" {
-			right = dim.Render("just started")
-		}
-	}
-	return card{title: title, right: right, body: func(w int) []string {
+// changesCard lists the files with uncommitted changes, the most changed
+// first.
+func changesCard(info changeInfo) card {
+	return card{title: "Uncommitted", body: func(w int) []string {
 		switch {
 		case info.noRepo:
 			return []string{dim.Render("not in a repository")}
-		case info.noStart:
-			return wrap(dim.Render("No session has worked on it yet."), w)
 		case info.loading && info.files == nil:
 			return []string{dim.Render("reading…")}
 		case info.err != nil:
@@ -598,13 +476,13 @@ func changesCard(title, since string, info changeInfo) card {
 		case len(info.files) == 0:
 			return []string{dim.Render("no changes")}
 		}
-		return fileLines(info.files, info.uncommitted, w)
+		return fileLines(info.files, w)
 	}}
 }
 
 // fileLines is the total and the files by lines changed, most first, with
 // the counts in columns at the right.
-func fileLines(files []fileStat, uncommitted, w int) []string {
+func fileLines(files []fileStat, w int) []string {
 	fs := append([]fileStat(nil), files...)
 	sort.SliceStable(fs, func(i, j int) bool {
 		if a, b := fs[i].add+fs[i].del, fs[j].add+fs[j].del; a != b {
@@ -622,11 +500,7 @@ func fileLines(files []fileStat, uncommitted, w int) []string {
 	}
 	total := fg(pal.Added).Render(fmt.Sprintf("+%d", add)) + " " + fg(pal.Removed).Render(fmt.Sprintf("−%d", del)) +
 		dim.Render(fmt.Sprintf(" in %d file%s", len(fs), plural))
-	note := ""
-	if uncommitted >= 0 {
-		note = dim.Render(strconv.Itoa(uncommitted) + " uncommitted")
-	}
-	out := []string{spread(total, note, w)}
+	out := []string{total}
 	n := len(fs)
 	if n > shownFiles {
 		n = shownFiles - 1
@@ -675,8 +549,7 @@ type issueGroup struct {
 	shown  []issues.Issue
 }
 
-// issueGroups is what the issues card lists of a project's other open
-// issues: those in review, those in progress, the blocked ones and the
+// issueGroups is what the issues card lists of a project's open issues: those in review, those in progress, the blocked ones and the
 // ready ones, each as world.IssueLess orders them, and how many are in the inbox.
 func issueGroups(others []issues.Issue) (groups []issueGroup, inbox int) {
 	sorted := append([]issues.Issue(nil), others...)
@@ -713,12 +586,12 @@ func pickable(others []issues.Issue) []issues.Issue {
 	return out
 }
 
-// issuesCard lists the project's other open issues. linked counts the
-// sessions on each, by number. With the keyboard, pick marks the issue
+// issuesCard lists the project's open issues. With the keyboard, pick
+// marks the issue
 // enter acts on. failed is why the last read of them failed, on one line,
 // "" when it worked, and the card then lists what the last good read
 // found.
-func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick int, failed string) card {
+func issuesCard(others []issues.Issue, focused bool, pick int, failed string) card {
 	rows := func(w int) (out []cardRow, at int, unit string) {
 		if failed != "" {
 			for _, l := range wrap(fg(pal.Asking).Render("issues failed: "+failed), w) {
@@ -727,7 +600,7 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 		}
 		groups, inbox := issueGroups(others)
 		if len(pickable(others)) == 0 && inbox == 0 {
-			return append(out, cardRow{line: dim.Render("no other open issues"), group: -1}), 0, "issue"
+			return append(out, cardRow{line: dim.Render("no open issues"), group: -1}), 0, "issue"
 		}
 		const label = 13
 		n := 0
@@ -739,13 +612,6 @@ func issuesCard(others []issues.Issue, linked map[int]int, focused bool, pick in
 					mark, at = heading.Render("▸ "), len(out)
 				}
 				text := dim.Render("#"+strconv.Itoa(i.ID)+" ") + fg(pal.Text).Render(i.Title)
-				if k := linked[i.ID]; k > 0 && i.Status == issues.InProgress {
-					s := "s"
-					if k == 1 {
-						s = ""
-					}
-					text += dim.Render(fmt.Sprintf(" · %d session%s", k, s))
-				}
 				r := cardRow{line: mark + strings.Repeat(" ", label) + text, labelled: mark + head + text, weight: 1, group: gi, first: j == 0}
 				if r.first {
 					r.line = r.labelled
@@ -776,8 +642,8 @@ func tasksCard(root string, tool bool) card {
 	return card{title: "Tasks", body: func(w int) []string {
 		out := wrap(fg(pal.Text).Render("This project doesn't track its tasks."), w)
 		out = append(out, "")
-		out = append(out, wrap(dim.Render("With issues, each session shows the tasks it holds, the issues that wait on you are listed once each, "+
-			"and a task's cockpit shows its acceptance criteria and what has changed for it."), w)...)
+		out = append(out, wrap(dim.Render("With issues, this card lists the project's open issues, s picks one to start a session on, "+
+			"and the list says how many wait on you in review."), w)...)
 		out = append(out, "")
 		if !tool {
 			return append(out, wrap(fg(pal.Text).Render("Install the issues tool to track tasks here."), w)...)

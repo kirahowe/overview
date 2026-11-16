@@ -23,7 +23,7 @@ const (
 	// DefaultClaude is the claude binary, found on PATH.
 	DefaultClaude = "claude"
 	// DefaultIssues is the issues binary, found on PATH. Without one the
-	// workstreams feature is off.
+	// cockpit and the task picker list no issues.
 	DefaultIssues = "issues"
 )
 

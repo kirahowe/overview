@@ -14,10 +14,9 @@ import (
 
 // The task picker is s in the list: it takes the list pane, as the
 // add-project picker does, and offers the open issues of one project to
-// start work on. Its rows are a pure function of the project's tracker,
-// the sessions linked to its issues and the query, and enter acts
-// on the selected one through taskGoes. Starting a session is startOn's
-// Cmd, as for c on an issue. Like the cockpit it zooms the list's
+// start work on. Its rows are a pure function of the project's tracker
+// and the query, and enter starts a session on the selected one, through
+// startOn's Cmd. Like the cockpit it zooms the list's
 // pane, and where the window has room the selected issue's details show
 // beside the rows, read with issues show as the cursor reaches it.
 
@@ -31,11 +30,9 @@ type taskPick struct {
 	top   int
 }
 
-// taskRow is one issue the picker offers, and how many sessions are
-// linked to it.
+// taskRow is one issue the picker offers.
 type taskRow struct {
-	issue    issues.Issue
-	sessions int
+	issue issues.Issue
 }
 
 // taskList is what the picker shows: a note, muted, and then the rows.
@@ -51,14 +48,13 @@ func taskMatches(words []string, id string, i issues.Issue) bool {
 }
 
 // taskRows are the open issues of open that match query, as
-// world.StartLess orders them, each with the sessions linked to it, as sessions counts
-// them.
-func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, query string) []taskRow {
+// world.StartLess orders them.
+func taskRows(open []issues.Issue, id string, query string) []taskRow {
 	words := strings.Fields(strings.ToLower(query))
 	var out []taskRow
 	for _, i := range open {
 		if issues.Open(i.Status) && taskMatches(words, id, i) {
-			out = append(out, taskRow{issue: i, sessions: sessions(i)})
+			out = append(out, taskRow{issue: i})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b taskRow) int {
@@ -77,7 +73,7 @@ func taskRows(open []issues.Issue, id string, sessions func(issues.Issue) int, q
 // says whether overview has the issues binary, tracked whether the World
 // holds the project's tracker, as t, and reading whether a read of it is
 // out.
-func taskListOf(name string, t world.Tracker, tracked, reading, tool bool, sessions func(issues.Issue) int, query string) taskList {
+func taskListOf(name string, t world.Tracker, tracked, reading, tool bool, query string) taskList {
 	switch {
 	case !tool:
 		return taskList{note: "Install the issues tool to track tasks."}
@@ -86,7 +82,7 @@ func taskListOf(name string, t world.Tracker, tracked, reading, tool bool, sessi
 	case !tracked:
 		return taskList{note: untrackedNote(name)}
 	}
-	l := taskList{rows: taskRows(t.Open, t.ID, sessions, query)}
+	l := taskList{rows: taskRows(t.Open, t.ID, query)}
 	switch {
 	case t.Failed():
 		l.note = "issues failed: " + t.Err
@@ -115,16 +111,11 @@ func taskOpens(name string, tracked, reading, tool bool) (open bool, note string
 	return true, ""
 }
 
-// taskGoes says whether enter on a row goes to the issue rather than
-// starting a session: it does when sessions already work on the issue,
-// so a second one is never started by accident.
-func taskGoes(r taskRow) bool { return r.sessions > 0 }
-
 // taskList is what the open picker shows now.
 func (m model) taskList() taskList {
 	root := m.taskPick.root
 	t, tracked := m.world().Tracker(root)
-	return taskListOf(m.name(root), t, tracked, m.trackerReading(root), m.issues != nil, m.sessionsOn(root), m.taskPick.query)
+	return taskListOf(m.name(root), t, tracked, m.trackerReading(root), m.issues != nil, m.taskPick.query)
 }
 
 // taskSel is the selected row of l, -1 when it has none.
@@ -307,9 +298,8 @@ func listMarker(t string) string {
 	return m
 }
 
-// taskEnter acts on the selected row: it goes to the issue, on its own
-// row or its lead's, when taskGoes says so, and otherwise starts a
-// session on the issue, as c does on an issue. The picker closes either way.
+// taskEnter starts a session on the selected row's issue, as c does in
+// a project, with the opening prompt that names it. The picker closes.
 func (m model) taskEnter() (model, tea.Cmd) {
 	l := m.taskList()
 	j := m.taskSel(l)
@@ -319,26 +309,6 @@ func (m model) taskEnter() (model, tea.Cmd) {
 	r, root := l.rows[j], m.taskPick.root
 	m.taskPick = taskPick{}
 	m, zoom := m.syncZoom()
-	m, cmd := m.taskAct(root, r)
+	m, cmd := m.startOn(root, r.issue)
 	return m, tea.Batch(zoom, cmd)
-}
-
-// taskAct goes to r's issue or starts a session on it, for
-// taskEnter.
-func (m model) taskAct(root string, r taskRow) (model, tea.Cmd) {
-	if taskGoes(r) {
-		key := taskKey(root, r.issue.ID)
-		es := m.ordered()
-		k := taskAt(m.world(), es, key)
-		if k < 0 && m.filter != "" {
-			// The filter hides it: show everything, so the cursor can go.
-			m.filter, m.filtering = "", false
-			es = m.ordered()
-			k = taskAt(m.world(), es, key)
-		}
-		if k >= 0 {
-			return m.moveTo(es, k), nil
-		}
-	}
-	return m.startOn(root, r.issue)
 }

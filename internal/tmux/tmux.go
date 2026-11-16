@@ -21,10 +21,6 @@ const ListOption = "@overview-list"
 // started for, its root directory. Every pane in the window reads it.
 const ProjectOption = "@overview-project"
 
-// TaskOption is the window option that names the workstream a terminal was
-// opened for: its project root and issue number, "/w/app#6".
-const TaskOption = "@overview-task"
-
 // AttachOption is the pane option set on a pane that runs claude attach,
 // holding the background session's ID. It is a pane option, not a window
 // one, so a split beside the attach is not taken for it.
@@ -64,7 +60,7 @@ const PanelsTable = "overview-panels"
 // The path comes last, so a tab in it cannot shift the other fields.
 const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{" + ListOption + "}" +
 	"\t#{pane_current_command}\t#{" + ProjectOption + "}\t#{" + AttachOption + "}\t#{" + HolderOption + "}\t#{" + ViewOption + "}" +
-	"\t#{" + ReviewOption + "}\t#{" + TaskOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
+	"\t#{" + ReviewOption + "}\t#{window_zoomed_flag}\t#{pane_left}\t#{pane_top}\t#{pane_active}" +
 	"\t#{pane-border-status}\t#{pane_dead}\t#{" + AgentsOption + "}\t#{window_height}\t#{window_active}\t#{pane_current_path}"
 
 // clientFormat is how Panes asks for each client: its session, key table
@@ -72,7 +68,7 @@ const paneFormat = "#{pane_id}\t#{pane_tty}\t#{session_name}\t#{window_id}\t#{pa
 const clientFormat = "client\t#{client_session}\t#{client_key_table}\t#{client_activity}"
 
 // paneFields is how many fields a line of paneFormat has, the path's last.
-const paneFields = 25
+const paneFields = 24
 
 // Pane is one tmux pane.
 type Pane struct {
@@ -91,7 +87,6 @@ type Pane struct {
 	Holder  bool   // the pane's HolderOption is set
 	View    string // the pane's ViewOption, "" when unset
 	Review  string // the pane's ReviewOption, "" when unset
-	Task    string // the window's TaskOption, "" when unset
 	Zoomed  bool   // one pane of the window fills it, as Zoom does
 	X, Y    int    // where the pane is in its window, its top-left cell
 	Active  bool   // the pane is its window's active one
@@ -182,17 +177,17 @@ func ParsePanes(out string) []Pane {
 		w, err1 := strconv.Atoi(f[4])
 		h, err2 := strconv.Atoi(f[5])
 		ww, err3 := strconv.Atoi(f[6])
-		x, err4 := strconv.Atoi(f[16])
-		y, err5 := strconv.Atoi(f[17])
-		wh, err6 := strconv.Atoi(f[22])
+		x, err4 := strconv.Atoi(f[15])
+		y, err5 := strconv.Atoi(f[16])
+		wh, err6 := strconv.Atoi(f[21])
 		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil || err6 != nil {
 			continue
 		}
 		panes = append(panes, Pane{
 			ID: f[0], TTY: strings.TrimPrefix(f[1], "/dev/"), Session: f[2], Window: f[3],
 			W: w, H: h, WinW: ww, WinH: wh, List: f[7] == "1",
-			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Task: f[14], Zoomed: f[15] == "1",
-			X: x, Y: y, Active: f[18] == "1", Framed: f[19] == "top", Dead: f[20] == "1", Agents: f[21] == "1", Current: f[23] == "1", Path: f[24],
+			Command: f[8], Project: f[9], Attach: f[10], Holder: f[11] == "1", View: f[12], Review: f[13], Zoomed: f[14] == "1",
+			X: x, Y: y, Active: f[17] == "1", Framed: f[18] == "top", Dead: f[19] == "1", Agents: f[20] == "1", Current: f[22] == "1", Path: f[23],
 		})
 	}
 	return panes
