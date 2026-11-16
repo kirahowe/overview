@@ -602,32 +602,21 @@ func genListWorld(t *rapid.T) *world.World {
 }
 
 // presented is what the World holds that the list shows, in the World's
-// order: each listed project's heading, its workstreams, each with its
-// sessions and terminals, and its own sessions and terminals, then the
-// away sessions, then the agents. A session under a workstream that is
-// not its primary one is an alias.
+// order: each listed project's heading, its sessions, its terminals and
+// the issues that wait on you there, then the away sessions, then the
+// agents.
 func presented(w *world.World) []string {
 	var out []string
 	for _, p := range w.Projects {
 		out = append(out, "project:"+p.Root)
-		for _, st := range p.Streams {
-			out = append(out, "task:"+st.Key.String())
-			for _, s := range st.Sessions {
-				if s.Primary() == st {
-					out = append(out, s.SessionID)
-				} else {
-					out = append(out, "task:"+st.Key.String()+"/"+s.SessionID)
-				}
-			}
-			for _, tm := range st.Terminals {
-				out = append(out, tm.Window)
-			}
-		}
 		for _, s := range p.Sessions {
 			out = append(out, s.SessionID)
 		}
 		for _, tm := range p.Terminals {
 			out = append(out, tm.Window)
+		}
+		for _, st := range p.Waiting {
+			out = append(out, "task:"+st.Key.String())
 		}
 	}
 	for _, s := range w.Away {
@@ -648,7 +637,7 @@ func keys(es []entry) []string {
 }
 
 // With an empty query the list is the whole World, in its order: every
-// listed project, workstream, session, terminal and away session, a
+// listed project, session, terminal, waiting issue and away session, a
 // placeholder for each project with nothing in it, and every session once
 // in the agents list. Each entry points at what it shows.
 func TestPropPresentShowsTheWholeWorld(t *testing.T) {
@@ -670,17 +659,14 @@ func TestPropPresentShowsTheWholeWorld(t *testing.T) {
 					if w.Sessions[e.sess.SessionID] != e.sess {
 						t.Fatalf("%s is not the World's session", e.key())
 					}
-				case workstreamEntry:
-					if w.Streams[e.stream.Key] != e.stream || e.stream.Project.Name != s.Title {
-						t.Fatalf("%s is not the World's workstream in %q", e.key(), s.Title)
+				case issueEntry:
+					if w.Tasks[e.task.Key] != e.task || e.task.Project.Name != s.Title || !e.task.Waits() {
+						t.Fatalf("%s is not the World's waiting issue in %q", e.key(), s.Title)
 					}
 				case terminalEntry:
 					if !slices.Contains(w.Terminals, e.term) || e.term.Project.Name != s.Title {
 						t.Fatalf("%s is not the World's terminal in %q", e.key(), s.Title)
 					}
-				}
-				if e.stream != nil && e.kind != workstreamEntry && (e.alias == agentsPrefix || !slices.Contains(e.stream.Project.Streams, e.stream)) {
-					t.Fatalf("%s sits under %s", e.key(), e.task())
 				}
 			}
 		}
@@ -1020,9 +1006,9 @@ func TestPropFitList(t *testing.T) {
 	})
 }
 
-// Each session has a primary entry, under the workstream it was linked
-// to last or in its project, an alias under each other workstream it is
-// linked to, and one in the agents list.
+// Each session has exactly two entries, however many tasks it holds: its
+// primary one, in its project or among the sessions other apps run, and
+// one in the agents list.
 func TestPropSessionEntries(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
@@ -1039,63 +1025,42 @@ func TestPropSessionEntries(t *testing.T) {
 					n += c
 				}
 			}
-			if n != max(len(s.Streams), 1)+1 || count[id] != 1 || count["agents/"+id] != 1 {
-				t.Fatalf("%s is listed %d times with streams %v", id, n, s.Streams)
-			}
-			for _, st := range s.Streams {
-				key := "task:" + st.Key.String() + "/" + id
-				if st == s.Primary() {
-					key = id
-				}
-				if count[key] != 1 {
-					t.Fatalf("%s has no entry %s", id, key)
-				}
+			if n != 2 || count[id] != 1 || count["agents/"+id] != 1 {
+				t.Fatalf("%s is listed %d times, holding %d tasks", id, n, len(s.Holds))
 			}
 		}
 	})
 }
 
-// A search never shows an entry under a workstream without the
-// workstream's row, shows everything under a workstream that matches,
-// and shows a workstream only when it or something under it matches.
-func TestPropSearchKeepsWorkstreamsWhole(t *testing.T) {
+// A search shows an issue exactly when it matches on its ref, number,
+// title or project name, and a session whenever one of the tasks it holds
+// matches on its ref, number or title, so searching for an issue finds
+// the session on it.
+func TestPropSearchFindsIssuesAndWhoHoldsThem(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
 		q := rapid.OneOf(rapid.Just(genQuery(t)), rapid.SampledFrom([]string{"#2", "alpha#3", "gamma", "#4 alpha"})).Draw(t, "q")
 		all := present(w, "")
-		got := present(w, q)
 		words := strings.Fields(strings.ToLower(q))
 		shown := map[string]bool{}
-		for _, e := range flatten(got) {
+		for _, e := range flatten(present(w, q)) {
 			shown[e.key()] = true
-		}
-		for _, s := range got {
-			cur := ""
-			for _, e := range s.Entries {
-				if e.kind == workstreamEntry {
-					cur = e.task()
-				} else if e.task() != "" && e.task() != cur {
-					t.Fatalf("%q shows %s without its workstream %s", q, e.key(), e.task())
-				}
-			}
 		}
 		for _, s := range all {
 			for _, e := range s.Entries {
-				if e.kind != workstreamEntry {
-					continue
-				}
-				i := e.stream.Issue
-				self := matchFields(words, i.Ref, fmt.Sprintf("#%d", i.ID), i.Title, e.stream.Project.Name)
-				kids := children(flatten(all), e.task())
-				any := false
-				for _, c := range kids {
-					any = any || shown[c.key()]
-					if self && !shown[c.key()] {
-						t.Fatalf("%q matches %s but hides %s", q, e.key(), c.key())
+				switch {
+				case e.kind == issueEntry:
+					i := e.task.Issue
+					self := matchFields(words, e.task.Ref(), fmt.Sprintf("#%d", i.ID), i.Title, e.task.Project.Name)
+					if shown[e.key()] != self {
+						t.Fatalf("%q: %s shown %v, matches %v", q, e.key(), shown[e.key()], self)
 					}
-				}
-				if shown[e.key()] != (self || any) {
-					t.Fatalf("%q: %s shown %v, matches %v, a child shown %v", q, e.key(), shown[e.key()], self, any)
+				case e.kind == sessionEntry:
+					for _, st := range e.sess.Holds {
+						if matchFields(words, st.Ref(), fmt.Sprintf("#%d", st.ID), st.Issue.Title) && !shown[e.key()] {
+							t.Fatalf("%q matches %s, which %s holds, yet hides it", q, st.Ref(), e.key())
+						}
+					}
 				}
 			}
 		}
@@ -1190,32 +1155,33 @@ func TestPropTheCursorWalksTheWholeList(t *testing.T) {
 	})
 }
 
-// The cockpit's target for an entry under a workstream is that
-// workstream, and for any other entry its project.
-func TestPropCockpitTargetIsTheWorkstreamAbove(t *testing.T) {
+// The cockpit's target for an issue is the issue, for a terminal opened
+// for one that one, and for a session the task it holds when it holds
+// exactly one. For anything else it is the entry's project.
+func TestPropCockpitTargetIsTheFocus(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		w := genListWorld(t)
 		es := flatten(present(w, ""))
 		rootOf := func(e entry, ok bool) string { return "/root/of/" + e.key() }
-		var under *world.Stream
 		for _, e := range es {
 			got := cockpitTarget(w, e, true, rootOf)
+			var want *world.Task
 			switch {
-			case e.kind == workstreamEntry:
-				under = e.stream
-			case e.stream == nil || e.alias == agentsPrefix:
-				under = nil
+			case e.kind == issueEntry:
+				want = e.task
+			case e.kind == terminalEntry:
+				want = e.term.Task
+			case e.kind == sessionEntry && len(e.sess.Holds) == 1:
+				want = e.sess.Holds[0]
 			}
 			switch {
-			case e.stream != under && e.alias != agentsPrefix:
-				t.Fatalf("%s sits under %s, not the workstream above it", e.key(), e.task())
-			case under != nil && (got.stream != under || got.root != under.Root || got.project != under.Project):
-				t.Fatalf("%s under %s has target %+v", e.key(), under.Key, got)
-			case under == nil && (got.stream != nil || got.root != rootOf(e, true) || got.project != w.ProjectOf(got.root)):
-				t.Fatalf("%s under no workstream has target %+v", e.key(), got)
+			case want != nil && (got.task != want || got.root != want.Root || got.project != want.Project):
+				t.Fatalf("%s on %s has target %+v", e.key(), want.Key, got)
+			case want == nil && (got.task != nil || got.root != rootOf(e, true) || got.project != w.ProjectOf(got.root)):
+				t.Fatalf("%s on no one task has target %+v", e.key(), got)
 			}
 		}
-		if got := cockpitTarget(w, entry{}, false, rootOf); got.stream != nil || got.root != rootOf(entry{}, false) {
+		if got := cockpitTarget(w, entry{}, false, rootOf); got.task != nil || got.root != rootOf(entry{}, false) {
 			t.Fatalf("with nothing selected: %+v", got)
 		}
 	})
@@ -1982,7 +1948,7 @@ func TestPropAHeadingKeepsItsTitleBeforeItsNote(t *testing.T) {
 		w := rapid.IntRange(2, 120).Draw(t, "w")
 		m = update(m, tea.WindowSizeMsg{Width: w, Height: 10})
 		title := rapid.StringMatching(`[a-z][a-z-]{0,40}`).Draw(t, "title")
-		sec := section{Title: title, Tracked: rapid.Bool().Draw(t, "tracked"), Tasks: rapid.IntRange(0, 12).Draw(t, "tasks"),
+		sec := section{Title: title, Tracked: rapid.Bool().Draw(t, "tracked"), Waiting: rapid.IntRange(0, 12).Draw(t, "waiting"),
 			Sessions: rapid.IntRange(1, 12).Draw(t, "sessions"), Terminals: rapid.IntRange(1, 3).Draw(t, "terms"), Open: 7,
 			Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}}}
 		notes := sectionNotes(sec)
@@ -2344,7 +2310,7 @@ func TestPropSideIsTheCursorsOwn(t *testing.T) {
 }
 
 // The entries that echo the cursor's are the other entries of the session
-// it stands for, its own or its workstream's lead's: each of them, and
+// it stands for, its own or its issue's lead's: each of them, and
 // never the cursor's own. The first of them on a side is where across
 // puts the cursor, so the row marked there is the row the cursor crosses
 // to, and the part of the list that holds the cursor scrolls to it.
@@ -2360,8 +2326,8 @@ func TestPropEchoesAreTheCursorsSession(t *testing.T) {
 		switch e := es[i]; e.kind {
 		case sessionEntry:
 			id = e.sess.SessionID
-		case workstreamEntry:
-			if c, ok := lead(children(es, e.task())); ok && c.kind == sessionEntry {
+		case issueEntry:
+			if c, ok := lead(es, e.task); ok && c.kind == sessionEntry {
 				id = c.sess.SessionID
 			}
 		}

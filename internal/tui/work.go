@@ -14,16 +14,16 @@ import (
 	"overview/internal/world"
 )
 
-// A workstream is an open issue of a project that tracks its work with the
-// issues tool, together with the sessions and terminals linked to it. The
-// refresh reads each project's open issues into a tracker, and the list
-// groups the project's entries under them.
+// A task is an open issue of a project that tracks its work with the
+// issues tool. The refresh reads each project's open issues into a
+// tracker, and the World works out from them which issues each session
+// holds and which wait on you.
 
 // retryAfter is how long a failed issues run is kept before the refresh
 // tries again, when nothing in .issues has changed.
 const retryAfter = 10 * time.Second
 
-// taskKey names a workstream: its project's root and its issue's number.
+// taskKey names a task: its project's root and its issue's number.
 func taskKey(root string, id int) string { return world.Key{Root: root, ID: id}.String() }
 
 // tracker is one project's issues as the refreshes read them. A run that
@@ -179,7 +179,7 @@ func fallbackID(readFile func(string) ([]byte, error), root string) string {
 // reads in flight.
 func (m model) trackerReading(root string) bool { return m.reading[root] }
 
-// opening is the first prompt of a session started on a workstream, which
+// opening is the first prompt of a session started on a task, which
 // its transcript links it by: "Work on overview#6: <title>".
 func opening(projectID string, i issues.Issue) string {
 	return fmt.Sprintf("Work on %s#%d: %s", projectID, i.ID, i.Title)

@@ -105,8 +105,8 @@ func (m model) entryTitle(e entry, ok bool) []titleSeg {
 	switch {
 	case !ok:
 		return []titleSeg{{text: "details"}}
-	case e.kind == workstreamEntry:
-		return []titleSeg{{text: "#" + strconv.Itoa(e.stream.ID) + " " + e.stream.Issue.Title}}
+	case e.kind == issueEntry:
+		return []titleSeg{{text: "#" + strconv.Itoa(e.task.ID) + " " + e.task.Issue.Title}}
 	case e.kind == projectEntry:
 		return []titleSeg{{text: e.proj.Name}}
 	case e.kind == terminalEntry:

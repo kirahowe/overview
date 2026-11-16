@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,20 +27,20 @@ type section struct {
 	Tracked bool // the project tracks its work with issues
 	Failed  bool // and the last read of its issues failed
 	Open    int  // and how many of its issues are open
-	// Tasks, Sessions and Terminals count what the World has in the
-	// section, before any search: its workstreams, and the sessions and
-	// terminals under none of them.
-	Tasks, Sessions, Terminals int
-	Entries                    []entry
+	// Waiting, Sessions and Terminals count what the World has in the
+	// section, before any search: its issues that wait on you, its
+	// sessions and its terminals.
+	Waiting, Sessions, Terminals int
+	Entries                      []entry
 }
 
 type entryKind int
 
 const (
-	sessionEntry    entryKind = iota
-	terminalEntry             // a window of plain shells, or a dev server
-	projectEntry              // a project's heading
-	workstreamEntry           // an issue that is being worked on
+	sessionEntry  entryKind = iota
+	terminalEntry           // a window of plain shells, or a dev server
+	projectEntry            // a project's heading
+	issueEntry              // an issue that waits on you
 )
 
 // The prefixes of the keys of the entries that are not a session's own.
@@ -49,38 +50,33 @@ const (
 )
 
 // entry is one thing the cursor can be on: a Claude session, a terminal,
-// a project's heading, or a workstream. It points into the World the list
-// was presented from.
+// a project's heading, or an issue that waits on you. It points into the
+// World the list was presented from.
 //
-// A session can be listed more than once: under each workstream it is
-// linked to, and in the agents list. Its primary entry, under the
-// workstream it was linked to last or else in its project, has alias "".
-// The others have the placement as their alias, and act exactly as the
-// primary does.
+// A session is listed twice: in its project, or among the sessions other
+// apps run, and in the agents list. Its entry in the agents list has the
+// alias agentsPrefix, and acts exactly as its primary entry does.
 type entry struct {
-	kind entryKind
-	sess *world.Session  // sessionEntry
-	term *world.Terminal // terminalEntry
-	proj *world.Project  // projectEntry
-	// stream is a workstream entry's own, or the one an entry sits under.
-	// An agents alias sits under none.
-	stream *world.Stream
-	alias  string // a session's placement, "" for its primary entry
+	kind  entryKind
+	sess  *world.Session  // sessionEntry
+	term  *world.Terminal // terminalEntry
+	proj  *world.Project  // projectEntry
+	task  *world.Task     // issueEntry
+	alias string          // agentsPrefix for a session's entry in the agents list, else ""
 }
 
 // key names an entry for the cursor and for clicks, across refreshes: a
 // session's id, a terminal's window ("@7"), "project:" and the project's
-// root, or "task:" and the workstream's key. A session's alias puts
-// its placement and a slash before its id: "task:/w/app#6/<id>" or
-// "agents/<id>". A project's heading is "project:" and its root.
+// root, or "task:" and the issue's key. A session's entry in the agents
+// list is "agents/<id>".
 func (e entry) key() string {
 	switch e.kind {
 	case terminalEntry:
 		return e.term.Window
 	case projectEntry:
 		return "project:" + e.proj.Root
-	case workstreamEntry:
-		return taskPrefix + e.task()
+	case issueEntry:
+		return taskPrefix + e.task.Key.String()
 	}
 	if e.sess == nil {
 		return "" // no entry at all, as selected gives with nothing listed
@@ -109,8 +105,8 @@ func (e entry) projectName() string {
 		p = e.proj
 	case e.kind == terminalEntry:
 		p = e.term.Project
-	case e.stream != nil:
-		p = e.stream.Project
+	case e.kind == issueEntry:
+		p = e.task.Project
 	case e.sess != nil && e.sess.Host == nil:
 		p = e.sess.Project
 	}
@@ -120,13 +116,28 @@ func (e entry) projectName() string {
 	return p.Name
 }
 
-// task is the key of the workstream the entry is or sits under, "" for
-// none.
-func (e entry) task() string {
-	if e.stream == nil {
-		return ""
+// focus is the task the keys that act on one act on from the entry: an
+// issue's own, a terminal's, or a session's when it has exactly one. nil
+// for none, and for a session with several, which leaves the choice to
+// the project's cockpit.
+func (e entry) focus() *world.Task {
+	switch {
+	case e.kind == issueEntry:
+		return e.task
+	case e.kind == terminalEntry:
+		return e.term.Task
+	case e.kind == sessionEntry && e.sess != nil && len(e.sess.Holds) == 1:
+		return e.sess.Holds[0]
 	}
-	return e.stream.Key.String()
+	return nil
+}
+
+// focusKey is the key of the entry's focus, "" for none.
+func (e entry) focusKey() string {
+	if t := e.focus(); t != nil {
+		return t.Key.String()
+	}
+	return ""
 }
 
 // session is the entry's session, and whether it is a session at all.
@@ -134,41 +145,48 @@ func (e entry) session() (*world.Session, bool) {
 	return e.sess, e.kind == sessionEntry && e.sess != nil
 }
 
-// children are the entries listed under the workstream task in es, in
-// order.
-func children(es []entry, task string) []entry {
-	var out []entry
+// lead is the primary entry in es of what stands for task t, as
+// Task.Lead picks it: the session linked to it last that has a pane, which
+// the stage shows beside an issue and enter goes to. ok is false when t
+// has neither a session nor a terminal, or es does not show it.
+func lead(es []entry, t *world.Task) (entry, bool) {
+	s, tm := t.Lead()
 	for _, e := range es {
-		if e.task() == task && e.kind != workstreamEntry && e.alias != agentsPrefix {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// lead is the entry under a workstream that stands for it, of its
-// children cs, which the stage shows beside the workstream and enter goes
-// to. world.LeadOf picks it from the sessions and terminals the list
-// shows, as Stream.Lead picks from the whole workstream. ok is false when
-// cs has neither.
-func lead(cs []entry) (entry, bool) {
-	var ss []*world.Session
-	var ts []*world.Terminal
-	for _, c := range cs {
-		switch c.kind {
-		case sessionEntry:
-			ss = append(ss, c.sess)
-		case terminalEntry:
-			ts = append(ts, c.term)
-		}
-	}
-	s, t := world.LeadOf(ss, ts)
-	for _, c := range cs {
-		if (s != nil && c.kind == sessionEntry && c.sess == s) || (t != nil && c.kind == terminalEntry && c.term == t) {
-			return c, true
+		if e.alias == "" && (s != nil && e.kind == sessionEntry && e.sess == s || tm != nil && e.kind == terminalEntry && e.term == tm) {
+			return e, true
 		}
 	}
 	return entry{}, false
+}
+
+// taskAt is where the cursor goes for task key in es, -1 when nowhere:
+// the issue's own entry, when it waits on you, else its lead's.
+func taskAt(w *world.World, es []entry, key string) int {
+	if i := slices.IndexFunc(es, func(e entry) bool { return e.kind == issueEntry && e.task.Key.String() == key }); i >= 0 {
+		return i
+	}
+	k, ok := world.ParseKey(key)
+	if t := w.Tasks[k]; ok && t != nil {
+		if l, ok := lead(es, t); ok {
+			return slices.IndexFunc(es, func(e entry) bool { return e.key() == l.key() })
+		}
+	}
+	return -1
+}
+
+// labels are the refs of the tasks a session holds, as its row shows
+// them: "#6" for an issue of the project it is listed in, here, and the
+// whole ref for another project's.
+func labels(s *world.Session, here *world.Project) []string {
+	var out []string
+	for _, t := range s.Holds {
+		if t.Project == here {
+			out = append(out, "#"+strconv.Itoa(t.ID))
+		} else {
+			out = append(out, t.Ref())
+		}
+	}
+	return out
 }
 
 // issueRef is how an issue is named: its ref as the CLI gives it, or the
@@ -186,18 +204,17 @@ func issueRef(id string, i issues.Issue) string {
 // the header all read it.
 //
 // Each of the World's projects is a section: its heading, then its
-// workstreams, each with the sessions and terminals under it, then its
-// own sessions and terminals. The heading is shown with anything else the
-// section shows, and a pinned project with nothing in it has only its
-// heading, which the query matches on the project's name. Then come the
-// sessions other apps run, and last the agents list: every session shown
-// above, once, in the World's order.
+// sessions, its terminals, and the issues that wait on you there. The
+// heading is shown with anything else the section shows, and a pinned
+// project with nothing in it has only its heading, which the query
+// matches on the project's name. Then come the sessions other apps run,
+// and last the agents list: every session shown above, once, in the
+// World's order.
 //
-// A workstream matches the query on its ref, number, title and project
-// name, and is shown when it or anything under it matches. When it
-// matches itself, everything under it is shown. A session matches on its
-// project's name, title, last prompt, name and host app, and a terminal
-// on its project's name, title and directory.
+// A session matches the query on its project's name, title, last prompt,
+// name, host app, and the refs and titles of the tasks it holds. A
+// terminal matches on its project's name, title and directory, and an
+// issue on its ref, number, title and project name.
 func present(w *world.World, query string) []section {
 	words := strings.Fields(strings.ToLower(query))
 	shown := map[*world.Session]bool{}
@@ -206,7 +223,11 @@ func present(w *world.World, query string) []section {
 		if s.Host != nil {
 			app = s.Host.Label()
 		}
-		return matchFields(words, s.Project.Name, s.Title, s.LastPrompt, s.Name, app)
+		fields := []string{s.Project.Name, s.Title, s.LastPrompt, s.Name, app}
+		for _, t := range s.Holds {
+			fields = append(fields, t.Ref(), "#"+strconv.Itoa(t.ID), t.Issue.Title)
+		}
+		return matchFields(words, fields...)
 	}
 	terminal := func(t *world.Terminal) bool {
 		return matchFields(words, t.Project.Name, t.Title, w.Short(t.Path))
@@ -214,35 +235,13 @@ func present(w *world.World, query string) []section {
 	var out []section
 	for _, p := range w.Projects {
 		sec := section{Title: p.Name, Tracked: p.Tracked, Failed: p.Failed, Open: len(p.Open),
-			Tasks: len(p.Streams), Sessions: len(p.Sessions), Terminals: len(p.Terminals)}
+			Waiting: len(p.Waiting), Sessions: len(p.Sessions), Terminals: len(p.Terminals)}
 		if p.Empty() {
 			if matchFields(words, p.Name) {
 				sec.Entries = []entry{{kind: projectEntry, proj: p}}
 				out = append(out, sec)
 			}
 			continue
-		}
-		for _, st := range p.Streams {
-			whole := matchFields(words, st.Ref(), "#"+strconv.Itoa(st.ID), st.Issue.Title, p.Name)
-			var under []entry
-			for _, s := range st.Sessions {
-				if whole || session(s) {
-					e := entry{kind: sessionEntry, sess: s, stream: st}
-					if s.Primary() != st {
-						e.alias = taskPrefix + st.Key.String()
-					}
-					under = append(under, e)
-					shown[s] = true
-				}
-			}
-			for _, t := range st.Terminals {
-				if whole || terminal(t) {
-					under = append(under, entry{kind: terminalEntry, term: t, stream: st})
-				}
-			}
-			if whole || len(under) > 0 {
-				sec.Entries = append(append(sec.Entries, entry{kind: workstreamEntry, stream: st}), under...)
-			}
 		}
 		for _, s := range p.Sessions {
 			if session(s) {
@@ -253,6 +252,11 @@ func present(w *world.World, query string) []section {
 		for _, t := range p.Terminals {
 			if terminal(t) {
 				sec.Entries = append(sec.Entries, entry{kind: terminalEntry, term: t})
+			}
+		}
+		for _, t := range p.Waiting {
+			if matchFields(words, t.Ref(), "#"+strconv.Itoa(t.ID), t.Issue.Title, p.Name) {
+				sec.Entries = append(sec.Entries, entry{kind: issueEntry, task: t})
 			}
 		}
 		if len(sec.Entries) > 0 {
@@ -308,19 +312,14 @@ func matchFields(terms []string, fields ...string) bool {
 	return true
 }
 
-// matches counts what a search shows, each session once, though it may
-// be listed under several workstreams and in the agents list too. A
-// workstream's row counts only when nothing is shown under it, since
-// otherwise it heads what was found, and a project's heading only when
-// the project is empty, for the same reason.
+// matches counts what a search shows, each session once, though it is
+// listed in the agents list too. A project's heading counts only when the
+// project is empty, since otherwise it heads what was found.
 func matches(secs []section) int {
 	seen := map[string]bool{}
-	es := flatten(secs)
-	for i, e := range es {
+	for _, e := range flatten(secs) {
 		k := e.key()
 		switch {
-		case e.kind == workstreamEntry && i+1 < len(es) && es[i+1].stream == e.stream:
-			continue
 		case e.kind == projectEntry && !e.proj.Empty():
 			continue
 		case e.sess != nil:

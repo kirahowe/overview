@@ -185,37 +185,36 @@ func TestTheCursorKeepsToItsSide(t *testing.T) {
 }
 
 // The echoes of an entry are the other entries of its session, the
-// session's own before those under its other workstreams and among the
-// agents, and from a workstream they are every entry of its lead. What is
-// listed once has none.
+// session's own before the one among the agents, and from an issue they
+// are every entry of its lead. What is listed once has none.
 func TestEchoes(t *testing.T) {
-	a, b := &world.Stream{Key: world.Key{Root: "/w/app", ID: 1}}, &world.Stream{Key: world.Key{Root: "/w/app", ID: 2}}
-	both := &world.Session{Row: row("s", "app", "", 1), Streams: []*world.Stream{a, b}} // b is its primary
+	both := &world.Session{Row: row("s", "app", "", 1), Pane: "%1"}
 	lone := &world.Session{Row: row("o", "app", "", 2)}
+	a := &world.Task{Key: world.Key{Root: "/w/app", ID: 1}, Sessions: []*world.Session{both}}
+	b := &world.Task{Key: world.Key{Root: "/w/app", ID: 2}} // nobody's
 	es := []entry{
 		{kind: projectEntry, proj: &world.Project{Root: "/w/app"}},
-		{kind: workstreamEntry, stream: a},
-		{kind: sessionEntry, sess: both, stream: a, alias: taskPrefix + a.Key.String()},
-		{kind: workstreamEntry, stream: b},
-		{kind: sessionEntry, sess: both, stream: b},
+		{kind: sessionEntry, sess: both},
 		{kind: sessionEntry, sess: lone},
 		{kind: terminalEntry, term: &world.Terminal{Window: "@9"}},
+		{kind: issueEntry, task: a},
+		{kind: issueEntry, task: b},
 		{kind: sessionEntry, sess: both, alias: agentsPrefix},
 		{kind: sessionEntry, sess: lone, alias: agentsPrefix},
 	}
-	under, own, agent := es[2].key(), es[4].key(), es[7].key()
+	own, agent := es[1].key(), es[6].key()
 	for _, c := range []struct {
 		what string
 		i    int
 		want []string
 	}{
 		{"a project's heading", 0, nil},
-		{"a workstream", 1, []string{own, under, agent}},
-		{"a session under another of its workstreams", 2, []string{own, agent}},
-		{"a session's own entry", 4, []string{under, agent}},
-		{"a session listed twice", 5, []string{es[8].key()}},
-		{"a terminal", 6, nil},
-		{"a session among the agents", 7, []string{own, under}},
+		{"a session's own entry", 1, []string{agent}},
+		{"a session listed twice", 2, []string{es[7].key()}},
+		{"a terminal", 3, nil},
+		{"an issue", 4, []string{own, agent}},
+		{"an issue nobody is linked to", 5, nil},
+		{"a session among the agents", 6, []string{own}},
 		{"no entry", -1, nil},
 		{"an entry past the end", len(es), nil},
 	} {

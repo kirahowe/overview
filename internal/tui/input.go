@@ -71,7 +71,7 @@ const (
 	outCockpit    // close the cockpit
 	cockpitTab    // move the keyboard into the cockpit's issues card (n 1), out of it (-1), or across (0)
 	cockpitMove   // n issues down the issues card, negative for up
-	cockpitPick   // start a workstream on the issue under the issues card's cursor
+	cockpitPick   // start a task on the issue under the issues card's cursor
 	enterPanels   // put the client in tmux's panels mode, where the keys move the focus
 	markIssue     // open the verdict box for the selected task's issue, or the issues card's
 	verdictPick   // choose the verdict, text, in the box

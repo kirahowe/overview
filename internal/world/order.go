@@ -96,16 +96,31 @@ func priorityLess(a, b issues.Issue) bool {
 	return a.ID < b.ID
 }
 
-// StreamLess orders a project's workstreams: by their issues as IssueLess
-// orders them, then root.
-func StreamLess(a, b *Stream) bool {
+// WaitingLess orders the issues that wait on you: those in review, then
+// the blocked ones, then those in progress that nobody holds, then by
+// priority, number and root.
+func WaitingLess(a, b *Task) bool {
+	if ra, rb := waitRank(a.Issue.Status), waitRank(b.Issue.Status); ra != rb {
+		return ra < rb
+	}
 	switch {
-	case IssueLess(a.Issue, b.Issue):
+	case priorityLess(a.Issue, b.Issue):
 		return true
-	case IssueLess(b.Issue, a.Issue):
+	case priorityLess(b.Issue, a.Issue):
 		return false
 	}
 	return a.Root < b.Root
+}
+
+// waitRank ranks a status for WaitingLess, lowest first.
+func waitRank(status string) int {
+	switch status {
+	case issues.Review:
+		return 0
+	case issues.Blocked:
+		return 1
+	}
+	return 2
 }
 
 // WindowLess orders tmux window ids ("@7") by number, then as text.

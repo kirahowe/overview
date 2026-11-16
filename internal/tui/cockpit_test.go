@@ -291,10 +291,11 @@ func TestTheCockpitOutsideTmuxOnlyDraws(t *testing.T) {
 func TestCockpitTarget(t *testing.T) {
 	m := taskModel(t, newFakeMux())
 	for _, c := range []struct{ key, root, task string }{
-		{"task:/code/app#6", "/code/app", "/code/app#6"},
+		{"task:/code/app#4", "/code/app", "/code/app#4"},
 		{"s1", "/code/app", "/code/app#6"},
 		{"s2", "/code/app", ""},
-		{"agents/s1", "/code/app", ""},
+		{"agents/s1", "/code/app", "/code/app#6"},
+		{"project:/code/app", "/code/app", ""},
 	} {
 		got := selectKey(t, m, c.key).target()
 		if got.root != c.root || targetTask(got) != c.task {
@@ -379,8 +380,8 @@ func TestEnterOnAnIssueStartsAWorkstream(t *testing.T) {
 }
 
 // enter on an issue already in progress starts nothing: the list's cursor
-// goes to its workstream, and the cockpit stays open on it.
-func TestEnterOnAnIssueInProgressGoesToItsWorkstream(t *testing.T) {
+// goes to the session that holds it, and the cockpit stays open on it.
+func TestEnterOnAnIssueInProgressGoesToItsSession(t *testing.T) {
 	f := newFakeMux()
 	m := selectKey(t, taskModel(t, f), "s2")
 	m = resized(t, m, 150, 40)
@@ -388,7 +389,7 @@ func TestEnterOnAnIssueInProgressGoesToItsWorkstream(t *testing.T) {
 	if len(f.spawned) != 0 {
 		t.Fatalf("started a session on #6: %+v", f.spawned)
 	}
-	if m.sel != "task:/code/app#6" || !m.cockpit.open || m.inIssues() || targetTask(m.target()) != "/code/app#6" {
+	if m.sel != "s1" || !m.cockpit.open || m.inIssues() || targetTask(m.target()) != "/code/app#6" {
 		t.Fatalf("sel %s open %v issues %v target %+v", m.sel, m.cockpit.open, m.inIssues(), m.target())
 	}
 }
@@ -509,7 +510,7 @@ func TestTheCockpitHeaderMarksStatesAsTheListDoes(t *testing.T) {
 
 // The cockpit's header offers enter exactly when the footer does, with
 // the same label, on every kind of entry: a session in a pane, one with
-// no pane, a background one, a workstream whose only session has no
+// no pane, a background one, an issue whose only session has no
 // pane, and a project, and while the issues card has the keys.
 func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	s1, s3 := row("s1", "red", "", 11), row("s3", "green", "", 0)
@@ -520,8 +521,9 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	m := stagedModel(t, newFakeMux(), s1, s3, bg)
 	m.trackers = trackers{"/code/app": tracked("app",
 		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
-		issues.Issue{ID: 7, Ref: "app#7", Title: "no pane", Status: issues.InProgress, Priority: "p1"},
+		issues.Issue{ID: 7, Ref: "app#7", Title: "no pane", Status: issues.Review, Priority: "p1"},
 		issues.Issue{ID: 8, Ref: "app#8", Title: "not started", Status: issues.Ready, Priority: "p2"},
+		issues.Issue{ID: 9, Ref: "app#9", Title: "nobody's", Status: issues.Blocked, Priority: "p2"},
 	)}
 	m = m.setInputs(func(in *world.Inputs) { in.Pinned = []string{"/code/empty"} })
 	m = resized(t, m, 120, 40)
@@ -546,15 +548,15 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 		if !slices.Equal(head, foot) {
 			t.Errorf("on %s the header offers enter %v and the footer %v:\n%s", e.key(), head, foot, header)
 		}
-		if e.kind == workstreamEntry {
-			// The holder's note under a workstream says the same.
-			lines := ansi.Strip(strings.Join(m.workstreamLines(e, 200), " "))
+		if e.kind == issueEntry {
+			// The holder's note on an issue says the same.
+			lines := ansi.Strip(strings.Join(m.issueLines(e, 200), " "))
 			if strings.Contains(lines, "enter") != (len(foot) > 0) {
 				t.Errorf("on %s the holder says %q, the footer offers enter %v", e.key(), strings.TrimSpace(lines), foot)
 			}
 		}
 		kinds[e.kind] = true
-		says = says || (e.kind == workstreamEntry && len(foot) == 0)
+		says = says || (e.kind == issueEntry && len(foot) == 0)
 		// With the issues card's keys, enter and m act on its issue: the
 		// footer says so, and the header offers neither of its own.
 		if k := update(m, keyMsg("tab")); k.inIssues() {
@@ -570,8 +572,8 @@ func TestTheCockpitHeaderAndFooterAgreeOnEnter(t *testing.T) {
 	if keyed == 0 {
 		t.Fatal("the issues card never took the keys")
 	}
-	if !kinds[sessionEntry] || !kinds[workstreamEntry] || !kinds[projectEntry] || !says {
-		t.Fatalf("the cases did not cover the kinds: %v, a workstream with a silent enter %v", kinds, says)
+	if !kinds[sessionEntry] || !kinds[issueEntry] || !kinds[projectEntry] || !says {
+		t.Fatalf("the cases did not cover the kinds: %v, an issue with a silent enter %v", kinds, says)
 	}
 }
 

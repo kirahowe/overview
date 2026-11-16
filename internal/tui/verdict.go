@@ -89,8 +89,8 @@ func (m model) verdictKeys(msg tea.KeyMsg) []action {
 }
 
 // markIssue opens the box for the issue under the issues card's cursor,
-// while the keyboard is in that card, or else for the selected
-// workstream's.
+// while the keyboard is in that card, or else for the selected entry's
+// focus.
 func (m model) markIssue(e entry, ok bool) model {
 	if m.issues == nil {
 		return m.say("overview was started without the issues tool")
@@ -102,10 +102,11 @@ func (m model) markIssue(e entry, ok bool) model {
 			return m.say("no issue to mark")
 		}
 		m.verdict = verdictPrompt{root: t.root, ref: m.issueRef(t.root, i), issue: i}
-	case ok && e.stream != nil:
-		m.verdict = verdictPrompt{root: e.stream.Root, ref: e.stream.Ref(), issue: e.stream.Issue}
+	case ok && e.focus() != nil:
+		t := e.focus()
+		m.verdict = verdictPrompt{root: t.Root, ref: t.Ref(), issue: t.Issue}
 	default:
-		return m.say("m marks a task's issue: select a task, or an issue in the cockpit")
+		return m.say("m marks an issue: select one, a session on one task, or an issue in the cockpit")
 	}
 	return m
 }

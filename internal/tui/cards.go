@@ -347,7 +347,7 @@ func chips(hs ...hint) string {
 	return strings.Join(parts, "  ")
 }
 
-// member is a session or terminal of a workstream or project, as its
+// member is a session or terminal of a task or project, as its
 // header lists it: a session's state word and age, styled, or a
 // terminal's title.
 type member struct {
@@ -383,9 +383,9 @@ func membersLine(ms []member) string {
 	return strings.Join(parts, "   ")
 }
 
-// streamHeader is the first card of a workstream's cockpit. enter is
+// streamHeader is the first card of a task's cockpit. enter is
 // enter's chip as the footer has it, from enterOn, none when enter only
-// says something. mark says whether m acts on the workstream's issue,
+// says something. mark says whether m acts on the task's issue,
 // which it does unless the issues card has the keyboard.
 func streamHeader(ref, status, priority, title, started string, ms []member, enter []hint, mark bool) card {
 	right := []string{}
@@ -558,7 +558,7 @@ func fileStats(files []diff.File) []fileStat {
 type changeInfo struct {
 	loading     bool
 	noRepo      bool
-	noStart     bool // a workstream no session has started on
+	noStart     bool // a task no session has started on
 	err         error
 	files       []fileStat
 	uncommitted int
@@ -650,7 +650,7 @@ func fileLines(files []fileStat, uncommitted, w int) []string {
 	return out
 }
 
-// reviewCard sums up the reviews of a workstream's sessions.
+// reviewCard sums up the reviews of a task's sessions.
 func reviewCard(s review.Summary) card {
 	return card{title: "Review", body: func(w int) []string {
 		if s.Open == 0 && s.Waiting == 0 {
@@ -776,8 +776,8 @@ func tasksCard(root string, tool bool) card {
 	return card{title: "Tasks", body: func(w int) []string {
 		out := wrap(fg(pal.Text).Render("This project doesn't track its tasks."), w)
 		out = append(out, "")
-		out = append(out, wrap(dim.Render("With issues, each task becomes a workstream: its sessions and terminals group under it in the list, "+
-			"and its cockpit shows the task's acceptance criteria and what has changed for it."), w)...)
+		out = append(out, wrap(dim.Render("With issues, each session shows the tasks it holds, the issues that wait on you are listed once each, "+
+			"and a task's cockpit shows its acceptance criteria and what has changed for it."), w)...)
 		out = append(out, "")
 		if !tool {
 			return append(out, wrap(fg(pal.Text).Render("Install the issues tool to track tasks here."), w)...)

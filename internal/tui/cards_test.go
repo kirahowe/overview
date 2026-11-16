@@ -249,7 +249,7 @@ func TestIssueCardListsPendingCriteriaFirst(t *testing.T) {
 func TestTasksCard(t *testing.T) {
 	got := drawn(tasksCard("~/code/site", true), 60)
 	text := strings.Join(got, "\n")
-	for _, want := range []string{"This project doesn't track its tasks.", "each task becomes a workstream", "Start with issues init in ~/code/site."} {
+	for _, want := range []string{"This project doesn't track its tasks.", "each session shows the tasks it holds", "Start with issues init in ~/code/site."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("lacks %q:\n%s", want, text)
 		}
@@ -398,8 +398,8 @@ func TestTheCockpitReadsTheIssueAndTheChanges(t *testing.T) {
 	}
 }
 
-// A workstream's changes count from when it was first taken on, the
-// earliest link among its sessions, and that base holds: a session ending
+// A task's changes count from when it was first taken on, the earliest
+// link among its sessions, and that base holds: a session ending
 // does not move it later, time passing reads nothing again, and only a
 // session that took it on sooner moves it earlier.
 func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
@@ -432,7 +432,8 @@ func TestTheChangesBaseKeepsToTheEarliestLink(t *testing.T) {
 		m = settle(t, m, cmd)
 	}
 	set(s1, s2)
-	m = selectKey(t, m, "task:/code/app#6")
+	// s2 holds #6 too, and keeps the cursor when s1 ends.
+	m = selectKey(t, m, "s2")
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o")
 	key := taskPrefix + "/code/app#6"

@@ -18,7 +18,7 @@ import (
 
 // The cockpit is the view's own pane zoomed to fill its window: the list
 // down the left, as it always is, and cards about the selected entry's
-// workstream or project beside it. tmux keeps every other pane of the
+// task or project beside it. tmux keeps every other pane of the
 // window as it was under the zoom, so the session there comes back as it
 // was when the cockpit closes. While it is open the list stays in its
 // window, and the cards follow the cursor.
@@ -154,35 +154,39 @@ func closesCockpit(v verb) bool {
 	return false
 }
 
-// idleStream says whether e is a workstream that no session works on.
-// The holder shows its cockpit's cards, and enter opens the cockpit.
-func idleStream(es []entry, e entry) bool {
-	return e.kind == workstreamEntry && !slices.ContainsFunc(children(es, e.task()), func(c entry) bool { return c.kind == sessionEntry })
+// idleIssue says whether e is an issue with no session the list shows
+// linked to it. The holder shows its cockpit's cards, and enter opens the
+// cockpit.
+func idleIssue(es []entry, e entry) bool {
+	if e.kind != issueEntry {
+		return false
+	}
+	c, ok := lead(es, e.task)
+	return !ok || c.kind != sessionEntry
 }
 
-// idleSelected says whether the cursor is on an idle workstream.
+// idleSelected says whether the cursor is on an idle issue.
 func (m model) idleSelected() bool {
 	es := m.ordered()
 	e, _, ok := m.selected(es)
-	return ok && idleStream(es, e)
+	return ok && idleIssue(es, e)
 }
 
-// target is what the cockpit shows: a workstream, when stream is set, or
-// else the project at root, which is nil when the World has none there.
-// root is where its reads run: the workstream's tracker's root, or the
-// project's.
+// target is what the cockpit shows: a task, when task is set, or else the
+// project at root, which is nil when the World has none there. root is
+// where its reads run: the task's tracker's root, or the project's.
 type target struct {
 	root    string
-	stream  *world.Stream
+	task    *world.Task
 	project *world.Project
 }
 
-// cockpitTarget is the cockpit's target for the selected entry in w: the
-// workstream it is or sits under, or else the project it belongs to, as
-// rootOf finds it. ok says whether anything is selected.
+// cockpitTarget is the cockpit's target for the selected entry in w: its
+// focus, or else the project it belongs to, as rootOf finds it. ok says
+// whether anything is selected.
 func cockpitTarget(w *world.World, e entry, ok bool, rootOf func(entry, bool) string) target {
-	if ok && e.stream != nil {
-		return target{root: e.stream.Root, stream: e.stream, project: e.stream.Project}
+	if t := e.focus(); ok && t != nil {
+		return target{root: t.Root, task: t, project: t.Project}
 	}
 	root := rootOf(e, ok)
 	return target{root: root, project: w.ProjectOf(root)}
@@ -194,37 +198,37 @@ func (m model) target() target {
 	return cockpitTarget(m.world(), e, ok, m.rootOf)
 }
 
-// sessions are the target's sessions: those linked to its workstream, or
-// every one in its project.
+// sessions are the target's sessions: those linked to its task, or every
+// one in its project.
 func (t target) sessions() []*world.Session {
 	switch {
-	case t.stream != nil:
-		return t.stream.Sessions
+	case t.task != nil:
+		return t.task.Sessions
 	case t.project != nil:
 		return t.project.Members
 	}
 	return nil
 }
 
-// terminals are the target's terminals: those opened for its workstream,
-// or every one in its project.
+// terminals are the target's terminals: those opened for its task, or
+// every one in its project.
 func (t target) terminals() []*world.Terminal {
 	switch {
-	case t.stream != nil:
-		return t.stream.Terminals
+	case t.task != nil:
+		return t.task.Terminals
 	case t.project != nil:
-		return t.project.AllTerminals
+		return t.project.Terminals
 	}
 	return nil
 }
 
-// start is when a workstream's work began, in Unix milliseconds, 0 when
-// nothing says or for a project, whose changes are its working copy's.
+// start is when a task's work began, in Unix milliseconds, 0 when nothing
+// says or for a project, whose changes are its working copy's.
 func (t target) start() int64 {
-	if t.stream == nil || t.stream.Started.IsZero() {
+	if t.task == nil || t.task.Started.IsZero() {
 		return 0
 	}
-	return t.stream.Started.UnixMilli()
+	return t.task.Started.UnixMilli()
 }
 
 // cockpitListWidth is the list's width in the cockpit, 0 when the window
@@ -314,7 +318,7 @@ type issueRead struct {
 }
 
 // changesRead is a target's changes as last read. sig is what its sessions
-// were doing when they were asked for, and base the commit a workstream's
+// were doing when they were asked for, and base the commit a task's
 // changes are read from, found once for its start. fresh says they were
 // asked for since the cockpit opened.
 type changesRead struct {
@@ -341,8 +345,8 @@ type (
 
 // cockpitKey names a target in the caches.
 func cockpitKey(t target) string {
-	if t.stream != nil {
-		return taskPrefix + t.stream.Key.String()
+	if t.task != nil {
+		return taskPrefix + t.task.Key.String()
 	}
 	return "project:" + t.root
 }
@@ -373,7 +377,7 @@ func withRead[V any](mp map[string]V, k string, v V) map[string]V {
 // or the holder shows its cards: its issue's
 // details when they are missing or older than its .issues, and its
 // changes when they are missing, not yet read since the cockpit opened,
-// or from before its sessions last changed. A workstream's base is kept
+// or from before its sessions last changed. A task's base is kept
 // once found, and found again only when its start moves earlier, as when
 // a session that took it on sooner is listed: a session ending must not
 // move it later.
@@ -383,9 +387,9 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 	}
 	t := m.target()
 	var cmds []tea.Cmd
-	if t.stream != nil {
+	if t.task != nil {
 		var read tea.Cmd
-		m, read = m.readIssue(t.root, t.stream.ID)
+		m, read = m.readIssue(t.root, t.task.ID)
 		cmds = append(cmds, read)
 	}
 	key := cockpitKey(t)
@@ -394,7 +398,7 @@ func (m model) cockpitReads() (model, tea.Cmd) {
 	if c.pending || (ok && c.sig == sig && c.fresh) {
 		return m, tea.Batch(cmds...)
 	}
-	stream := t.stream != nil
+	stream := t.task != nil
 	if stream && start == 0 && c.base == "" {
 		c.sig, c.fresh, c.info = sig, true, changeInfo{noStart: true}
 		m.changeReads = withRead(m.changeReads, key, c)
@@ -438,7 +442,7 @@ func (m model) readIssue(root string, id int) (model, tea.Cmd) {
 }
 
 // changesCmd reads what changed at root: since start, from base when it is
-// known, for a workstream, and in the working copy for a project.
+// known, for a task, and in the working copy for a project.
 func changesCmd(key, sig, root string, start int64, base string, stream bool, d deps) tea.Cmd {
 	return func() tea.Msg {
 		msg := changesReadMsg{key: key, sig: sig, start: start, base: base}
@@ -499,7 +503,7 @@ func (m model) landRead(msg tea.Msg) model {
 
 // stale is the changes with every read made old, so opening the cockpit
 // reads its target's again while showing what it read last. A new
-// cockpit finds each workstream's base afresh.
+// cockpit finds each task's base afresh.
 func stale(mp map[string]changesRead) map[string]changesRead {
 	out := make(map[string]changesRead, len(mp))
 	for k, v := range mp {
@@ -526,15 +530,14 @@ func (m model) members(rows []*world.Session, terms []*world.Terminal) []member 
 }
 
 // others are the open issues of the target's tracker other than its own,
-// and how many sessions work on each, by number, as its workstream lists
-// them.
+// and how many sessions are linked to each, by number.
 func (m model) others(t target) ([]issues.Issue, map[int]int) {
 	var out []issues.Issue
 	linked := map[int]int{}
 	count := m.sessionsOn(t.root)
 	tr, _ := m.world().Tracker(t.root)
 	for _, i := range tr.Open {
-		if t.stream == nil || i.ID != t.stream.ID {
+		if t.task == nil || i.ID != t.task.ID {
 			out = append(out, i)
 			if n := count(i); n > 0 {
 				linked[i.ID] = n
@@ -577,7 +580,7 @@ func (m model) cockpitRows(t target) [][]card {
 	if !tracked {
 		issuesRow = []card{tasksCard(m.short(t.root), m.issues != nil)}
 	}
-	if t.stream == nil {
+	if t.task == nil {
 		kind := ch.kind
 		if info.noRepo {
 			kind = "no repository"
@@ -596,7 +599,7 @@ func (m model) cockpitRows(t target) [][]card {
 	if s := m.changeStart(t); s > 0 {
 		since = m.ago(time.UnixMilli(s))
 	}
-	ir, ok := m.issueReads[t.stream.Key.String()]
+	ir, ok := m.issueReads[t.task.Key.String()]
 	details := ir.info
 	if !ok {
 		details.loading = true
@@ -607,19 +610,19 @@ func (m model) cockpitRows(t target) [][]card {
 		sum.Open, sum.Waiting, sum.Unsent = sum.Open+s.Open, sum.Waiting+s.Waiting, sum.Unsent+s.Unsent
 	}
 	return [][]card{
-		{streamHeader(t.stream.Ref(), t.stream.Issue.Status, t.stream.Issue.Priority, t.stream.Issue.Title, since, ms, enter, !m.inIssues())},
-		{issueCard(t.stream.ID, details)},
+		{streamHeader(t.task.Ref(), t.task.Issue.Status, t.task.Issue.Priority, t.task.Issue.Title, since, ms, enter, !m.inIssues())},
+		{issueCard(t.task.ID, details)},
 		{changesCard("Changes", since, info), reviewCard(sum)},
 		issuesRow,
 	}
 }
 
 // startPicked acts on the issue under the issues card's cursor. An issue
-// that is a workstream already, in the list as one, gets the cursor, and
-// the cockpit follows it there, so enter never starts a second session on
-// work under way. A ready or inbox issue gets a workstream: claude at the
-// project's root with the opening prompt that names the issue, shown as
-// c shows a new session, once the cockpit has closed.
+// a session is linked to gets the cursor, on the issue's own row or its
+// lead's, and the cockpit follows it there, so enter never starts a second
+// session on work under way. Any other issue gets a session: claude at the
+// project's root with the opening prompt that names the issue, shown as c
+// shows a new session, once the cockpit has closed.
 func (m model) startPicked() (model, tea.Cmd) {
 	t, i, ok := m.picked()
 	if !ok {
@@ -631,12 +634,12 @@ func (m model) startPicked() (model, tea.Cmd) {
 		return m, tea.Batch(out, cmd)
 	}
 	es := m.ordered()
-	j := streamAt(es, taskKey(t.root, i.ID))
+	j := taskAt(m.world(), es, taskKey(t.root, i.ID))
 	if j < 0 && m.filter != "" {
 		// The filter hides it: show everything, so the cursor can go.
 		m.filter, m.filtering = "", false
 		es = m.ordered()
-		j = streamAt(es, taskKey(t.root, i.ID))
+		j = taskAt(m.world(), es, taskKey(t.root, i.ID))
 	}
 	if j >= 0 {
 		m = m.moveTo(es, j)
@@ -644,11 +647,6 @@ func (m model) startPicked() (model, tea.Cmd) {
 	m.cockpit.pick = 0
 	m.cockpit.issues = false
 	return m, nil
-}
-
-// streamAt is where the workstream key is in es, -1 when it is not.
-func streamAt(es []entry, key string) int {
-	return slices.IndexFunc(es, func(e entry) bool { return e.kind == workstreamEntry && e.task() == key })
 }
 
 // pickStarts says whether enter in the issues card starts a session: no

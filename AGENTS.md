@@ -29,8 +29,9 @@ See README.md for behaviour and docs/ for design notes.
   session under the keyboard; and `q` detaching only the terminal it was
   typed in; and a review, from `v` through a note sent into a fake
   session's prompt, the agent's reply and `x` resolving it; and a
-  workstream, from a project's issue in progress through `c` starting a
-  session with the prompt that names it and `t` listing a terminal under
+  task, from a project's stalled issue through `c` starting a session
+  with the prompt that names it, that session holding the issue and the
+  cursor following it there, and `t` opening a terminal labelled with
   it, and `s` zooming the list with an issue's details beside the
   picker; and `o` zooming the list into the cockpit and `esc` putting it
   back; and, in a tracked project's cockpit, `l` moving the keyboard into

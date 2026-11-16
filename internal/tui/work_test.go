@@ -199,7 +199,7 @@ func TestRefreshReadsTrackers(t *testing.T) {
 	if _, ok := m.trackers["/w/app"]; !ok || f.runs["/w/app"] != 1 || f.runs["/w/app-wt"] != 1 {
 		t.Fatalf("trackers %v runs %v", m.trackers, f.runs)
 	}
-	if got := streamKeys(m.world().Sessions["s1"].Streams); !slices.Equal(got, []string{"/w/app#6"}) {
+	if got := streamKeys(m.world().Sessions["s1"].Holds); !slices.Equal(got, []string{"/w/app#6"}) {
 		t.Fatalf("links %v, want the worktree's ref on the project", got)
 	}
 	m, cmd = step(m, m.rowsMsg([]fleet.Row{r}, nil, nil, nil))
@@ -305,13 +305,13 @@ func TestATrackerWithoutProjectEdnLinksByItsName(t *testing.T) {
 	got := readAll(nil, []string{"/w/tool"}, f.run, f.deps(), t0)
 	r := fleet.Row{Live: fleet.Live{SessionID: "s", Cwd: "/w/tool"}, Tasks: []fleet.TaskRef{{Project: "tool", ID: 3}}}
 	w := world.Derive(world.Inputs{Rows: []fleet.Row{r}, Trackers: got.inputs()})
-	if keys := streamKeys(w.Sessions["s"].Streams); !slices.Equal(keys, []string{"/w/tool#3"}) {
+	if keys := streamKeys(w.Sessions["s"].Holds); !slices.Equal(keys, []string{"/w/tool#3"}) {
 		t.Errorf("missing project.edn: %v", keys)
 	}
 }
 
 // streamKeys are the keys of ss.
-func streamKeys(ss []*world.Stream) []string {
+func streamKeys(ss []*world.Task) []string {
 	var out []string
 	for _, s := range ss {
 		out = append(out, s.Key.String())
@@ -319,23 +319,23 @@ func streamKeys(ss []*world.Stream) []string {
 	return out
 }
 
-// targetTask is the key of a cockpit target's workstream, "" for a
-// project.
+// targetTask is the key of a cockpit target's task, "" for a project.
 func targetTask(t target) string {
-	if t.stream == nil {
+	if t.task == nil {
 		return ""
 	}
-	return t.stream.Key.String()
+	return t.task.Key.String()
 }
 
 // taskModel runs in the fake tmux with two sessions in /code/app, which
-// tracks its issues: s1 works on #6, and #4 is in review with nobody on
-// it. s2 is linked to nothing.
-func taskModel(t *testing.T, f *fakeMux) model {
+// tracks its issues: s1 works on #6, and #4 is in review, waiting on you.
+// s2 is linked to what refs give, nothing by default.
+func taskModel(t *testing.T, f *fakeMux, refs ...fleet.TaskRef) model {
 	t.Helper()
 	s1, s2 := row("s1", "red", "", 11), row("s2", "blue", "", 12)
 	s1.Cwd, s2.Cwd = "/code/app", "/code/app"
 	s1.Tasks = []fleet.TaskRef{{Project: "app", Dir: "/code/app", ID: 6}}
+	s2.Tasks = refs
 	m := stagedModel(t, f, s1, s2)
 	ts := trackers{"/code/app": tracked("app",
 		issues.Issue{ID: 6, Ref: "app#6", Title: "keep width", Status: issues.InProgress, Priority: "p1"},
@@ -360,42 +360,49 @@ func selectKey(t *testing.T, m model, key string) model {
 
 func TestTaskModelLists(t *testing.T) {
 	m := taskModel(t, newFakeMux())
-	want := []string{"task:/code/app#4", "task:/code/app#6", "s1", "s2"}
+	want := []string{"s1", "s2", "task:/code/app#4"}
 	if got := ids(m.sections()); !slices.Equal(got, want) {
 		t.Fatalf("listed %v, want %v", got, want)
 	}
 	if need, _, _ := counts(m); need != 1 {
 		t.Fatalf("need %d, want the review", need)
 	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "red") || !strings.Contains(got, "#6") {
+		t.Fatalf("s1's row does not say it holds #6:\n%s", got)
+	}
 }
 
-func TestEnterOnAWorkstreamGoesToItsFirstSession(t *testing.T) {
+// enter on an issue that waits on you goes to the session linked to it,
+// so you can ask it about the work, and the cursor stays on the issue.
+func TestEnterOnAWaitingIssueGoesToItsSession(t *testing.T) {
 	f := newFakeMux()
-	m := taskModel(t, f)
-	m = selectKey(t, m, "task:/code/app#6")
+	m := taskModel(t, f, fleet.TaskRef{Project: "app", Dir: "/code/app", ID: 4})
+	m = selectKey(t, m, "task:/code/app#4")
 	m = settle(t, m, nil)
 	m, cmd := step(m, keyMsg("r")) // any update restages
 	m = settle(t, m, cmd)
-	s1 := paneWithTTY(f, "ttys011")
-	if !f.staged(s1) {
-		t.Fatalf("on #6 the list is in %s, want beside s1's %s", f.stage(), s1)
+	s2 := paneWithTTY(f, "ttys012")
+	if !f.staged(s2) {
+		t.Fatalf("on #4 the list is in %s, want beside s2's %s", f.stage(), s2)
 	}
 	m = pressSettled(t, m, "enter")
-	if !slices.Equal(f.selects, []string{s1}) {
-		t.Fatalf("selects %v, want [%s]", f.selects, s1)
+	if !slices.Equal(f.selects, []string{s2}) {
+		t.Fatalf("selects %v, want [%s]", f.selects, s2)
 	}
-	if m.sel != "task:/code/app#6" {
+	if m.sel != "task:/code/app#4" {
 		t.Fatalf("enter moved the cursor to %s", m.sel)
 	}
 }
 
-// A workstream no session works on shows its cockpit's cards beside the
+// An issue no session is linked to shows its cockpit's cards beside the
 // list, and enter opens the cockpit with the keyboard still in the list.
 // enter again leaves it open, as there is nothing to attach to.
-func TestAWorkstreamWithNoSessionsShowsItsCockpit(t *testing.T) {
+func TestAnIssueWithNoSessionsShowsItsCockpit(t *testing.T) {
 	f := newFakeMux()
 	m := taskModel(t, f)
-	m = pressSettled(t, m, "g") // #4, first
+	m = selectKey(t, m, "task:/code/app#4")
+	m, cmd := step(m, keyMsg("r")) // any update restages
+	m = settle(t, m, cmd)
 	if m.sel != "task:/code/app#4" || !f.staged("%1") {
 		t.Fatalf("sel %s, list in %s", m.sel, f.stage())
 	}
@@ -413,16 +420,15 @@ func TestAWorkstreamWithNoSessionsShowsItsCockpit(t *testing.T) {
 		t.Fatalf("open %v zooms %v list has keys %v selects %v", m.cockpit.open, f.zooms, m.listHasKeys(), f.selects)
 	}
 	m = pressSettled(t, m, "enter")
-	if !m.cockpit.open || len(f.zooms) != 1 || m.note != "No session works on #4. c starts one, t a terminal." {
+	if !m.cockpit.open || len(f.zooms) != 1 || m.note != "No session is linked to #4. c starts one, t a terminal." {
 		t.Fatalf("after enter again: open %v zooms %v note %q", m.cockpit.open, f.zooms, m.note)
-	}
-	if !strings.Contains(ansi.Strip(m.View()), "no sessions") {
-		t.Fatal("no 'no sessions' line under #4")
 	}
 }
 
+// c on a session that holds one task, from either of its entries, starts
+// another session on that task; on an issue, one on the issue.
 func TestCStartsASessionOnTheTask(t *testing.T) {
-	for _, key := range []string{"task:/code/app#6", "s1"} {
+	for _, key := range []string{"s1", "agents/s1"} {
 		f := newFakeMux()
 		m := taskModel(t, f)
 		m = selectKey(t, m, key)
@@ -438,9 +444,14 @@ func TestCStartsASessionOnTheTask(t *testing.T) {
 			t.Fatalf("%s: the window has project %q task %q", key, p.Project, p.Task)
 		}
 	}
-	// Elsewhere, c is a plain claude: on s2, on s1's agents entry, which
-	// sits under no workstream, and on the project's heading.
-	for _, key := range []string{"s2", "agents/s1", "project:/code/app"} {
+	f := newFakeMux()
+	pressSettled(t, selectKey(t, taskModel(t, f), "task:/code/app#4"), "c")
+	if len(f.spawned) != 1 || len(f.spawned[0].command) != 2 || f.spawned[0].command[1] != "Work on app#4: show cost" {
+		t.Fatalf("on #4: spawned %+v", f.spawned)
+	}
+	// Elsewhere, c is a plain claude: on s2, which holds no task, and on
+	// the project's heading.
+	for _, key := range []string{"s2", "project:/code/app"} {
 		f := newFakeMux()
 		m := selectKey(t, taskModel(t, f), key)
 		m = pressSettled(t, m, "c")
@@ -450,8 +461,8 @@ func TestCStartsASessionOnTheTask(t *testing.T) {
 	}
 }
 
-// With every session on a task, the project's heading is where c starts
-// a session on none: a plain claude at the project's root. The heading
+// With every session linked to an issue, the project's heading is where c
+// starts a session on none: a plain claude at the project's root. The heading
 // shows the project's cockpit beside the list, enter says what starts
 // there, and x has nothing to unpin.
 func TestCOnAProjectsHeadingStartsASessionOnNoTask(t *testing.T) {
@@ -471,7 +482,7 @@ func TestCOnAProjectsHeadingStartsASessionOnNoTask(t *testing.T) {
 	if m.sel == "project:/code/app" {
 		t.Fatal("the cursor starts on the heading, not the first row")
 	}
-	if m = pressSettled(t, m, "j", "g"); m.sel != "task:/code/app#4" {
+	if m = pressSettled(t, m, "j", "g"); m.sel != "s1" {
 		t.Fatalf("g goes to %s, want the first row under the heading", m.sel)
 	}
 	m = pressSettled(t, m, "g", "k")
@@ -501,27 +512,32 @@ func TestTOpensATerminalForTheTask(t *testing.T) {
 	if shell.Project != "/code/app" || shell.Task != "/code/app#6" || m.sel != shell.Window {
 		t.Fatalf("terminal %+v, sel %s", shell, m.sel)
 	}
-	want := []string{"task:/code/app#4", "task:/code/app#6", "s1", shell.Window, "s2"}
+	want := []string{"s1", "s2", shell.Window, "task:/code/app#4"}
 	if got := ids(m.sections()); !slices.Equal(got, want) {
 		t.Fatalf("listed %v, want %v", got, want)
 	}
-	// Once #6 is done, the terminal is the project's, as its session is.
+	if tm := m.world().Terminals[0]; tm.Task == nil || tm.Task.Key.String() != "/code/app#6" {
+		t.Fatalf("the terminal's task %+v", tm.Task)
+	}
+	// Once #6 is done, the terminal has no task, and stays where it was.
 	m.trackers = trackers{"/code/app": tracked("app",
 		issues.Issue{ID: 4, Ref: "app#4", Title: "show cost", Status: issues.Review, Priority: "p2"})}
 	m = m.setInputs(nil)
-	want = []string{"task:/code/app#4", "s1", "s2", shell.Window}
 	if got := ids(m.sections()); !slices.Equal(got, want) {
 		t.Fatalf("after #6 closed: listed %v, want %v", got, want)
 	}
+	if tm := m.world().Terminals[0]; tm.Task != nil {
+		t.Fatalf("the terminal keeps %s", tm.Task.Key)
+	}
 }
 
-func TestKeysForASessionSayWhereToGoOnAWorkstream(t *testing.T) {
-	m := selectKey(t, taskModel(t, newFakeMux()), "task:/code/app#6")
+func TestKeysForASessionSayAnIssueIsNone(t *testing.T) {
+	m := selectKey(t, taskModel(t, newFakeMux()), "task:/code/app#4")
 	m, cmd := step(m, noteMsg("")) // the rules show the new cursor
 	m = settle(t, m, cmd)
 	for _, k := range []string{"x", "v", "y"} {
 		m2, cmd := press(m, k)
-		if cmd != nil || m2.confirm != "" || !strings.Contains(m2.note, "move to one under #6") {
+		if cmd != nil || m2.confirm != "" || !strings.Contains(m2.note, "#4 is an issue") {
 			t.Errorf("%s: cmd %v confirm %q note %q", k, cmd != nil, m2.confirm, m2.note)
 		}
 	}
@@ -565,16 +581,24 @@ func TestLeadIsTheFirstWithAPaneElseTheFirstSession(t *testing.T) {
 		{"nothing has a pane", []entry{bg, s}, "b"},
 		{"nothing at all", nil, ""},
 	} {
-		got, ok := lead(c.cs)
+		task := &world.Task{}
+		for _, e := range c.cs {
+			if e.kind == sessionEntry {
+				task.Sessions = append(task.Sessions, e.sess)
+			} else {
+				task.Terminals = append(task.Terminals, e.term)
+			}
+		}
+		got, ok := lead(c.cs, task)
 		if (c.want == "") == ok || ok && got.key() != c.want {
 			t.Errorf("%s: %s %v, want %q", c.name, got.key(), ok, c.want)
 		}
 	}
 }
 
-// enter on a workstream goes where the stage shows: to the first session
+// enter on an issue goes where the stage shows: to the first session
 // under it with a pane, not to a background one listed above it.
-func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
+func TestEnterOnAnIssueGoesWhereTheStageIs(t *testing.T) {
 	f := newFakeMux()
 	s1, bg := row("s1", "red", "", 11), row("b1", "bgwork", "", 0)
 	bg.Kind, bg.ID, bg.State = "background", "abc123", fleet.Working
@@ -582,13 +606,13 @@ func TestEnterOnAWorkstreamGoesWhereTheStageIs(t *testing.T) {
 	s1.Tasks = []fleet.TaskRef{{Project: "app", ID: 6}}
 	bg.Tasks = s1.Tasks
 	m := stagedModel(t, f, s1, bg)
-	ts := trackers{"/code/app": tracked("app", issues.Issue{ID: 6, Ref: "app#6", Title: "w", Status: issues.InProgress})}
+	ts := trackers{"/code/app": tracked("app", issues.Issue{ID: 6, Ref: "app#6", Title: "w", Status: issues.Review})}
 	m.trackers = ts
 	m = m.setInputs(nil)
 	m, cmd := step(m, rowsMsg{rows: m.in.Rows, ttys: m.in.TTYs})
 	m = settle(t, m, cmd)
-	if got := ids(m.sections())[:3]; !slices.Equal(got, []string{"task:/code/app#6", "b1", "s1"}) {
-		t.Fatalf("listed %v, want the background session first", got)
+	if got := m.world().Tasks[world.Key{Root: "/code/app", ID: 6}].Sessions; len(got) != 2 || got[0].SessionID != "b1" {
+		t.Fatalf("#6's sessions %v, want the background session first", got)
 	}
 	m = selectKey(t, m, "task:/code/app#6")
 	m, cmd = step(m, keyMsg("r"))
@@ -626,50 +650,34 @@ func TestTheListNamesTheProject(t *testing.T) {
 	}
 }
 
-// The cursor on an alias stays with its session when the alias goes: to
-// the session's entry under the same workstream, else its primary one. On
-// a workstream whose issue closed it goes to the first session that was
-// under it.
-func TestTheCursorFollowsItsSessionWhenAnAliasGoes(t *testing.T) {
+// The cursor on an issue that waited on you follows it when a session
+// picks it up, to that session's row. An issue that leaves the list with
+// nobody on it leaves the cursor nearby, as any entry does.
+func TestTheCursorFollowsAnIssueToItsSession(t *testing.T) {
 	s1, s2 := row("s1", "red", "", 11), row("s2", "blue", "", 12)
 	s1.Cwd, s2.Cwd = "/code/app", "/code/app"
-	ref := func(ids ...int) []fleet.TaskRef {
-		var out []fleet.TaskRef
-		for _, id := range ids {
-			out = append(out, fleet.TaskRef{Project: "app", ID: id})
+	list := func(s1refs []int, open ...issues.Issue) []entry {
+		r1 := s1
+		for _, id := range s1refs {
+			r1.Tasks = append(r1.Tasks, fleet.TaskRef{Project: "app", ID: id})
 		}
-		return out
-	}
-	list := func(s1refs []int, open ...int) []entry {
-		r1, r2 := s1, s2
-		r1.Tasks, r2.Tasks = ref(s1refs...), ref(6)
 		m := newTestModel(t)
-		var is []issues.Issue
-		for _, id := range open {
-			is = append(is, issue(id, issues.InProgress, "t"))
-		}
-		m.trackers = trackers{"/code/app": tracked("app", is...)}
+		m.trackers = trackers{"/code/app": tracked("app", open...)}
 		m = m.setInputs(nil)
-		m = update(m, rowsMsg{rows: []fleet.Row{r1, r2}})
+		m = update(m, rowsMsg{rows: []fleet.Row{r1, s2}})
 		return m.ordered()
 	}
-	for _, c := range []struct {
-		name        string
-		before, now []entry
-		sel, want   string
-	}{
-		// s1 is under #6 and #7, primary on #7; #6 closes. The next entry
-		// in the old order was s2.
-		{"its primary issue stays", list([]int{6, 7}, 6, 7), list([]int{6, 7}, 7), "task:/code/app#6/s1", "s1"},
-		// #7 closes, and s1's place under #6 becomes its primary entry.
-		{"the same workstream", list([]int{6, 7}, 6, 7), list([]int{6, 7}, 6), "task:/code/app#6/s1", "s1"},
-		// s1 re-links: now primary on #6, alias on #7.
-		{"relinked", list([]int{6, 7}, 6, 7), list([]int{7, 6}, 6, 7), "task:/code/app#6/s1", "s1"},
-		{"the workstream closed", list([]int{7}, 6, 7), list([]int{7}, 6), "task:/code/app#7", "s1"},
-	} {
-		if got, ok := nearKey(c.before, c.now, c.sel); !ok || got != c.want {
-			t.Errorf("%s: %s %v, want %s", c.name, got, ok, c.want)
-		}
+	stalled, ready := issue(7, issues.InProgress, "t"), issue(7, issues.Ready, "t")
+	before := list(nil, stalled)
+	if got := keys(before); !slices.Equal(got, []string{"project:/code/app", "s2", "s1", "task:/code/app#7", "agents/s2", "agents/s1"}) &&
+		!slices.Equal(got, []string{"project:/code/app", "s1", "s2", "task:/code/app#7", "agents/s1", "agents/s2"}) {
+		t.Fatalf("before: %v", got)
+	}
+	if got, ok := nearKey(before, list([]int{7}, stalled), "task:/code/app#7"); !ok || got != "s1" {
+		t.Errorf("picked up: %s %v, want s1", got, ok)
+	}
+	if got, ok := samePlace(before, list(nil, ready), "task:/code/app#7"); ok {
+		t.Errorf("put back to ready: samePlace gave %s", got)
 	}
 }
 
@@ -686,8 +694,8 @@ func TestARuleSaysTheIssuesFailed(t *testing.T) {
 	if !strings.Contains(text, "issues failed") || strings.Contains(text, "2 tasks") {
 		t.Fatalf("rule:\n%s", text)
 	}
-	if secs := m.sections(); !secs[0].Failed || len(flatten(secs[:1])) != 5 {
-		t.Fatalf("sections %+v: want the failed project with its workstreams", secs)
+	if secs := m.sections(); !secs[0].Failed || len(flatten(secs[:1])) != 4 {
+		t.Fatalf("sections %+v: want the failed project with what is in it", secs)
 	}
 }
 
@@ -755,13 +763,13 @@ func TestTheEnterHintSaysWhatEnterDoes(t *testing.T) {
 			t.Errorf("no entry where enter does %q", k)
 		}
 	}
-	// The search for zebra puts the cursor on #6, and enter attaches.
+	// The search for zebra puts the cursor on it, and enter attaches.
 	at := pressSettled(t, m, append([]string{"/"}, typed("zebra")...)...)
-	if e, _, _ := at.selected(at.ordered()); e.key() != "task:/code/app#6" {
+	if e, _, _ := at.selected(at.ordered()); e.kind != sessionEntry || e.sess.Name != "zebra" {
 		t.Fatalf("searching zebra, the cursor is on %s", e.key())
 	}
 	if after, _ := at.apply(action{do: open}); !strings.HasPrefix(after.note, "attaching to zebra") {
-		t.Fatalf("enter on #6 searching zebra: note %q, entering %q", after.note, after.entering)
+		t.Fatalf("enter searching zebra: note %q, entering %q", after.note, after.entering)
 	}
 }
 
@@ -770,8 +778,8 @@ func TestTheEnterHintSaysWhatEnterDoes(t *testing.T) {
 // the note enter left.
 func TestTheNextKeyClearsANote(t *testing.T) {
 	f := newFakeMux()
-	m := pressSettled(t, taskModel(t, f), "g", "enter", "enter")
-	if !m.cockpit.open || !strings.HasPrefix(m.note, "No session works on #4") {
+	m := pressSettled(t, selectKey(t, taskModel(t, f), "task:/code/app#4"), "enter", "enter")
+	if !m.cockpit.open || !strings.HasPrefix(m.note, "No session is linked to #4") {
 		t.Fatalf("open %v, note %q", m.cockpit.open, m.note)
 	}
 	m = pressSettled(t, m, "l")

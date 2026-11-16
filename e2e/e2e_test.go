@@ -750,15 +750,16 @@ func TestQDetachesOnlyItsTerminal(t *testing.T) {
 	}
 }
 
-// Workstreams, end to end: a project with .issues lists its issue in
-// progress before its session, with no session under it. c on it starts
-// claude with the opening prompt that names the issue. Once that prompt
-// is in the session's transcript, the session is listed under the
-// workstream. t opens a terminal that is listed under it, and an issues
-// start in the other session's transcript moves it there too. Last, s on a tracked project
-// pinned with nothing running opens the task picker, and enter on the
-// issue typed for starts claude on it.
-func TestWorkstreams(t *testing.T) {
+// Tasks, end to end: a project with .issues lists its issue in progress
+// that no session is linked to as stalled, after its session. c on it
+// starts claude with the opening prompt that names the issue. Once that
+// prompt is in the session's transcript, the session holds the issue: its
+// row says #6, the issue's own row goes, and the cursor follows it to the
+// session. t there opens a terminal for the task, and an issues start in
+// the other session's transcript gives that session the task too. Last, s
+// on a tracked project pinned with nothing running opens the task picker,
+// and enter on the issue typed for starts claude on it.
+func TestTasks(t *testing.T) {
 	r := launchWith(t, "w", func(r *rig) string {
 		for _, d := range []string{".jj", ".issues"} {
 			if err := os.MkdirAll(filepath.Join(r.work, d), 0o755); err != nil {
@@ -799,21 +800,34 @@ func TestWorkstreams(t *testing.T) {
 		return p.command != "sleep" && p.command != "overview" && !p.ours() && p.id != r.holder
 	}
 
+	// line is the line of the list's screen s that holds text, "" for none.
+	line := func(s, text string) string {
+		for _, l := range strings.Split(s, "\n") {
+			if strings.Contains(l, text) {
+				return l
+			}
+		}
+		return ""
+	}
+
 	before := r.ov.panes()
 	r.press("c")
 	session := r.fresh(t, "a session window", before, isSleep)
 	r.lists(t, r.work, session)
 	r.ov.must("select-pane", "-t", r.list.id)
-	waitFor(t, "the workstream above the session", func() (bool, string) {
+	waitFor(t, "the stalled issue after the session", func() (bool, string) {
 		s := r.screen()
-		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "no sessions"), strings.Index(s, "e2e-0")
-		// The heading's count gives way to the long temporary name in
-		// the narrow list, so the workstream's row is what shows it.
-		return i >= 0 && j > i && k > j, s
+		i, k := strings.Index(s, "#6 keep width"), strings.Index(s, "e2e-0")
+		return k >= 0 && i > k && strings.Contains(line(s, "#6 keep width"), "stalled"), s
 	})
 
-	r.press("g")
-	waitFor(t, "the holder for the workstream", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
+	// n stops at the issue, since it waits on you.
+	r.press("n")
+	waitFor(t, "the cursor on #6", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(selectedLine(s), "#6 keep width"), s
+	})
+	waitFor(t, "the holder for the issue", func() (bool, string) { return beside(r.ov.panes(), r.holder, 0) })
 	before = r.ov.panes()
 	r.press("c")
 	started := r.fresh(t, "a session on the task", before, isSleep)
@@ -822,27 +836,33 @@ func TestWorkstreams(t *testing.T) {
 	}
 
 	// Nothing has been written to the new session's transcript yet, so it
-	// is listed unlinked.
+	// holds nothing and #6 still waits.
 	r.lists(t, r.work, session, started)
 	r.ov.must("select-pane", "-t", r.list.id)
 	waitFor(t, "the new session in the list", func() (bool, string) {
 		s := r.screen()
-		return strings.Contains(s, "e2e-1"), s
+		return strings.Contains(s, "e2e-1") && strings.Contains(s, "#6 keep width"), s
 	})
 
 	// The session's transcript opens with the prompt that names the issue,
-	// as Claude Code writes it, and the list moves the session under the
-	// workstream.
+	// as Claude Code writes it: the session holds #6, which leaves the
+	// rows that wait on you.
+	r.ov.must("select-pane", "-t", r.list.id)
+	r.press("n")
+	waitFor(t, "the cursor back on #6", func() (bool, string) {
+		s := r.screen()
+		return strings.Contains(selectedLine(s), "#6 keep width"), s
+	})
 	r.transcript(t, "s-1", map[string]any{"type": "user", "isSidechain": false, "timestamp": "2026-10-23T17:44:47.677Z",
 		"cwd": r.work, "message": map[string]any{"role": "user", "content": "Work on work#6: keep width"}})
-	waitFor(t, "the linked session under the workstream", func() (bool, string) {
+	waitFor(t, "the linked session holding #6", func() (bool, string) {
 		s := r.screen()
-		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "e2e-1"), strings.Index(s, "e2e-0")
-		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
+		return strings.Contains(line(s, "e2e-1"), "#6") && !strings.Contains(line(s, "e2e-0"), "#6") &&
+			!strings.Contains(s, "keep width"), s
 	})
 
-	// On the workstream, the list is beside its session now.
-	r.press("g")
+	// The cursor was on #6, and followed it to the session, beside which
+	// the list is now.
 	waitFor(t, "the list beside the linked session", func() (bool, string) { return beside(r.ov.panes(), started.id, 0) })
 	before = r.ov.panes()
 	r.press("t")
@@ -853,25 +873,21 @@ func TestWorkstreams(t *testing.T) {
 		got := r.ov.must("show-options", "-wqv", "-t", shell.id, "@overview-task")
 		return got == r.work+"#6", got
 	})
-	waitFor(t, "the terminal under the workstream", func() (bool, string) {
+	waitFor(t, "the terminal labelled with its task", func() (bool, string) {
 		s := r.screen()
-		i, j, k := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ "), strings.Index(s, "e2e-0")
-		return i >= 0 && j > i && k > j && !strings.Contains(s, "no sessions"), s
+		return strings.Contains(line(s, "$ "), "#6"), s
 	})
 
 	// An issues start that ran and succeeded in the other session's
-	// transcript links it too, and it goes under the workstream before the
-	// terminal.
+	// transcript gives it #6 too.
 	r.transcript(t, "s-0",
 		map[string]any{"type": "assistant", "timestamp": "2026-10-23T17:50:00.000Z", "cwd": r.work, "message": map[string]any{"content": []any{
 			map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": map[string]any{"command": "issues start 6"}}}}},
 		map[string]any{"type": "user", "timestamp": "2026-10-23T17:50:02.000Z", "message": map[string]any{"content": []any{
 			map[string]any{"tool_use_id": "toolu_1", "type": "tool_result", "content": "started", "is_error": false}}}})
-	waitFor(t, "both sessions under the workstream", func() (bool, string) {
+	waitFor(t, "both sessions holding #6", func() (bool, string) {
 		s := r.screen()
-		i, term := strings.Index(s, "#6 keep width"), strings.Index(s, "   $ ")
-		a, b := strings.Index(s, "e2e-0"), strings.Index(s, "e2e-1")
-		return i >= 0 && a > i && b > i && term > a && term > b, s
+		return strings.Contains(line(s, "e2e-0"), "#6") && strings.Contains(line(s, "e2e-1"), "#6"), s
 	})
 
 	// A tracked project pinned with nothing running offers s, and the

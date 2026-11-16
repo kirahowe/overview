@@ -51,7 +51,7 @@ func TestApprovingATaskInReview(t *testing.T) {
 // and drop, and c, like any other key, cancels.
 func TestMarkingATaskInProgress(t *testing.T) {
 	m, calls := verdictModel(t, newFakeMux(), nil)
-	m = pressSettled(t, selectKey(t, m, "task:/code/app#6"), "m")
+	m = pressSettled(t, selectKey(t, m, "s1"), "m")
 	text := ansi.Strip(m.View())
 	if !strings.Contains(text, "a done   r drop") || strings.Contains(text, "send back") {
 		t.Fatalf("the box:\n%s", text)
@@ -113,11 +113,12 @@ func TestAFailedVerdictSaysWhy(t *testing.T) {
 	}
 }
 
-// m on anything but a task, outside the issues card, says what it is for.
+// m on anything but an issue or a session on one task, outside the issues
+// card, says what it is for.
 func TestMarkOffATaskSaysWhatItIsFor(t *testing.T) {
 	m, _ := verdictModel(t, newFakeMux(), nil)
 	m = pressSettled(t, selectKey(t, m, "s2"), "m")
-	if m.verdict.open() || !strings.HasPrefix(m.note, "m marks a task's issue") {
+	if m.verdict.open() || !strings.HasPrefix(m.note, "m marks an issue") {
 		t.Fatalf("open %v, note %q", m.verdict.open(), m.note)
 	}
 }

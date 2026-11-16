@@ -163,7 +163,7 @@ func keepLast[T any](xs []T) []T {
 func (m model) sessionsOn(root string) func(issues.Issue) int {
 	w := m.world()
 	return func(i issues.Issue) int {
-		if st := w.Streams[world.Key{Root: root, ID: i.ID}]; st != nil {
+		if st := w.Tasks[world.Key{Root: root, ID: i.ID}]; st != nil {
 			return len(st.Sessions)
 		}
 		return 0

@@ -219,9 +219,9 @@ func TestSOnAnUntrackedProjectOnlySays(t *testing.T) {
 	}
 }
 
-// enter on an issue that sessions already work on goes to its workstream
-// and starts nothing.
-func TestTaskPickerGoesToALiveWorkstream(t *testing.T) {
+// enter on an issue that sessions already work on goes to the session
+// that holds it and starts nothing.
+func TestTaskPickerGoesToALiveTask(t *testing.T) {
 	f := newFakeMux()
 	m := withIssues(selectKey(t, taskModel(t, f), "s2"), issues.Issue{ID: 9, Ref: "app#9", Title: "add threads", Status: issues.Ready, Priority: "p2"})
 	m.issues = func(...string) ([]byte, error) { return nil, errors.New("not run") }
@@ -236,7 +236,7 @@ func TestTaskPickerGoesToALiveWorkstream(t *testing.T) {
 		t.Fatalf("footer %q", ansi.Strip(m.footer()))
 	}
 	m = pressSettled(t, m, "enter")
-	if len(f.spawned) != 0 || m.taskPick.open || m.sel != "task:/code/app#6" {
+	if len(f.spawned) != 0 || m.taskPick.open || m.sel != "s1" {
 		t.Fatalf("spawned %+v, open %v, sel %s", f.spawned, m.taskPick.open, m.sel)
 	}
 }

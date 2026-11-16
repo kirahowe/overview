@@ -15,9 +15,9 @@ import (
 // The task picker is s in the list: it takes the list pane, as the
 // add-project picker does, and offers the open issues of one project to
 // start work on. Its rows are a pure function of the project's tracker,
-// the sessions linked to its workstreams and the query, and enter acts
+// the sessions linked to its issues and the query, and enter acts
 // on the selected one through taskGoes. Starting a session is startOn's
-// Cmd, as for c on a workstream. Like the cockpit it zooms the list's
+// Cmd, as for c on an issue. Like the cockpit it zooms the list's
 // pane, and where the window has room the selected issue's details show
 // beside the rows, read with issues show as the cursor reaches it.
 
@@ -32,7 +32,7 @@ type taskPick struct {
 }
 
 // taskRow is one issue the picker offers, and how many sessions are
-// linked to its workstream.
+// linked to it.
 type taskRow struct {
 	issue    issues.Issue
 	sessions int
@@ -115,7 +115,7 @@ func taskOpens(name string, tracked, reading, tool bool) (open bool, note string
 	return true, ""
 }
 
-// taskGoes says whether enter on a row goes to its workstream rather than
+// taskGoes says whether enter on a row goes to the issue rather than
 // starting a session: it does when sessions already work on the issue,
 // so a second one is never started by accident.
 func taskGoes(r taskRow) bool { return r.sessions > 0 }
@@ -307,9 +307,9 @@ func listMarker(t string) string {
 	return m
 }
 
-// taskEnter acts on the selected row: it goes to the issue's workstream
-// when taskGoes says so, and otherwise starts a session on the issue, as
-// c does on a workstream. The picker closes either way.
+// taskEnter acts on the selected row: it goes to the issue, on its own
+// row or its lead's, when taskGoes says so, and otherwise starts a
+// session on the issue, as c does on an issue. The picker closes either way.
 func (m model) taskEnter() (model, tea.Cmd) {
 	l := m.taskList()
 	j := m.taskSel(l)
@@ -323,18 +323,18 @@ func (m model) taskEnter() (model, tea.Cmd) {
 	return m, tea.Batch(zoom, cmd)
 }
 
-// taskAct goes to r's workstream or starts a session on it, for
+// taskAct goes to r's issue or starts a session on it, for
 // taskEnter.
 func (m model) taskAct(root string, r taskRow) (model, tea.Cmd) {
 	if taskGoes(r) {
 		key := taskKey(root, r.issue.ID)
 		es := m.ordered()
-		k := streamAt(es, key)
+		k := taskAt(m.world(), es, key)
 		if k < 0 && m.filter != "" {
 			// The filter hides it: show everything, so the cursor can go.
 			m.filter, m.filtering = "", false
 			es = m.ordered()
-			k = streamAt(es, key)
+			k = taskAt(m.world(), es, key)
 		}
 		if k >= 0 {
 			return m.moveTo(es, k), nil

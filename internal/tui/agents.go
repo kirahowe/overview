@@ -100,7 +100,7 @@ func side(es []entry, i int, apart bool) (lo, hi int) {
 // across is where the cursor goes from the ith entry of es when the
 // keyboard arrives on one side of the list: among the agents when agents
 // is set, and else among the rest. From a session it goes to that
-// session's entry on the other side, and from a workstream to its lead's,
+// session's entry on the other side, and from an issue to its lead's,
 // so the pane the stage shows stays as it is. With no such entry it goes
 // to the first on that side. ok is false when the cursor is on that side
 // already, or the side has nothing.
@@ -109,8 +109,8 @@ func across(es []entry, i int, agents bool) (string, bool) {
 		return "", false
 	}
 	from := es[i]
-	if from.kind == workstreamEntry {
-		if c, ok := lead(children(es, from.task())); ok {
+	if from.kind == issueEntry {
+		if c, ok := lead(es, from.task); ok {
 			from = c
 		}
 	}
@@ -145,19 +145,18 @@ func across(es []entry, i int, agents bool) (string, bool) {
 }
 
 // echoes are the entries of es that show the same session as the ith
-// does, by their keys: a session's entries other than the ith itself,
-// among the agents and under each workstream it is linked to, and for a
-// workstream every entry of its lead, the session shown beside it. The
-// session's primary entry comes first and the rest in the list's order,
-// so the first of them on a side is the one across puts the cursor on. A
-// terminal and a project's heading are listed once, and have none.
+// does, by their keys: a session's entries other than the ith itself, in
+// its project and among the agents, and for an issue every entry of its
+// lead, the session shown beside it. The session's primary entry comes
+// first, so the first of them on a side is the one across puts the cursor
+// on. A terminal and a project's heading are listed once, and have none.
 func echoes(es []entry, i int) []string {
 	if i < 0 || i >= len(es) {
 		return nil
 	}
 	from := es[i]
-	if from.kind == workstreamEntry {
-		c, ok := lead(children(es, from.task()))
+	if from.kind == issueEntry {
+		c, ok := lead(es, from.task)
 		if !ok {
 			return nil
 		}

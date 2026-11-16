@@ -18,14 +18,14 @@ import (
 // their order.
 //
 // The orchestrator is left out everywhere. A session's project is its
-// cwd's root, and its links resolve as resolveTask has it. A workstream
-// is an open issue of a tracked project in the world that is in
-// progress, in review or blocked, or that a session is linked to. A
-// linked session sits under each of its workstreams and in no project's
-// list. An unlinked session sits in its project, or in Away when it runs
-// inside another app. A terminal sits under the workstream its window
-// was opened for when that is one of its own project's, and otherwise in
-// its project.
+// cwd's root, and its links resolve as resolve has it. A task is an open
+// issue of a tracked project in the world that is in progress, in review
+// or blocked, or that a session is linked to or a terminal was opened
+// for. A session sits in its project, or in Away when it runs inside
+// another app, wherever its tasks are, and has as tasks the issues in
+// progress it is linked to. A terminal sits in its project, with the task
+// its window was opened for when that is one of its own project's. An
+// issue that waits on you sits in its own project.
 func Derive(in Inputs) World {
 	root := func(dir string) string { return rootOf(in.Roots, dir) }
 	name := func(dir string) string { return nameOf(in.User, root(dir)) }
@@ -47,7 +47,7 @@ func Derive(in Inputs) World {
 	}
 	terms := terminals(in.Panes, in.Session, in.Self, in.Opening, claude, root)
 
-	// The roots of the projects that hold something before workstreams.
+	// The roots of the projects that hold something before tasks.
 	known := map[string]bool{}
 	for _, r := range rows {
 		known[root(r.Cwd)] = true
@@ -76,7 +76,7 @@ func Derive(in Inputs) World {
 			keys = slices.DeleteFunc(keys, func(o Key) bool { return o == k })
 			keys = append(keys, k)
 			// Two refs, such as a prompt's and a command's, can name the
-			// same workstream: the earlier link counts.
+			// same issue: the earlier link counts.
 			if t := ref.Linked; !t.IsZero() && (when[k].IsZero() || t.Before(when[k])) {
 				when[k] = t
 			}
@@ -100,21 +100,27 @@ func Derive(in Inputs) World {
 		tracked[r] = in.Trackers[r]
 	}
 
-	// The workstreams.
+	// The tasks.
 	linked := map[Key]bool{}
 	for _, keys := range links {
 		for _, k := range keys {
 			linked[k] = true
 		}
 	}
-	streams := map[Key]*Stream{}
+	// A terminal's task is one of its own project's, which is by name.
+	for _, t := range terms {
+		if k, ok := ParseKey(t.task); ok && nameOf(in.User, k.Root) == nameOf(in.User, t.Root) {
+			linked[k] = true
+		}
+	}
+	tasks := map[Key]*Task{}
 	for r, t := range tracked {
 		for _, i := range t.Open {
 			k := Key{r, i.ID}
-			if _, dup := streams[k]; dup || !issues.Open(i.Status) || !active(i.Status) && !linked[k] {
+			if _, dup := tasks[k]; dup || !issues.Open(i.Status) || !active(i.Status) && !linked[k] {
 				continue
 			}
-			streams[k] = &Stream{Key: k, Issue: i}
+			tasks[k] = &Task{Key: k, Issue: i}
 		}
 	}
 
@@ -130,7 +136,7 @@ func Derive(in Inputs) World {
 	for r := range known {
 		add(r)
 	}
-	for k := range streams {
+	for k := range tasks {
 		add(k.Root)
 	}
 	pinned := map[string][]string{} // root → the pinned directories with it
@@ -141,7 +147,7 @@ func Derive(in Inputs) World {
 	}
 	w := World{
 		Sessions:     map[string]*Session{},
-		Streams:      streams,
+		Tasks:        tasks,
 		Orchestrator: in.Orchestrator,
 		Loaded:       in.Loaded,
 		RefreshErr:   in.RefreshErr,
@@ -179,10 +185,9 @@ func Derive(in Inputs) World {
 		slices.SortStableFunc(p.Open, func(a, b issues.Issue) int { return a.ID - b.ID })
 		w.byName[n] = p
 	}
-	for _, s := range streams {
-		s.Project = w.byName[nameOf(in.User, s.Root)]
-		s.IssuesID = w.IssuesID(s.Root)
-		s.Project.Streams = append(s.Project.Streams, s)
+	for _, t := range tasks {
+		t.Project = w.byName[nameOf(in.User, t.Root)]
+		t.IssuesID = w.IssuesID(t.Root)
 	}
 
 	// The sessions, in the places they sit.
@@ -199,19 +204,24 @@ func Derive(in Inputs) World {
 			s.Host = &h
 		}
 		for _, k := range links[r.SessionID] {
-			st := streams[k]
-			s.Streams = append(s.Streams, st)
-			st.Sessions = append(st.Sessions, s)
+			t := tasks[k]
+			if t.Issue.Status == issues.InProgress {
+				s.Holds = append(s.Holds, t)
+			}
+			t.Sessions = append(t.Sessions, s)
 			at := linkedAt[r.SessionID][k]
 			if at.IsZero() && r.StartedAt > 0 {
 				at = time.UnixMilli(r.StartedAt)
 			}
-			if !at.IsZero() && (st.Started.IsZero() || at.Before(st.Started)) {
-				st.Started = at
+			if !at.IsZero() && (t.Started.IsZero() || at.Before(t.Started)) {
+				t.Started = at
 			}
 		}
+		// A session's tasks keep the order it took them on in, so its
+		// labels stay put as it links to them again.
+		at := func(t *Task) time.Time { return linkedAt[r.SessionID][t.Key] }
+		slices.SortStableFunc(s.Holds, func(a, b *Task) int { return at(a).Compare(at(b)) })
 		switch {
-		case len(s.Streams) > 0:
 		case s.Host != nil:
 			w.Away = append(w.Away, s)
 		default:
@@ -224,17 +234,20 @@ func Derive(in Inputs) World {
 	for _, t := range terms {
 		t.Project = w.byName[nameOf(in.User, t.Root)]
 		if k, ok := ParseKey(t.task); ok {
-			if st := streams[k]; st != nil && st.Project == t.Project {
-				t.Stream = st
+			if task := tasks[k]; task != nil && task.Project == t.Project {
+				t.Task = task
+				task.Terminals = append(task.Terminals, &t.Terminal)
 			}
 		}
-		if t.Stream != nil {
-			t.Stream.Terminals = append(t.Stream.Terminals, &t.Terminal)
-		} else {
-			t.Project.Terminals = append(t.Project.Terminals, &t.Terminal)
-		}
-		t.Project.AllTerminals = append(t.Project.AllTerminals, &t.Terminal)
+		t.Project.Terminals = append(t.Project.Terminals, &t.Terminal)
 		w.Terminals = append(w.Terminals, &t.Terminal)
+	}
+
+	// The issues that wait on you, each in its own project.
+	for _, t := range tasks {
+		if t.Waits() {
+			t.Project.Waiting = append(t.Project.Waiting, t)
+		}
 	}
 
 	// The order of everything.
@@ -245,20 +258,27 @@ func Derive(in Inputs) World {
 		sort.Slice(ts, func(i, j int) bool { return WindowLess(ts[i].Window, ts[j].Window) })
 	}
 	for _, p := range w.byName {
-		sort.Slice(p.Streams, func(i, j int) bool { return StreamLess(p.Streams[i], p.Streams[j]) })
+		sort.Slice(p.Waiting, func(i, j int) bool { return WaitingLess(p.Waiting[i], p.Waiting[j]) })
 		bySession(p.Sessions)
 		bySession(p.Members)
 		byWindow(p.Terminals)
-		byWindow(p.AllTerminals)
 		// The list shows a project with something in it, or a pinned one.
 		if !p.Empty() || p.Pinned {
 			w.Projects = append(w.Projects, p)
 		}
 	}
 	sort.Slice(w.Projects, func(i, j int) bool { return NameLess(w.Projects[i].Name, w.Projects[j].Name) })
-	for _, s := range streams {
-		bySession(s.Sessions)
-		byWindow(s.Terminals)
+	for _, t := range tasks {
+		// The session linked to it last comes first, as its lead.
+		at := func(s *Session) time.Time { return linkedAt[s.SessionID][t.Key] }
+		sort.Slice(t.Sessions, func(i, j int) bool {
+			a, b := t.Sessions[i], t.Sessions[j]
+			if c := at(a).Compare(at(b)); c != 0 {
+				return c > 0
+			}
+			return StartedLess(a.Row, b.Row)
+		})
+		byWindow(t.Terminals)
 	}
 	bySession(w.Away)
 	byWindow(w.Terminals)
@@ -279,10 +299,8 @@ func Derive(in Inputs) World {
 		}
 	}
 	w.NoHook = interactive && !hooked
-	for _, s := range streams {
-		if s.Issue.Status == issues.Review {
-			w.Need++
-		}
+	for _, p := range w.byName {
+		w.Need += len(p.Waiting)
 	}
 
 	// The trackers a refresh reads: the roots of every project, listed or
@@ -303,9 +321,9 @@ func Derive(in Inputs) World {
 	return w
 }
 
-// resolve is the workstream a session's ref links it to, ok false for
+// resolve is the task a session's ref links it to, ok false for
 // none. The ref names its project by id, or else by its directory, whose
-// tracker gives the id. The workstream is in the known project with that
+// tracker gives the id. The task is in the known project with that
 // id, preferring the session's own (own), and else in the ref's
 // directory's project: a subagent's `issues --dir <worktree> start 6`
 // names a worktree, which is a root of its own with the same id. The ref
@@ -361,7 +379,7 @@ func resolve(ref fleet.TaskRef, own string, ts map[string]Tracker, known map[str
 	return Key{}, false
 }
 
-// active says whether an issue's status makes it a workstream by itself.
+// active says whether an issue's status makes it a task by itself.
 func active(status string) bool {
 	return status == issues.InProgress || status == issues.Review || status == issues.Blocked
 }

@@ -36,11 +36,24 @@ func sessionIDs(ss []*Session) []string {
 	return out
 }
 
-func streamKeys(ss []*Stream) []string {
+func taskKeys(ts []*Task) []string {
 	var out []string
-	for _, s := range ss {
-		out = append(out, s.String())
+	for _, t := range ts {
+		out = append(out, t.String())
 	}
+	return out
+}
+
+// linkedTo are the keys of the tasks that list the session id among
+// theirs, whatever their status, sorted.
+func linkedTo(w World, id string) []string {
+	var out []string
+	for k, t := range w.Tasks {
+		if slices.ContainsFunc(t.Sessions, func(s *Session) bool { return s.SessionID == id }) {
+			out = append(out, k.String())
+		}
+	}
+	slices.Sort(out)
 	return out
 }
 
@@ -68,8 +81,9 @@ func eq[T comparable](t *testing.T, what string, got, want []T) {
 }
 
 // Two sessions in a tracked project: s1 works on #6, and #4 is in review
-// with nobody on it. s2 is linked to nothing.
-func TestAProjectListsItsWorkstreamsThenItsSessions(t *testing.T) {
+// with nobody on it. s2 is linked to nothing. Both are the project's
+// sessions, s1 with #6 as its task, and #4 waits on you.
+func TestAProjectListsItsSessionsAndWhatWaits(t *testing.T) {
 	s1, s2 := sess("s1", "/code/app", fleet.TaskRef{Project: "app", Dir: "/code/app", ID: 6}), sess("s2", "/code/app")
 	w := Derive(Inputs{
 		Rows: []fleet.Row{s1, s2},
@@ -81,21 +95,16 @@ func TestAProjectListsItsWorkstreamsThenItsSessions(t *testing.T) {
 	})
 	eq(t, "projects", names(w.Projects), []string{"/code/app"})
 	p := w.Projects[0]
-	eq(t, "streams", streamKeys(p.Streams), []string{"/code/app#4", "/code/app#6"})
-	eq(t, "under #6", sessionIDs(p.Streams[1].Sessions), []string{"s1"})
-	eq(t, "under #4", sessionIDs(p.Streams[0].Sessions), nil)
-	eq(t, "project's sessions", sessionIDs(p.Sessions), []string{"s2"})
+	eq(t, "waiting", taskKeys(p.Waiting), []string{"/code/app#4"})
+	eq(t, "on #6", sessionIDs(w.Tasks[Key{"/code/app", 6}].Sessions), []string{"s1"})
+	eq(t, "s1's tasks", taskKeys(w.Sessions["s1"].Holds), []string{"/code/app#6"})
+	eq(t, "s2's tasks", taskKeys(w.Sessions["s2"].Holds), nil)
+	eq(t, "project's sessions", sessionIDs(p.Sessions), []string{"s1", "s2"})
 	if !p.Tracked || p.ID != "app" || len(p.Open) != 3 {
 		t.Errorf("project %+v", p)
 	}
 	if w.Need != 1 || w.Idle != 2 || w.Working != 0 {
 		t.Errorf("counts %d %d %d, want the review and two idle", w.Need, w.Working, w.Idle)
-	}
-	if got := w.Sessions["s1"].Primary(); got != p.Streams[1] {
-		t.Errorf("s1's primary is %v", got)
-	}
-	if w.Sessions["s2"].Primary() != nil {
-		t.Errorf("s2 has a primary")
 	}
 }
 
@@ -129,21 +138,15 @@ func TestLinksResolveAsResolveTaskDid(t *testing.T) {
 	} {
 		rows := append(slices.Clone(others), sess("s", c.own, c.ref))
 		w := Derive(Inputs{Rows: rows, Trackers: ts, Roots: roots})
-		got := ""
-		if p := w.Sessions["s"].Primary(); p != nil {
-			got = p.String()
-		}
+		got := strings.Join(linkedTo(w, "s"), " ")
 		if got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-		}
-		if c.want != "" && !slices.Contains(w.Streams[w.Sessions["s"].Primary().Key].Sessions, w.Sessions["s"]) {
-			t.Errorf("%s: the stream does not list its session", c.name)
 		}
 	}
 	// Without trackers nothing links.
 	w := Derive(Inputs{Rows: []fleet.Row{sess("s", "/w/app", ref("app", 6))}})
-	if len(w.Sessions["s"].Streams) != 0 || len(w.Streams) != 0 {
-		t.Errorf("no trackers: %+v", w.Sessions["s"].Streams)
+	if len(w.Sessions["s"].Holds) != 0 || len(w.Tasks) != 0 {
+		t.Errorf("no trackers: %+v", w.Sessions["s"].Holds)
 	}
 }
 
@@ -178,60 +181,63 @@ func TestAnUnplacedStartLinksInTheSessionsOwnProject(t *testing.T) {
 	} {
 		rows := append(slices.Clone(others), sess("s", c.own, fleet.TaskRef{ID: c.id}))
 		w := Derive(Inputs{Rows: rows, Trackers: ts, Roots: roots})
-		got := ""
-		if p := w.Sessions["s"].Primary(); p != nil {
-			got = p.String()
-		}
+		got := strings.Join(linkedTo(w, "s"), " ")
 		if got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
-		if c.want != "" && !slices.Contains(w.Streams[w.Sessions["s"].Primary().Key].Sessions, w.Sessions["s"]) {
-			t.Errorf("%s: the stream does not list its session", c.name)
-		}
-		if c.want == "" && !slices.Contains(w.Sessions["s"].Project.Sessions, w.Sessions["s"]) {
+		if !slices.Contains(w.Sessions["s"].Project.Sessions, w.Sessions["s"]) {
 			t.Errorf("%s: the session is not in its project's list", c.name)
 		}
 	}
 	// A project named with the start places it, whatever the directory.
 	w := Derive(Inputs{Rows: append(slices.Clone(others), sess("s", "/w/app", fleet.TaskRef{Project: "lib", ID: 9})), Trackers: ts})
-	eq(t, "a project and no directory", streamKeys(w.Sessions["s"].Streams), []string{"/w/lib#9"})
+	eq(t, "a project and no directory", taskKeys(w.Sessions["s"].Holds), []string{"/w/lib#9"})
 }
 
-func TestLinksKeepTheLatestLast(t *testing.T) {
-	ts := map[string]Tracker{"/w/app": tracker("app", issue(1, issues.Ready), issue(2, issues.Ready), issue(3, issues.Done))}
-	r := sess("s", "/w/app", ref("app", 1), ref("app", 2), fleet.TaskRef{Dir: "/w/app", ID: 1}, ref("app", 3))
+// A session's tasks are the issues in progress it is linked to, in the
+// order it first linked them, whatever order its links came in since.
+// The issues it is linked to that are not in progress are no task of its.
+func TestASessionsTasksAreItsIssuesInProgress(t *testing.T) {
+	ts := map[string]Tracker{"/w/app": tracker("app", issue(1, issues.InProgress), issue(2, issues.InProgress),
+		issue(3, issues.Done), issue(4, issues.Ready), issue(5, issues.Review))}
+	at := func(r fleet.TaskRef, ms int64) fleet.TaskRef { r.Linked = time.UnixMilli(ms); return r }
+	// The reader keeps each ref where it was last linked, with its first
+	// time: #2 was linked first and again last.
+	r := sess("s", "/w/app", at(ref("app", 1), 200), at(ref("app", 4), 300), at(ref("app", 3), 400),
+		at(ref("app", 5), 500), at(ref("app", 2), 100))
 	w := Derive(Inputs{Rows: []fleet.Row{r}, Trackers: ts})
-	eq(t, "links", streamKeys(w.Sessions["s"].Streams), []string{"/w/app#2", "/w/app#1"})
-	// Both are under the session's project, and the session in neither
-	// its project's list nor Away.
+	eq(t, "tasks", taskKeys(w.Sessions["s"].Holds), []string{"/w/app#2", "/w/app#1"})
+	eq(t, "links", linkedTo(w, "s"), []string{"/w/app#1", "/w/app#2", "/w/app#4", "/w/app#5"})
+	// The session is in its project's list, and only #5 waits on you: the
+	// ready one waits on nobody.
 	p := w.ProjectOf("/w/app")
-	eq(t, "streams", streamKeys(p.Streams), []string{"/w/app#1", "/w/app#2"})
-	if len(p.Sessions) != 0 || len(w.Away) != 0 {
-		t.Errorf("a linked session is listed in its project: %v", sessionIDs(p.Sessions))
+	eq(t, "sessions", sessionIDs(p.Sessions), []string{"s"})
+	eq(t, "waiting", taskKeys(p.Waiting), []string{"/w/app#5"})
+	if len(w.Away) != 0 || w.Need != 1 {
+		t.Errorf("away %v, need %d", sessionIDs(w.Away), w.Need)
 	}
 }
 
-// A session linked to another project's issue is under that project's
-// workstream, and its own project lists nothing for it.
+// A session linked to another project's issue stays in its own project,
+// with that issue as its task, and the other project lists nothing for
+// it.
 func TestALinkIntoAnotherProject(t *testing.T) {
 	w := Derive(Inputs{
 		Rows:     []fleet.Row{sess("s", "/w/lib", ref("app", 3))},
-		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(3, issues.Ready))},
+		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(3, issues.InProgress))},
 		Pinned:   []string{"/w/app"},
 	})
-	// lib has nothing listed in it, so the list leaves it out, but it is
-	// still s's project and s is its member.
-	eq(t, "projects", names(w.Projects), []string{"/w/app"})
-	app, lib := w.Projects[0], w.ProjectOf("/w/lib")
-	eq(t, "app's streams", streamKeys(app.Streams), []string{"/w/app#3"})
-	if lib == nil || w.Sessions["s"].Project != lib || !lib.Empty() || app.Empty() {
-		t.Fatalf("s in %v; lib %+v", w.Sessions["s"].Project.Name, lib)
+	eq(t, "projects", names(w.Projects), []string{"/w/app", "/w/lib"})
+	app, lib := w.Projects[0], w.Projects[1]
+	eq(t, "lib's sessions", sessionIDs(lib.Sessions), []string{"s"})
+	eq(t, "s's tasks", taskKeys(w.Sessions["s"].Holds), []string{"/w/app#3"})
+	if w.Tasks[Key{"/w/app", 3}].Project != app || !app.Empty() || len(app.Waiting) != 0 {
+		t.Fatalf("app %+v", app)
 	}
-	eq(t, "lib's members", sessionIDs(lib.Members), []string{"s"})
 	eq(t, "app's members", sessionIDs(app.Members), nil)
 }
 
-// The orchestrator is in no list, its links make no workstream and it
+// The orchestrator is in no list, its links make no task and it
 // counts for nothing. Its pane is still no terminal.
 func TestTheOrchestratorIsNotInTheWorld(t *testing.T) {
 	o := sess("o", "/w/app", ref("app", 7))
@@ -247,8 +253,8 @@ func TestTheOrchestratorIsNotInTheWorld(t *testing.T) {
 	if _, ok := w.Sessions["o"]; ok || len(w.Agents) != 1 {
 		t.Fatalf("the orchestrator is listed: %v", sessionIDs(w.Agents))
 	}
-	if _, ok := w.Streams[Key{"/w/app", 7}]; ok {
-		t.Errorf("the orchestrator's link made a workstream")
+	if _, ok := w.Tasks[Key{"/w/app", 7}]; ok {
+		t.Errorf("the orchestrator's link made a task")
 	}
 	// The orchestrator's hook does not stand for a's.
 	if w.Working != 0 || w.Idle != 1 || !w.NoHook {
@@ -261,7 +267,7 @@ func TestTheOrchestratorIsNotInTheWorld(t *testing.T) {
 }
 
 // How many sessions work on each issue, as the task picker counts them.
-func TestAStreamListsEachSessionOnce(t *testing.T) {
+func TestATaskListsEachSessionOnce(t *testing.T) {
 	o := sess("o", "/w/app", ref("app", 7))
 	o.Name = fleet.OrchestratorName
 	w := Derive(Inputs{
@@ -275,10 +281,10 @@ func TestAStreamListsEachSessionOnce(t *testing.T) {
 		},
 	})
 	for k, want := range map[Key][]string{{"/w/app", 6}: {"a", "b"}, {"/w/app", 7}: {"a"}} {
-		eq(t, k.String(), sessionIDs(w.Streams[k].Sessions), want)
+		eq(t, k.String(), sessionIDs(w.Tasks[k].Sessions), want)
 	}
 	// a's worktree ref names the id app, which its own project has.
-	eq(t, "a's links", streamKeys(w.Sessions["a"].Streams), []string{"/w/app#7", "/w/app#6"})
+	eq(t, "a's links", linkedTo(w, "a"), []string{"/w/app#6", "/w/app#7"})
 }
 
 func TestStartedIsTheEarliestLink(t *testing.T) {
@@ -299,41 +305,57 @@ func TestStartedIsTheEarliestLink(t *testing.T) {
 		{"nothing says", []fleet.Row{c}, time.Time{}},
 	} {
 		w := Derive(Inputs{Rows: x.rows, Trackers: ts})
-		if got := w.Streams[k].Started; !got.Equal(x.want) {
+		if got := w.Tasks[k].Started; !got.Equal(x.want) {
 			t.Errorf("%s: %v, want %v", x.name, got, x.want)
 		}
 	}
 	// Two refs to one issue: the earlier time counts.
 	d := sess("d", "/w", fleet.TaskRef{Project: "w", ID: 1, Linked: time.UnixMilli(900)}, fleet.TaskRef{Dir: "/w", ID: 1, Linked: time.UnixMilli(700)})
-	if got := Derive(Inputs{Rows: []fleet.Row{d}, Trackers: ts}).Streams[k].Started; !got.Equal(time.UnixMilli(700)) {
+	if got := Derive(Inputs{Rows: []fleet.Row{d}, Trackers: ts}).Tasks[k].Started; !got.Equal(time.UnixMilli(700)) {
 		t.Errorf("two refs: %v", got)
 	}
 	// An active issue nobody works on has no start.
 	ts["/w"] = tracker("w", issue(1, issues.InProgress))
-	if got := Derive(Inputs{Rows: []fleet.Row{sess("e", "/w")}, Trackers: ts}).Streams[k]; got == nil || !got.Started.IsZero() {
+	if got := Derive(Inputs{Rows: []fleet.Row{sess("e", "/w")}, Trackers: ts}).Tasks[k]; got == nil || !got.Started.IsZero() {
 		t.Errorf("no sessions: %+v", got)
 	}
 }
 
-// Only open issues that are in progress, in review or blocked are
-// workstreams by themselves; any other open one only with a session.
-func TestWhichIssuesAreWorkstreams(t *testing.T) {
+// Only open issues that are in progress, in review or blocked are tasks
+// by themselves; any other open one only with a session or a terminal.
+// Of them, those in review or blocked wait on you, and those in progress
+// only when no live session is linked to them.
+func TestWhichIssuesAreTasksAndWhichWait(t *testing.T) {
 	ts := map[string]Tracker{"/w/app": tracker("app",
 		issue(1, issues.InProgress), issue(2, issues.Review), issue(3, issues.Blocked),
-		issue(4, issues.Ready), issue(5, issues.Inbox), issue(6, issues.Done), issue(7, issues.Ready))}
-	w := Derive(Inputs{Rows: []fleet.Row{sess("s", "/w/app", ref("app", 7), ref("app", 6))}, Trackers: ts})
-	eq(t, "streams", streamKeys(w.Projects[0].Streams), []string{"/w/app#2", "/w/app#1", "/w/app#3", "/w/app#7"})
-	if len(w.Projects[0].Open) != 6 {
+		issue(4, issues.Ready), issue(5, issues.Inbox), issue(6, issues.Done), issue(7, issues.Ready),
+		issue(8, issues.InProgress), issue(10, issues.Ready))}
+	w := Derive(Inputs{
+		Rows:     []fleet.Row{sess("s", "/w/app", ref("app", 7), ref("app", 6), ref("app", 8))},
+		Trackers: ts,
+		Panes:    []tmux.Pane{{ID: "%1", Session: "ov", Window: "@1", Path: "/w/app", Task: "/w/app#10"}},
+		Session:  "ov",
+	})
+	var keys []string
+	for k := range w.Tasks {
+		keys = append(keys, k.String())
+	}
+	slices.Sort(keys)
+	eq(t, "tasks", keys, []string{"/w/app#1", "/w/app#10", "/w/app#2", "/w/app#3", "/w/app#7", "/w/app#8"})
+	eq(t, "waiting", taskKeys(w.Projects[0].Waiting), []string{"/w/app#2", "/w/app#3", "/w/app#1"})
+	eq(t, "s's tasks", taskKeys(w.Sessions["s"].Holds), []string{"/w/app#8"})
+	if len(w.Projects[0].Open) != 8 {
 		t.Errorf("open %v", w.Projects[0].Open)
 	}
 	// A tracker for a root the world has nothing in is not read in.
 	w = Derive(Inputs{Rows: []fleet.Row{sess("s", "/w/lib")}, Trackers: ts})
-	if len(w.Streams) != 0 || len(w.Projects) != 1 {
-		t.Errorf("an unknown tracker made %v", streamKeys(w.Projects[0].Streams))
+	if len(w.Tasks) != 0 || len(w.Projects) != 1 {
+		t.Errorf("an unknown tracker made %v", taskKeys(w.Projects[0].Waiting))
 	}
 }
 
-func TestStreamOrder(t *testing.T) {
+// What waits on you: review, then blocked, then stalled, by priority.
+func TestWaitingOrder(t *testing.T) {
 	ts := map[string]Tracker{"/w/app": tracker("app",
 		issues.Issue{ID: 9, Status: issues.InProgress, Priority: "p1"},
 		issues.Issue{ID: 3, Status: issues.InProgress, Priority: "p2"},
@@ -342,7 +364,7 @@ func TestStreamOrder(t *testing.T) {
 		issues.Issue{ID: 2, Status: issues.Blocked, Priority: "p0"},
 	)}
 	w := Derive(Inputs{Rows: []fleet.Row{sess("s", "/w/app")}, Trackers: ts})
-	eq(t, "streams", streamKeys(w.Projects[0].Streams), []string{"/w/app#8", "/w/app#1", "/w/app#9", "/w/app#3", "/w/app#2"})
+	eq(t, "waiting", taskKeys(w.Projects[0].Waiting), []string{"/w/app#8", "/w/app#2", "/w/app#1", "/w/app#9", "/w/app#3"})
 }
 
 // A project lists its sessions newest started first, whatever their
@@ -370,8 +392,8 @@ func TestSessionOrder(t *testing.T) {
 	}
 }
 
-// A session another app runs is in Away unless it is linked. A
-// background session never is.
+// A session another app runs is in Away, linked or not. A background
+// session never is.
 func TestAwaySessions(t *testing.T) {
 	away := sess("away", "/w/app")
 	away.PID = 3
@@ -382,16 +404,17 @@ func TestAwaySessions(t *testing.T) {
 	w := Derive(Inputs{
 		Rows:     []fleet.Row{away, linked, bg},
 		Hosts:    map[int]Host{3: {Name: "Notes"}, 4: {}, 5: {Name: "Nope"}},
-		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(1, issues.Ready))},
+		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(1, issues.InProgress))},
 	})
-	eq(t, "away", sessionIDs(w.Away), []string{"away"})
+	eq(t, "away", sessionIDs(w.Away), []string{"away", "linked"})
 	eq(t, "members", sessionIDs(w.Projects[0].Members), []string{"away", "bg", "linked"})
 	// A project with only an away session is not listed.
 	if w := Derive(Inputs{Rows: []fleet.Row{away}, Hosts: map[int]Host{3: {}}}); len(w.Projects) != 0 || w.ProjectOf("/w/app") == nil {
 		t.Errorf("an away session's project: listed %v", names(w.Projects))
 	}
 	eq(t, "project", sessionIDs(w.Projects[0].Sessions), []string{"bg"})
-	eq(t, "#1", sessionIDs(w.Streams[Key{"/w/app", 1}].Sessions), []string{"linked"})
+	eq(t, "#1", sessionIDs(w.Tasks[Key{"/w/app", 1}].Sessions), []string{"linked"})
+	eq(t, "linked's tasks", taskKeys(w.Sessions["linked"].Holds), []string{"/w/app#1"})
 	if h := w.Sessions["away"].Host; h == nil || h.Label() != "Notes" {
 		t.Errorf("away's host %+v", h)
 	}
@@ -444,13 +467,13 @@ func TestTerminals(t *testing.T) {
 	}
 }
 
-// A terminal is under the workstream its window was opened for when that
-// is one of its project's; else it is in its project.
-func TestTerminalsUnderWorkstreams(t *testing.T) {
+// A terminal has as its task the issue its window was opened for when
+// that is one of its project's. Every terminal is in its project.
+func TestATerminalsTask(t *testing.T) {
 	panes := []tmux.Pane{
 		{ID: "%1", Session: "ov", Window: "@1", Path: "/w/app", Task: "/w/app#6"},
 		{ID: "%2", Session: "ov", Window: "@2", Path: "/w/lib", Task: "/w/app#6"},  // another project's
-		{ID: "%3", Session: "ov", Window: "@3", Path: "/w/app", Task: "/w/app#9"},  // no workstream
+		{ID: "%3", Session: "ov", Window: "@3", Path: "/w/app", Task: "/w/app#9"},  // a closed issue
 		{ID: "%4", Session: "ov", Window: "@4", Path: "/w/app", Task: "/w/app#6x"}, // not a key
 		{ID: "%5", Session: "ov", Window: "@5", Path: "/w/app/sub", Task: "/w/app#6"},
 	}
@@ -458,18 +481,31 @@ func TestTerminalsUnderWorkstreams(t *testing.T) {
 		Panes: panes, Session: "ov", Roots: map[string]string{"/w/app/sub": "/w/app"},
 		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(6, issues.InProgress), issue(9, issues.Done))},
 	})
-	st := w.Streams[Key{"/w/app", 6}]
-	eq(t, "under #6", windows(st.Terminals), []string{"@1", "@5"})
-	eq(t, "app's", windows(w.ProjectOf("/w/app").Terminals), []string{"@3", "@4"})
+	st := w.Tasks[Key{"/w/app", 6}]
+	eq(t, "on #6", windows(st.Terminals), []string{"@1", "@5"})
+	eq(t, "app's", windows(w.ProjectOf("/w/app").Terminals), []string{"@1", "@3", "@4", "@5"})
 	eq(t, "lib's", windows(w.ProjectOf("/w/lib").Terminals), []string{"@2"})
-	if w.Terminals[0].Stream != st || w.Terminals[1].Stream != nil {
-		t.Errorf("streams %v %v", w.Terminals[0].Stream, w.Terminals[1].Stream)
+	if w.Terminals[0].Task != st || w.Terminals[1].Task != nil || w.Terminals[2].Task != nil {
+		t.Errorf("tasks %v %v %v", w.Terminals[0].Task, w.Terminals[1].Task, w.Terminals[2].Task)
 	}
-	// A project's every terminal: its own and its workstreams'.
-	eq(t, "all of app's", windows(w.ProjectOf("/w/app").AllTerminals), []string{"@1", "@3", "@4", "@5"})
-	eq(t, "all of lib's", windows(w.ProjectOf("/w/lib").AllTerminals), []string{"@2"})
+	// A terminal holds no issue in progress for a session: #6 still waits.
+	eq(t, "waiting", taskKeys(w.ProjectOf("/w/app").Waiting), []string{"/w/app#6"})
 	if s, term := st.Lead(); s != nil || term != w.Terminals[0] {
 		t.Errorf("lead %v %v", s, term)
+	}
+}
+
+// A terminal opened for another project's issue does not make that issue
+// a task: the terminal does not have it, so nothing would show it.
+func TestATerminalForAnotherProjectsIssueMakesNoTask(t *testing.T) {
+	w := Derive(Inputs{
+		Panes:    []tmux.Pane{{ID: "%1", Session: "ov", Window: "@1", Path: "/w/lib", Task: "/w/app#7"}},
+		Session:  "ov",
+		Pinned:   []string{"/w/app"},
+		Trackers: map[string]Tracker{"/w/app": tracker("app", issue(7, issues.Inbox))},
+	})
+	if len(w.Tasks) != 0 || w.Terminals[0].Task != nil {
+		t.Errorf("tasks %v, the terminal's %v", w.Tasks, w.Terminals[0].Task)
 	}
 }
 
@@ -482,11 +518,11 @@ func TestLead(t *testing.T) {
 		TTYs:     map[int]string{2: "ttys002"},
 		Session:  "ov",
 	}
-	if s, _ := Derive(in).Streams[Key{"/w", 1}].Lead(); s == nil || s.SessionID != "a" {
+	if s, _ := Derive(in).Tasks[Key{"/w", 1}].Lead(); s == nil || s.SessionID != "a" {
 		t.Errorf("with no panes, the first session: %v", s)
 	}
 	in.Panes = []tmux.Pane{{ID: "%2", TTY: "ttys002", Session: "ov", Window: "@2"}}
-	if s, _ := Derive(in).Streams[Key{"/w", 1}].Lead(); s == nil || s.SessionID != "b" {
+	if s, _ := Derive(in).Tasks[Key{"/w", 1}].Lead(); s == nil || s.SessionID != "b" {
 		t.Errorf("the first with a pane: %v", s)
 	}
 }
@@ -547,7 +583,7 @@ func TestRootsWithOneNameAreOneProject(t *testing.T) {
 	p := w.Projects[0]
 	eq(t, "roots", p.Roots, []string{"/u/code/projects/one", "one"})
 	eq(t, "sessions", sessionIDs(p.Sessions), []string{"a", "b"})
-	eq(t, "streams", streamKeys(p.Streams), []string{"one#1"})
+	eq(t, "waiting", taskKeys(p.Waiting), []string{"one#1"})
 	if p.Root != "/u/code/projects/one" || !p.Tracked || p.ID != "one" || w.Sessions["b"].Project != p {
 		t.Errorf("project %+v", p)
 	}
@@ -719,9 +755,9 @@ func TestReviewsAndHealthPassThrough(t *testing.T) {
 }
 
 // Two roots that share a name are one project, with one ID, but each
-// root's workstreams are named by that root's own tracker id, which is
+// root's tasks are named by that root's own tracker id, which is
 // what a session's opening prompt must name to link back to it.
-func TestAStreamIsNamedByItsOwnRootsID(t *testing.T) {
+func TestATaskIsNamedByItsOwnRootsID(t *testing.T) {
 	w := Derive(Inputs{
 		Pinned: []string{"/u/code/projects/alpha", "alpha"},
 		Trackers: map[string]Tracker{
@@ -734,15 +770,15 @@ func TestAStreamIsNamedByItsOwnRootsID(t *testing.T) {
 		t.Fatalf("projects %+v", w.Projects)
 	}
 	for root, want := range map[string]string{"/u/code/projects/alpha": "a1#3", "alpha": "a2#3"} {
-		st := w.Streams[Key{root, 3}]
+		st := w.Tasks[Key{root, 3}]
 		if st == nil || st.Ref() != want || w.IssuesID(root) != want[:2] {
-			t.Errorf("%s: stream %+v, IssuesID %q, want %s", root, st, w.IssuesID(root), want)
+			t.Errorf("%s: task %+v, IssuesID %q, want %s", root, st, w.IssuesID(root), want)
 		}
 	}
 	if got := w.IssuesID("/w/untracked"); got != "untracked" {
 		t.Errorf("an untracked root's id %q", got)
 	}
-	st := w.Streams[Key{"alpha", 3}]
+	st := w.Tasks[Key{"alpha", 3}]
 	st.Issue.Ref = "alpha#3"
 	if st.Ref() != "alpha#3" {
 		t.Errorf("the tool's own ref is not kept: %q", st.Ref())

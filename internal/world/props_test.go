@@ -18,8 +18,8 @@ import (
 // The generators draw a small world with collisions on purpose: a
 // relative "alpha" has the name of ~/code/projects/alpha when the user's
 // home is /u, a worktree shares its project's issues id, refs name ids
-// that are and are not tracked, and panes name workstreams that do and do
-// not exist.
+// that are and are not tracked, and panes name tasks that do and do not
+// exist.
 
 var (
 	dirs = []string{
@@ -203,7 +203,7 @@ type canon struct {
 	Away      []string
 	Agents    []string
 	Sessions  map[string]canonSession
-	Streams   map[string]canonStream
+	Tasks     map[string]canonTask
 	Terminals []canonTerminal
 	Counts    [3]int
 	NoHook    bool
@@ -215,19 +215,19 @@ type canonProject struct {
 	Roots                    []string
 	Tracked, Failed, Pinned  bool
 	Open                     []issues.Issue
-	Streams, Sessions, Terms []string
+	Waiting, Sessions, Terms []string
 }
 
 type canonSession struct {
 	Row       fleet.Row
 	Project   string
-	Streams   []string
+	Tasks     []string
 	Pane      string
 	Host      *Host
 	Elsewhere bool
 }
 
-type canonStream struct {
+type canonTask struct {
 	Project   string
 	Issue     issues.Issue
 	Sessions  []string
@@ -238,29 +238,29 @@ type canonStream struct {
 type canonTerminal struct {
 	Terminal Terminal
 	Project  string
-	Stream   string
+	Task     string
 }
 
 func toCanon(w World) canon {
 	c := canon{
 		Away: sessionIDs(w.Away), Agents: sessionIDs(w.Agents), Sessions: map[string]canonSession{},
-		Streams: map[string]canonStream{}, Counts: [3]int{w.Need, w.Working, w.Idle}, NoHook: w.NoHook, Trackers: w.Trackers,
+		Tasks: map[string]canonTask{}, Counts: [3]int{w.Need, w.Working, w.Idle}, NoHook: w.NoHook, Trackers: w.Trackers,
 	}
 	for _, p := range w.Projects {
 		c.Projects = append(c.Projects, canonProject{p.Root, p.Name, p.ID, p.Roots, p.Tracked, p.Failed, p.Pinned, p.Open,
-			streamKeys(p.Streams), sessionIDs(p.Sessions), windows(p.Terminals)})
+			taskKeys(p.Waiting), sessionIDs(p.Sessions), windows(p.Terminals)})
 	}
 	for id, s := range w.Sessions {
-		c.Sessions[id] = canonSession{s.Row, s.Project.Name, streamKeys(s.Streams), s.Pane, s.Host, s.Elsewhere}
+		c.Sessions[id] = canonSession{s.Row, s.Project.Name, taskKeys(s.Holds), s.Pane, s.Host, s.Elsewhere}
 	}
-	for k, s := range w.Streams {
-		c.Streams[k.String()] = canonStream{s.Project.Name, s.Issue, sessionIDs(s.Sessions), windows(s.Terminals), s.Started}
+	for k, s := range w.Tasks {
+		c.Tasks[k.String()] = canonTask{s.Project.Name, s.Issue, sessionIDs(s.Sessions), windows(s.Terminals), s.Started}
 	}
 	for _, tm := range w.Terminals {
 		ct := canonTerminal{Terminal: *tm, Project: tm.Project.Name}
-		ct.Terminal.Project, ct.Terminal.Stream = nil, nil
-		if tm.Stream != nil {
-			ct.Stream = tm.Stream.String()
+		ct.Terminal.Project, ct.Terminal.Task = nil, nil
+		if tm.Task != nil {
+			ct.Task = tm.Task.String()
 		}
 		c.Terminals = append(c.Terminals, ct)
 	}
@@ -291,10 +291,10 @@ func count[T comparable](xs []T, x T) int {
 	return n
 }
 
-// Every session but the orchestrator is in Agents once, in order. A linked
-// session is under each of its workstreams once and in no project's list
-// nor Away; an unlinked one is in exactly one of its own project's list
-// and Away, and in Away exactly when another app runs it.
+// Every session but the orchestrator is in Agents once, in order, and in
+// exactly one of its own project's list and Away, in Away exactly when
+// another app runs it, whatever it is linked to. Its tasks are the issues
+// in progress that list it, each once.
 func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -321,28 +321,26 @@ func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 				inProjects += count(p.Sessions, s)
 			}
 			inAway := count(w.Away, s)
-			if len(s.Streams) > 0 {
-				if inProjects+inAway != 0 {
-					t.Fatalf("linked %s is in a project %d times and away %d", s.SessionID, inProjects, inAway)
-				}
-				for _, st := range s.Streams {
-					if count(st.Sessions, s) != 1 || count(s.Streams, st) != 1 {
-						t.Fatalf("%s is under %s %d times", s.SessionID, st, count(st.Sessions, s))
-					}
-				}
-				continue
-			}
 			if inProjects+inAway != 1 || inAway == 1 != (s.Host != nil) || inProjects == 1 && count(s.Project.Sessions, s) != 1 {
-				t.Fatalf("unlinked %s: projects %d, away %d, host %v", s.SessionID, inProjects, inAway, s.Host)
+				t.Fatalf("%s: projects %d, away %d, host %v", s.SessionID, inProjects, inAway, s.Host)
+			}
+			for _, st := range s.Holds {
+				if count(st.Sessions, s) != 1 || count(s.Holds, st) != 1 || st.Issue.Status != issues.InProgress {
+					t.Fatalf("%s has %s (%s), which lists it %d times", s.SessionID, st, st.Issue.Status, count(st.Sessions, s))
+				}
 			}
 			if s.Host != nil != (!s.Background() && hasHost(in, s.PID)) {
 				t.Fatalf("%s: host %v", s.SessionID, s.Host)
 			}
 		}
-		for _, st := range w.Streams {
+		for _, st := range w.Tasks {
 			for _, s := range st.Sessions {
-				if count(s.Streams, st) != 1 {
-					t.Fatalf("%s lists %s, which does not list it", st, s.SessionID)
+				want := 0
+				if st.Issue.Status == issues.InProgress {
+					want = 1
+				}
+				if count(s.Holds, st) != want || count(st.Sessions, s) != 1 {
+					t.Fatalf("%s (%s) lists %s, which has it %d times", st, st.Issue.Status, s.SessionID, count(s.Holds, st))
 				}
 			}
 		}
@@ -351,26 +349,30 @@ func TestPropEverySessionIsPlacedOnce(t *testing.T) {
 
 func hasHost(in Inputs, pid int) bool { _, ok := in.Hosts[pid]; return ok }
 
-// Every workstream is an open issue of its tracker, listed once and by
-// its own project only, and one with nobody on it is active by status.
-// Everything in a project is in order.
-func TestPropStreamsAndOrder(t *testing.T) {
+// Every task is an open issue of its tracker, and one with no session or
+// terminal on it is active by status. An issue waits on you in its own
+// project, and in no other, exactly when it is in review or blocked, or in
+// progress with no session linked to it. Everything in a project is in
+// order.
+func TestPropTasksAndOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
 		w := Derive(in)
-		for k, st := range w.Streams {
+		for k, st := range w.Tasks {
 			if st.Key != k || st.Issue.ID != k.ID || !issues.Open(st.Issue.Status) || !slices.ContainsFunc(in.Trackers[k.Root].Open, func(i issues.Issue) bool { return reflect.DeepEqual(i, st.Issue) }) {
-				t.Fatalf("stream %s: %+v", k, st.Issue)
+				t.Fatalf("task %s: %+v", k, st.Issue)
 			}
-			if len(st.Sessions) == 0 && !active(st.Issue.Status) {
-				t.Fatalf("%s has no session and is %s", k, st.Issue.Status)
+			if len(st.Sessions) == 0 && len(st.Terminals) == 0 && !active(st.Issue.Status) {
+				t.Fatalf("%s has no session or terminal and is %s", k, st.Issue.Status)
 			}
+			waits := st.Issue.Status == issues.Review || st.Issue.Status == issues.Blocked ||
+				st.Issue.Status == issues.InProgress && len(st.Sessions) == 0
 			n := 0
-			for _, p := range w.Projects {
-				n += count(p.Streams, st)
+			for _, p := range w.byName {
+				n += count(p.Waiting, st)
 			}
-			if n != 1 || count(st.Project.Streams, st) != 1 || st.Project.Name != w.Name(k.Root) {
-				t.Fatalf("%s is listed %d times, in %q", k, n, st.Project.Name)
+			if st.Waits() != waits || n != count(st.Project.Waiting, st) || n == 1 != waits || n > 1 || st.Project.Name != w.Name(k.Root) {
+				t.Fatalf("%s (%s, %d sessions) waits in %d projects, in %q", k, st.Issue.Status, len(st.Sessions), n, st.Project.Name)
 			}
 		}
 		for i, p := range w.Projects {
@@ -380,36 +382,34 @@ func TestPropStreamsAndOrder(t *testing.T) {
 			if p.Root != p.Roots[0] || !slices.IsSorted(p.Roots) {
 				t.Fatalf("%q: root %q of %v", p.Name, p.Root, p.Roots)
 			}
-			for j := 1; j < len(p.Streams); j++ {
-				if !StreamLess(p.Streams[j-1], p.Streams[j]) {
-					t.Fatalf("streams out of order in %q", p.Name)
+			for j := 1; j < len(p.Waiting); j++ {
+				if !WaitingLess(p.Waiting[j-1], p.Waiting[j]) {
+					t.Fatalf("waiting out of order in %q", p.Name)
 				}
 			}
 			checkSessions(t, p.Name, p.Sessions)
 			checkTerms(t, p.Name, p.Terminals)
-			for _, st := range p.Streams {
-				checkSessions(t, st.String(), st.Sessions)
-				checkTerms(t, st.String(), st.Terminals)
-			}
+		}
+		for _, st := range w.Tasks {
+			checkTerms(t, st.String(), st.Terminals)
 		}
 		checkSessions(t, "away", w.Away)
 		checkTerms(t, "terminals", w.Terminals)
-		// A terminal sits under the workstream it names when that is
-		// one of its own project's, and else in its project.
+		// A terminal has the task it names when that is one of its own
+		// project's, and is in its project either way.
 		for _, tm := range w.Terminals {
-			want := (*Stream)(nil)
+			want := (*Task)(nil)
 			for _, p := range in.Panes {
 				if p.ID == tm.Pane {
-					if k, ok := ParseKey(p.Task); ok && w.Streams[k] != nil && w.Streams[k].Project == tm.Project {
-						want = w.Streams[k]
+					if k, ok := ParseKey(p.Task); ok && w.Tasks[k] != nil && w.Tasks[k].Project == tm.Project {
+						want = w.Tasks[k]
 					}
 				}
 			}
-			if tm.Stream != want {
-				t.Fatalf("terminal %s under %v, want %v", tm.Window, tm.Stream, want)
+			if tm.Task != want {
+				t.Fatalf("terminal %s has %v, want %v", tm.Window, tm.Task, want)
 			}
-			if want != nil && (count(want.Terminals, tm) != 1 || count(tm.Project.Terminals, tm) != 0) ||
-				want == nil && count(tm.Project.Terminals, tm) != 1 {
+			if want != nil && count(want.Terminals, tm) != 1 || count(tm.Project.Terminals, tm) != 1 {
 				t.Fatalf("terminal %s misplaced", tm.Window)
 			}
 		}
@@ -448,9 +448,8 @@ func projectOrder(w World) []string {
 	for _, p := range w.Projects {
 		out = append(out, "project "+p.Name)
 		out = append(out, sessionIDs(p.Sessions)...)
-		for _, st := range p.Streams {
-			out = append(out, "stream "+st.String())
-			out = append(out, sessionIDs(st.Sessions)...)
+		for _, st := range p.Waiting {
+			out = append(out, "waiting "+st.String())
 		}
 	}
 	out = append(out, "away")
@@ -491,8 +490,8 @@ func TestPropCountsAreARecount(t *testing.T) {
 				idle++
 			}
 		}
-		for _, st := range w.Streams {
-			if st.Issue.Status == issues.Review {
+		for _, st := range w.Tasks {
+			if st.Waits() {
 				need++
 			}
 		}
@@ -502,9 +501,9 @@ func TestPropCountsAreARecount(t *testing.T) {
 	})
 }
 
-// A session whose refs name no project and no directory is under the
+// A session whose refs name no project and no directory is linked to the
 // issues of its own root that those refs number and that are in progress,
-// in review or blocked, and under nothing else.
+// in review or blocked, and to nothing else.
 func TestPropUnplacedStartsStayInTheSessionsProject(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -521,8 +520,10 @@ func TestPropUnplacedStartsStayInTheSessionsProject(t *testing.T) {
 				}
 			}
 			got := map[Key]bool{}
-			for _, st := range s.Streams {
-				got[st.Key] = true
+			for k, st := range w.Tasks {
+				if count(st.Sessions, s) > 0 {
+					got[k] = true
+				}
 			}
 			if !maps.Equal(got, want) {
 				t.Fatalf("%s in %q with refs %+v is under %v, want %v", s.SessionID, own, s.Tasks, got, want)
@@ -531,7 +532,7 @@ func TestPropUnplacedStartsStayInTheSessionsProject(t *testing.T) {
 	})
 }
 
-// Started is the earliest time any session under a workstream took it
+// Started is the earliest time any session linked to a task took it
 // on: its earliest timed ref to it, else when the session started.
 func TestPropStartedIsTheMinimum(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
@@ -549,7 +550,7 @@ func TestPropStartedIsTheMinimum(t *testing.T) {
 				known[w.Root(d)] = true
 			}
 		}
-		for k, st := range w.Streams {
+		for k, st := range w.Tasks {
 			var want time.Time
 			for _, s := range st.Sessions {
 				var at time.Time
@@ -577,7 +578,7 @@ func TestPropStartedIsTheMinimum(t *testing.T) {
 }
 
 // Every pointer reachable from a World is to one of its own projects,
-// sessions, workstreams and terminals.
+// sessions, tasks and terminals.
 func TestPropPointersStayInTheWorld(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -605,9 +606,9 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 				t.Fatalf("session %s is not the world's", s.SessionID)
 			}
 		}
-		stream := func(st *Stream) {
-			if w.Streams[st.Key] != st {
-				t.Fatalf("stream %s is not the world's", st)
+		task := func(st *Task) {
+			if w.Tasks[st.Key] != st {
+				t.Fatalf("task %s is not the world's", st)
 			}
 		}
 		proj := func(p *Project) {
@@ -634,11 +635,11 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			if s.Project != w.ProjectOf(s.Cwd) {
 				t.Fatalf("%s is in %q, not its cwd's", id, s.Project.Name)
 			}
-			for _, st := range s.Streams {
-				stream(st)
+			for _, st := range s.Holds {
+				task(st)
 			}
 		}
-		for _, st := range w.Streams {
+		for _, st := range w.Tasks {
 			proj(st.Project)
 			for _, s := range st.Sessions {
 				sess(s)
@@ -648,8 +649,8 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			}
 		}
 		for _, p := range w.byName {
-			for _, st := range p.Streams {
-				stream(st)
+			for _, st := range p.Waiting {
+				task(st)
 			}
 			for _, s := range p.Sessions {
 				sess(s)
@@ -660,15 +661,15 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			for _, tm := range p.Terminals {
 				term(tm)
 			}
-			// AllTerminals is the world's terminals in the project, in order.
+			// Terminals is the world's terminals in the project, in order.
 			var all []*Terminal
 			for _, tm := range w.Terminals {
 				if tm.Project == p {
 					all = append(all, tm)
 				}
 			}
-			if !slices.Equal(p.AllTerminals, all) {
-				t.Fatalf("%q's terminals %v, want %v", p.Name, p.AllTerminals, all)
+			if !slices.Equal(p.Terminals, all) {
+				t.Fatalf("%q's terminals %v, want %v", p.Name, p.Terminals, all)
 			}
 		}
 		for _, tm := range w.Terminals {
@@ -676,8 +677,8 @@ func TestPropPointersStayInTheWorld(t *testing.T) {
 			if tm.Project != w.ProjectOf(tm.Root) {
 				t.Fatalf("terminal %s is in %q, not its root's", tm.Window, tm.Project.Name)
 			}
-			if tm.Stream != nil {
-				stream(tm.Stream)
+			if tm.Task != nil {
+				task(tm.Task)
 			}
 		}
 	})
@@ -720,8 +721,7 @@ func TestDeriveCopiesRoots(t *testing.T) {
 
 // Projects lists exactly the projects with something in them and the
 // pinned ones. The Members lists partition the sessions by project, and
-// every member is in its project's Sessions, in Away or under a
-// workstream.
+// every member is in its project's Sessions or in Away.
 func TestPropProjectsAndMembers(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInputs(t)
@@ -766,7 +766,7 @@ func TestPropProjectsAndMembers(t *testing.T) {
 				if s.Project != p {
 					t.Fatalf("%s is a member of %q but in %q", s.SessionID, p.Name, s.Project.Name)
 				}
-				if count(p.Sessions, s)+count(w.Away, s) == 0 && len(s.Streams) == 0 {
+				if count(p.Sessions, s)+count(w.Away, s) == 0 {
 					t.Fatalf("member %s is placed nowhere", s.SessionID)
 				}
 			}
@@ -886,8 +886,9 @@ func genIssue(t *rapid.T, label string) issues.Issue {
 
 // IssueLess and StartLess are strict orders, total on issues that differ
 // in status rank, priority rank or number. StartLess puts ready and inbox
-// first and otherwise agrees with IssueLess, and StreamLess is IssueLess
-// with the root as the last tiebreak.
+// first and otherwise agrees with IssueLess. WaitingLess puts review,
+// then blocked, then the rest, and then orders by priority, number and
+// root.
 func TestPropIssueOrders(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		a, b, c := genIssue(t, "a"), genIssue(t, "b"), genIssue(t, "c")
@@ -921,17 +922,26 @@ func TestPropIssueOrders(t *testing.T) {
 			}
 		}
 		ra, rb := rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "ra"), rapid.SampledFrom([]string{"/r", "/s"}).Draw(t, "rb")
-		sa, sb := &Stream{Key: Key{ra, a.ID}, Issue: a}, &Stream{Key: Key{rb, b.ID}, Issue: b}
-		want := IssueLess(a, b) || !IssueLess(b, a) && ra < rb
-		if StreamLess(sa, sb) != want {
-			t.Fatalf("StreamLess(%+v, %+v) = %v", sa, sb, !want)
+		sa, sb := &Task{Key: Key{ra, a.ID}, Issue: a}, &Task{Key: Key{rb, b.ID}, Issue: b}
+		rank := func(x issues.Issue) int {
+			switch x.Status {
+			case issues.Review:
+				return 0
+			case issues.Blocked:
+				return 1
+			}
+			return 2
+		}
+		want := rank(a) < rank(b) || rank(a) == rank(b) && (priorityLess(a, b) || !priorityLess(b, a) && ra < rb)
+		if WaitingLess(sa, sb) != want {
+			t.Fatalf("WaitingLess(%+v, %+v) = %v", sa, sb, !want)
 		}
 	})
 }
 
 // LeadOf picks from what it is given: the first session with a pane, else
-// the first terminal, else the first session. Stream.Lead is LeadOf over
-// the whole workstream.
+// the first terminal, else the first session. Task.Lead is LeadOf over
+// the whole task.
 func TestPropLeadOf(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		var ss []*Session
@@ -946,10 +956,10 @@ func TestPropLeadOf(t *testing.T) {
 		for i := range rapid.IntRange(0, 3).Draw(t, "terminals") {
 			ts = append(ts, &Terminal{Window: fmt.Sprint("@", i), Pane: "%t" + fmt.Sprint(i)})
 		}
-		st := &Stream{Sessions: ss, Terminals: ts}
+		st := &Task{Sessions: ss, Terminals: ts}
 		ls, lt := st.Lead()
 		if as, at := LeadOf(ss, ts); as != ls || at != lt {
-			t.Fatal("Lead is not LeadOf over the whole workstream")
+			t.Fatal("Lead is not LeadOf over the whole task")
 		}
 		// A filtered list shows a subset, in order.
 		sub := func(n int, keep []bool) []int {

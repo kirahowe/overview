@@ -59,7 +59,7 @@ func workModel(t *testing.T, w, h int) model {
 	ts := trackers{ovRoot: tracked("overview",
 		issues.Issue{ID: 4, Ref: "overview#4", Title: "show session cost", Status: issues.Review, Priority: "p2"},
 		issues.Issue{ID: 6, Ref: "overview#6", Title: "keep the list's width", Status: issues.InProgress, Priority: "p1"},
-		issues.Issue{ID: 5, Ref: "overview#5", Title: "answer notes in threads", Status: issues.Ready, Priority: "p2"},
+		issues.Issue{ID: 5, Ref: "overview#5", Title: "answer notes in threads", Status: issues.Review, Priority: "p2"},
 		issues.Issue{ID: 9, Ref: "overview#9", Title: "not started", Status: issues.Ready, Priority: "p0"},
 	)}
 	m = update(m, tea.WindowSizeMsg{Width: w, Height: h})
@@ -74,7 +74,7 @@ func screenText(m model) []string {
 
 func TestTheListLooksLikeTheMockup(t *testing.T) {
 	m := workModel(t, 44, 28)
-	m.sel = "task:" + ovRoot + "#6"
+	m.sel = "s1"
 	m.frame = 0
 	got := screenText(m)
 	// l is a line of the list: left and right in a 42-cell content
@@ -87,16 +87,14 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	}
 	// tmux draws the rule above, with the list's title in it.
 	want := []string{
-		rule("overview", "3 tasks · 1 session"),
-		l("#4 show session cost", "review p2"),
-		l("   no sessions", ""),
-		"▌" + l("#6 keep the list's width", "p1")[1:],
-		l("   ⠋ squeeze e2e", "working 1m"),
-		l("   ⠋ list squeeze", "working 3m"),
-		l("   $ go", "overview"),
-		l("#5 answer notes in threads", "ready p2"),
-		l("   ? reply on view.go note", "asking 2m"),
+		rule("overview", "2 waiting issues"),
+		l("⠋ squeeze e2e", "#6  working 1m"),
+		"▌" + l("⠋ list squeeze", "#6  working 3m")[1:],
+		l("? reply on view.go note", "asking 2m"),
 		l("○ digest prompt tweaks", "idle 1h"),
+		l("$ go", "#6  overview"),
+		l("#4 show session cost", "review p2"),
+		l("#5 answer notes in threads", "review p2"),
 		l("", ""),
 		rule("website", "2 sessions · 1 terminal"),
 		l("! deploy blog post", "blocked 5m"),
@@ -110,10 +108,10 @@ func TestTheListLooksLikeTheMockup(t *testing.T) {
 	}
 	want = append(want,
 		"── agents "+strings.Repeat("─", 44-10-12)+" priority ──",
-		l("? reply on view.go note", "overview #5"),
+		l("? reply on view.go note", "overview"),
 		l("! deploy blog post", "website"),
 		l("⠋ squeeze e2e", "overview #6"),
-		l("⠋ list squeeze", "overview #6"),
+		"▎"+l("⠋ list squeeze", "overview #6")[1:],
 		l("○ rss feed", "website"),
 		l("○ digest prompt tweaks", "overview"),
 		l("orchestrator off  s task • c claude", ""), // no tmux, so enter only says so
@@ -275,12 +273,14 @@ func TestTheAgentsListFollowsWhenTheListIsLong(t *testing.T) {
 	}
 }
 
-// A row of the agents says where the list has its session: the project,
-// and the task it works on there. The project is the task's, which is
-// where the session is listed, and not the one its directory is in.
+// A row of the agents says where the list has its session: its project,
+// or the app that runs it, and the tasks it holds, by number when they
+// are its project's and by ref when they are another's.
 func TestAnAgentsRowNamesItsProject(t *testing.T) {
 	app, site := &world.Project{Name: "app"}, &world.Project{Name: "website"}
-	st := &world.Stream{Key: world.Key{Root: "/u/app", ID: 6}, Project: app}
+	st := &world.Task{Key: world.Key{Root: "/u/app", ID: 6}, Project: app, IssuesID: "app"}
+	st2 := &world.Task{Key: world.Key{Root: "/u/app", ID: 7}, Project: app, IssuesID: "app"}
+	st3 := &world.Task{Key: world.Key{Root: "/u/app", ID: 8}, Project: app, IssuesID: "app"}
 	zed := &world.Host{Name: "Zed"}
 	for _, c := range []struct {
 		what       string
@@ -288,10 +288,11 @@ func TestAnAgentsRowNamesItsProject(t *testing.T) {
 		place, ref string
 	}{
 		{"on no task", world.Session{Project: site}, "website", ""},
-		{"on its project's task", world.Session{Project: app, Streams: []*world.Stream{st}}, "app", "#6"},
-		{"on another project's task", world.Session{Project: site, Streams: []*world.Stream{st}}, "app", "#6"},
+		{"on its project's task", world.Session{Project: app, Holds: []*world.Task{st}}, "app", "#6"},
+		{"on another project's task", world.Session{Project: site, Holds: []*world.Task{st}}, "website", "app#6"},
+		{"on three tasks", world.Session{Project: app, Holds: []*world.Task{st, st2, st3}}, "app", "#6 #7 +1"},
 		{"another app's", world.Session{Project: site, Host: zed}, "Zed", ""},
-		{"another app's, on a task", world.Session{Project: site, Host: zed, Streams: []*world.Stream{st}}, "app", "#6"},
+		{"another app's, on a task", world.Session{Project: site, Host: zed, Holds: []*world.Task{st}}, "Zed", "app#6"},
 	} {
 		e := entry{kind: sessionEntry, sess: &c.sess, alias: agentsPrefix}
 		if place, ref := agentsNote(e, zed.Label()); place != c.place || ref != c.ref {
@@ -306,8 +307,8 @@ func TestAnAgentsRowNamesItsProject(t *testing.T) {
 // by its end, and the task's number is the last of the note to go.
 func TestAnAgentsRowFitsItsProjectByDisplayWidth(t *testing.T) {
 	m := newTestModel(t)
-	st := &world.Stream{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
-	s := &world.Session{Row: row("s", "fix-parser-overflow", "", 1), Project: st.Project, Streams: []*world.Stream{st}}
+	st := &world.Task{Key: world.Key{Root: "/u/code/projects/日本語日本", ID: 6}, Project: &world.Project{Name: "日本語日本"}}
+	s := &world.Session{Row: row("s", "fix-parser-overflow", "", 1), Project: st.Project, Holds: []*world.Task{st}}
 	e := entry{kind: sessionEntry, sess: s, alias: agentsPrefix}
 	// The mark and ten cells of the name take 12 columns and the note 13:
 	// ten of project, which are 15 bytes, a space and the number.
@@ -333,9 +334,9 @@ func TestAnIdleTrackedProjectCountsItsOpenIssues(t *testing.T) {
 	if got := sectionNote(idle); got != "4 open issues" {
 		t.Errorf("idle tracked project: %q, want 4 open issues", got)
 	}
-	busy := section{Title: "app", Tracked: true, Open: 4, Tasks: 1, Entries: []entry{{kind: workstreamEntry}, {kind: sessionEntry, stream: &world.Stream{}}}}
-	if got := sectionNote(busy); got != "1 task" {
-		t.Errorf("project with a workstream: %q, want 1 task", got)
+	busy := section{Title: "app", Tracked: true, Open: 4, Waiting: 1, Sessions: 1, Entries: []entry{{kind: sessionEntry}, {kind: issueEntry}}}
+	if got := sectionNote(busy); got != "1 waiting issue · 1 session" {
+		t.Errorf("project with an issue that waits: %q, want 1 waiting issue · 1 session", got)
 	}
 }
 
@@ -353,13 +354,13 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 		{section{Title: "web", Sessions: 1, Terminals: 2, Entries: []entry{{kind: sessionEntry}, {kind: terminalEntry}, {kind: terminalEntry}}}, "1 session · 2 terminals"},
 		{section{Title: "web", Sessions: 2, Terminals: 1, Entries: []entry{{kind: sessionEntry}}}, "1 of 2 sessions · 0 of 1 terminal"},
 		// "/digest" and "/fix" on one project say the same parts.
-		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 1, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks · 0 of 1 session"},
-		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 tasks · 1 session"},
+		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 1, Entries: []entry{{kind: issueEntry}}}, "1 of 3 waiting issues · 0 of 1 session"},
+		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 waiting issues · 1 session"},
 		{section{Title: "app", Tracked: true, Sessions: 1, Entries: []entry{{kind: sessionEntry}}}, "1 session"},
-		{section{Title: "app", Tracked: true, Tasks: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 tasks · 1 of 2 sessions"},
+		{section{Title: "app", Tracked: true, Waiting: 3, Sessions: 2, Entries: []entry{{kind: sessionEntry}}}, "0 of 3 waiting issues · 1 of 2 sessions"},
 		{section{Title: "away", Away: true, Sessions: 2, Entries: []entry{{kind: sessionEntry}, {kind: sessionEntry}}}, "2 sessions"},
-		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3, Entries: []entry{{kind: workstreamEntry}}}, "1 of 3 tasks"},
-		{section{Title: "app", Tracked: true, Open: 6, Tasks: 3}, "0 of 3 tasks"},
+		{section{Title: "app", Tracked: true, Open: 6, Waiting: 3, Entries: []entry{{kind: issueEntry}}}, "1 of 3 waiting issues"},
+		{section{Title: "app", Tracked: true, Open: 6, Waiting: 3}, "0 of 3 waiting issues"},
 		{section{Title: "app", Tracked: true}, "no open issues"},
 	}
 	for _, c := range cases {
@@ -373,7 +374,7 @@ func TestHeadingCountsKeepTheirUnit(t *testing.T) {
 		m = update(m, keyMsg(k))
 	}
 	text := strings.Join(screenText(m), "\n")
-	if !strings.Contains(text, "1 of 3 tasks") || !strings.Contains(text, "· 1 match ") {
+	if !strings.Contains(text, "0 of 2 waiting issues · 1 of 4 sessions") || !strings.Contains(text, "· 1 match ") {
 		t.Errorf("a search for one session:\n%s", text)
 	}
 }
@@ -664,8 +665,8 @@ func TestTagTitleKeepsTheTag(t *testing.T) {
 }
 
 // In the 24-column list a row keeps ten cells of its name: a session
-// drops its review badge's words before the name is cut further, a
-// workstream its priority, and the agents show a long project by its end
+// drops its review badge's words before the name is cut further, an
+// issue its priority, and the agents show a long project by its end
 // rather than not at all.
 func TestNarrowRowsKeepTheirNames(t *testing.T) {
 	m := newTestModel(t)
@@ -673,14 +674,14 @@ func TestNarrowRowsKeepTheirNames(t *testing.T) {
 	r := row("s", "fix-parser-overflow", "", 1)
 	r.LastReply = "ok?"
 	s := &world.Session{Row: r, Project: &world.Project{Name: "/private/tmp/qa2/work/alpha"}, Review: review.Summary{Open: 1, Waiting: 1}}
-	st := &world.Stream{Key: world.Key{Root: "/a", ID: 7}, Issue: issues.Issue{ID: 7, Title: "Digest scheduling", Status: issues.Review, Priority: "p0"}}
+	st := &world.Task{Key: world.Key{Root: "/a", ID: 7}, Issue: issues.Issue{ID: 7, Title: "Digest scheduling", Status: issues.Review, Priority: "p0"}}
 	for _, c := range []struct {
 		e    entry
 		want string
 	}{
 		{entry{kind: sessionEntry, sess: s}, "? fix-parse… ✎1 asking"},
 		{entry{kind: sessionEntry, sess: s, alias: agentsPrefix}, "? fix-parse… …rk/alpha"},
-		{entry{kind: workstreamEntry, stream: st}, "#7 Digest sche… review"},
+		{entry{kind: issueEntry, task: st}, "#7 Digest sche… review"},
 	} {
 		if got := strings.TrimSpace(ansi.Strip(m.entryLine(c.e, unmarked))); got != c.want {
 			t.Errorf("%q, want %q", got, c.want)

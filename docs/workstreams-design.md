@@ -2,10 +2,10 @@
 
 Written 2026-10-23, revised 2026-11-16. This is the design for showing
 which task each session works on, and for a dashboard of one task,
-called the cockpit. Phases 1 to 3 are built on the first version of
+called the cockpit. Phases 1 to 3 were built on the first version of
 this design, which grouped a project's sessions under its issues as
-workstreams. Phase 5 replaces that grouping with the model described
-here, and is not built yet.
+workstreams. Phase 5 replaced that grouping with the model described
+here.
 
 ## What it is for
 

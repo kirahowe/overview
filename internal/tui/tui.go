@@ -750,9 +750,8 @@ func filled(old, now []entry, sel string) (string, bool) {
 
 // nearKey is where the cursor goes when sel, the key of an entry in old,
 // is not in now. A session's entry that has gone goes to another entry
-// of the same session, as samePlace finds it, and a workstream that has
-// gone to the first session under it that is still listed, so the cursor
-// stays with the session it was on. Otherwise it stays in its project,
+// of the same session, as samePlace finds it, and an issue that has
+// gone to the session that holds it now, so the cursor follows the work. Otherwise it stays in its project,
 // as sameProject finds, and else it is nearest: a cursor on an entry of
 // its own stays among those, out of the agents list, while there are
 // any. It lands on a heading only when nothing else is left.
@@ -828,26 +827,21 @@ func sameProject(old, now []entry, sel string) (string, bool) {
 }
 
 // samePlace is the entry in now for the session the entry sel in old
-// showed: the one in the same place, under the same workstream or in the
-// agents list, if there is one, else its primary entry, else any. For a
-// workstream sel it is the primary entry of the first session that was
-// under it and is still listed. ok is false when there is none, or sel
-// is neither.
+// showed: the one on the same side, in its project or in the agents list,
+// if there is one, else any. For an issue sel it is the primary entry of
+// the first session that holds the issue now, as when a session picks up
+// an issue that waited on you. ok is false when there is none, or sel is
+// neither.
 func samePlace(old, now []entry, sel string) (string, bool) {
 	i := slices.IndexFunc(old, func(e entry) bool { return e.key() == sel })
 	if i < 0 {
 		return "", false
 	}
 	was := old[i]
-	if was.kind == workstreamEntry {
-		for _, c := range children(old, was.task()) {
-			if c.kind != sessionEntry {
-				continue
-			}
-			for _, e := range now {
-				if e.kind == sessionEntry && e.alias == "" && e.sess.SessionID == c.sess.SessionID {
-					return e.key(), true
-				}
+	if was.kind == issueEntry {
+		for _, e := range now {
+			if e.kind == sessionEntry && e.alias == "" && slices.ContainsFunc(e.sess.Holds, func(t *world.Task) bool { return t.Key == was.task.Key }) {
+				return e.key(), true
 			}
 		}
 		return "", false
@@ -856,24 +850,19 @@ func samePlace(old, now []entry, sel string) (string, bool) {
 		return "", false
 	}
 	agents := was.alias == agentsPrefix
-	primary, other := "", ""
+	other := ""
 	for _, e := range now {
 		if e.kind != sessionEntry || e.sess.SessionID != was.sess.SessionID {
 			continue
 		}
-		switch {
-		case (e.alias == agentsPrefix) == agents && (agents || e.stream == was.stream):
+		if (e.alias == agentsPrefix) == agents {
 			return e.key(), true
-		case e.alias == "" && primary == "":
-			primary = e.key()
-		case other == "":
+		}
+		if other == "" {
 			other = e.key()
 		}
 	}
-	if primary == "" {
-		primary = other
-	}
-	return primary, primary != ""
+	return other, other != ""
 }
 
 // stick applies stuck across one update, from the model before it.
@@ -937,10 +926,11 @@ func (m model) unblur() model {
 }
 
 // needy says whether n stops at an entry: a session's primary entry when
-// the session needs you, or a workstream in review.
+// the session needs you, or an issue, since every issue listed waits on
+// you.
 func needy(e entry) bool {
-	if e.kind == workstreamEntry {
-		return e.stream.Issue.Status == issues.Review
+	if e.kind == issueEntry {
+		return true
 	}
 	r, ok := e.session()
 	return ok && e.alias == "" && r.NeedsYou()
@@ -948,7 +938,7 @@ func needy(e entry) bool {
 
 // place is an entry's key and the window its pane is in, "" when it has
 // no pane on this server. alias marks an entry that shows another's pane:
-// a session's entry that is not its primary one, or a workstream.
+// a session's entry in the agents list, or an issue.
 type place struct {
 	key, window string
 	alias       bool
@@ -958,7 +948,7 @@ type place struct {
 func (m model) placed(es []entry) []place {
 	out := make([]place, len(es))
 	for i, e := range es {
-		out[i].key, out[i].alias = e.key(), e.alias != "" || e.kind == workstreamEntry
+		out[i].key, out[i].alias = e.key(), e.alias != "" || e.kind == issueEntry
 		if e.kind == terminalEntry {
 			out[i].window = e.term.Window
 		} else if p, ok := m.pane(entryPane(es, e)); ok {
@@ -1211,7 +1201,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	// enter on an idle workstream opens the cockpit, so it stays open.
+	// enter on an idle issue opens the cockpit, so it stays open.
 	// Going to another screen closes it too, in show, which asks tmux
 	// once for the zoom the screen wants.
 	if m.cockpit.open && closesCockpit(a.do) && a.do != showScreen && a.do != toggleScreen && (a.do != open || !m.idleSelected()) {
@@ -1405,7 +1395,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = e.key()
 		case ok && e.kind == projectEntry:
 			return m.say("x unpins a pinned project, and " + e.proj.Name + " is not pinned"), nil
-		case ok && e.kind == workstreamEntry:
+		case ok && e.kind == issueEntry:
 			return m.say(m.moveToSay(e, "x stops a background session or closes a terminal")), nil
 		case !isSession:
 			return m.say("nothing to stop"), nil
@@ -1419,18 +1409,18 @@ func (m model) apply(a action) (model, tea.Cmd) {
 			m.confirm = row.SessionID
 		}
 	case newSession:
-		if ok && e.stream != nil {
-			return m.startOn(e.stream.Root, e.stream.Issue)
+		if t := e.focus(); ok && t != nil {
+			return m.startOn(t.Root, t.Issue)
 		}
 		return m.start(m.rootOf(e, ok))
 	case newTerminal:
 		task := ""
 		if ok {
-			task = e.task()
+			task = e.focusKey()
 		}
 		return m.openTerminal(m.rootOf(e, ok), task)
 	case openReview:
-		if ok && e.kind == workstreamEntry {
+		if ok && e.kind == issueEntry {
 			return m.say(m.moveToSay(e, "v reviews a session's changes")), nil
 		}
 		if !isSession {
@@ -1542,7 +1532,7 @@ func (m model) apply(a action) (model, tea.Cmd) {
 		m.verdict = verdictPrompt{}
 		return m.say("left it as it was"), nil
 	case copyID:
-		if ok && e.kind == workstreamEntry {
+		if ok && e.kind == issueEntry {
 			return m.say(m.moveToSay(e, "y copies a session's attach command")), nil
 		}
 		if !isSession {
@@ -1636,16 +1626,16 @@ func (m model) rootOf(e entry, ok bool) string {
 		return e.term.Root
 	case e.kind == projectEntry:
 		return e.proj.Root
-	case e.stream != nil:
-		return e.stream.Root
+	case e.kind == issueEntry:
+		return e.task.Root
 	}
 	return m.root(e.sess.Cwd)
 }
 
-// moveToSay is what a key that acts on a session or terminal says on a
-// workstream: what it does, and to move to an entry under it.
+// moveToSay is what a key that acts on a session or terminal says on an
+// issue: what it does, and that the issue is neither.
 func (m model) moveToSay(e entry, does string) string {
-	return does + ": move to one under #" + strconv.Itoa(e.stream.ID)
+	return does + ", and #" + strconv.Itoa(e.task.ID) + " is an issue"
 }
 
 // copyText puts text on this machine's clipboard. In tmux the view also
@@ -1709,16 +1699,16 @@ func (k enterKind) does(what string) string {
 }
 
 // enterOn is what enter does on an entry, and the entry it does it to.
-// On a workstream it acts on the workstream's lead, the entry the stage
-// shows beside it, and with nothing under it it opens the cockpit, or in
-// the cockpit says how to start a session. A background session gets an
+// On an issue it acts on the issue's lead, the entry the stage shows
+// beside it, and with none it opens the cockpit, or in the cockpit says
+// how to start a session. A background session gets an
 // attach pane first. One that runs inside another app brings that app
 // forward, since that is where it is used. A project's heading only says
 // how to start something there.
 func (m model) enterOn(e entry) (entry, enterKind) {
 	switch e.kind {
-	case workstreamEntry:
-		if c, ok := lead(children(m.ordered(), e.task())); ok {
+	case issueEntry:
+		if c, ok := lead(m.ordered(), e.task); ok {
 			return m.enterOn(c)
 		}
 		if m.cockpit.open {
@@ -1782,8 +1772,8 @@ func (m model) carry(e entry, k enterKind) (model, tea.Cmd) {
 // enterNote is what enter says on an entry where it opens nothing.
 func (m model) enterNote(e entry) string {
 	switch e.kind {
-	case workstreamEntry:
-		return "No session works on #" + strconv.Itoa(e.stream.ID) + ". c starts one, t a terminal."
+	case issueEntry:
+		return "No session is linked to #" + strconv.Itoa(e.task.ID) + ". c starts one, t a terminal."
 	case projectEntry:
 		p := e.proj
 		switch {
@@ -1826,7 +1816,7 @@ func (m model) start(dir string) (model, tea.Cmd) {
 		session: m.session, dir: dir, env: m.claudeEnv(), command: m.home.NewArgs()})
 }
 
-// startOn runs a new claude at root on a workstream's issue: its first
+// startOn runs a new claude at root on a task's issue: its first
 // prompt names the issue, which links the session to it once its
 // transcript is read.
 func (m model) startOn(root string, i issues.Issue) (model, tea.Cmd) {
@@ -1856,7 +1846,7 @@ func (m model) startWith(root string, i issues.Issue, prompt string) (model, tea
 }
 
 // openTerminal starts tmux's default shell at dir, a project's root, in a
-// window of its own, and the cursor goes to it. task is the workstream the
+// window of its own, and the cursor goes to it. task is the task the
 // terminal is for, "" for none.
 func (m model) openTerminal(dir, task string) (model, tea.Cmd) {
 	if dir == "" {

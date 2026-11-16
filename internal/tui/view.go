@@ -402,8 +402,7 @@ const (
 	cursorRow
 	// echoRow is a line that shows the cursor's session somewhere the
 	// cursor is not: among the agents while the cursor is in the list,
-	// in the list while it is among the agents, or under another of the
-	// session's workstreams.
+	// or in the list while it is among the agents.
 	echoRow
 )
 
@@ -554,33 +553,32 @@ func (p notePart) compact() string {
 }
 
 // noteParts are the counts a project's rule ends with, each naming its
-// unit: a tracked project's tasks, or its open issues when it has no
-// task, and then its sessions and terminals under no task.
+// unit: a tracked project's issues that wait on you, or its open issues
+// when none waits, and then its sessions and terminals.
 //
 // Which parts show is the World's, never the search's: a part shows when
 // the project has any of its kind, and a search changes only how many of
 // them it says are shown, so "/digest" and "/fix" on one project both say
-// "k of 3 tasks · k of 1 session", zeros included. A kind the project has
+// "k of 3 waiting issues · k of 1 session", zeros included. A kind the project has
 // none of is left out, so a part never reads "no …" beside another. A
 // project with nothing to count says "no open issues" when it tracks
 // them, else "no sessions".
 func noteParts(sec section) []notePart {
-	tasks, sessions, terms := 0, 0, 0
+	waiting, sessions, terms := 0, 0, 0
 	for _, e := range sec.Entries {
-		switch {
-		case e.kind == workstreamEntry:
-			tasks++
-		case e.stream != nil:
-		case e.kind == sessionEntry:
+		switch e.kind {
+		case issueEntry:
+			waiting++
+		case sessionEntry:
 			sessions++
-		case e.kind == terminalEntry:
+		case terminalEntry:
 			terms++
 		}
 	}
 	var out []notePart
 	switch {
-	case sec.Tracked && sec.Tasks > 0:
-		out = append(out, notePart{tasks, sec.Tasks, "task"})
+	case sec.Tracked && sec.Waiting > 0:
+		out = append(out, notePart{waiting, sec.Waiting, "waiting issue"})
 	case sec.Tracked && sec.Open > 0:
 		out = append(out, notePart{sec.Open, sec.Open, "open issue"})
 	}
@@ -743,11 +741,8 @@ func (m model) projectLines(secs []section, mk marks) (lines, owners []string) {
 		} else {
 			add("", m.rule(sec.Title, style, sectionNotes(sec)...))
 		}
-		for j, e := range es {
+		for _, e := range es {
 			add(e.key(), m.entryLine(e, mk.of(e.key())))
-			if e.kind == workstreamEntry && (j+1 == len(es) || es[j+1].stream != e.stream) {
-				add(e.key(), m.plain(dim.Render("   no sessions")))
-			}
 		}
 	}
 	return lines, owners
@@ -876,16 +871,14 @@ func (m model) offerLine(p *world.Project) string {
 // entryLine renders one entry as one line, marked as how says.
 func (m model) entryLine(e entry, how rowMark) string {
 	text := fg(pal.Text)
-	indent := []seg{}
-	if e.stream != nil && e.kind != workstreamEntry {
-		indent = []seg{{"   ", text}}
-	}
 	switch e.kind {
-	case workstreamEntry:
-		i := e.stream.Issue
+	case issueEntry:
+		i := e.task.Issue
 		var right []seg
 		switch i.Status {
 		case issues.InProgress:
+			// In progress with nobody on it.
+			right = append(right, seg{"stalled ", fg(pal.Asking)})
 		case issues.Review:
 			right = append(right, seg{"review ", fg(pal.Blocked)})
 		case issues.Blocked:
@@ -902,7 +895,13 @@ func (m model) entryLine(e entry, how rowMark) string {
 		}
 		return m.line(left, m.fitRight(left, full, right, nil), false, how)
 	case terminalEntry:
-		left := append(indent, seg{"$ ", codeFg}, seg{e.term.Title, text})
+		left := []seg{{"$ ", codeFg}, {e.term.Title, text}}
+		if t := e.term.Task; t != nil {
+			// The task it was opened for, as a session's label, then where
+			// it is, which gives way first.
+			label := "#" + strconv.Itoa(t.ID)
+			return m.line(left, m.fitRight(left, []seg{{label + "  ", dim}, {m.short(e.term.Path), dim}}, []seg{{label, dim}}, nil), false, how)
+		}
 		return m.line(left, []seg{{m.short(e.term.Path), dim}}, true, how)
 	case projectEntry:
 		return m.ruleLine(e.proj.Name, heading, how == cursorRow)
@@ -917,7 +916,9 @@ func (m model) entryLine(e entry, how rowMark) string {
 	if away && !r.NeedsYou() {
 		name = dim
 	}
-	left := append(indent, seg{mark + " ", markStyle}, seg{r.Label(), name})
+	left := []seg{{mark + " ", markStyle}, {r.Label(), name}}
+	// The tasks it holds, as labels after its name.
+	held := labelText(labels(r, r.Project))
 	var right []seg
 	switch {
 	case e.alias == agentsPrefix:
@@ -944,8 +945,16 @@ func (m model) entryLine(e entry, how rowMark) string {
 		}
 		right = m.fitRight(left, append(choices, nil)...)
 	case away:
-		right = m.fitRight(left, []seg{{app, dim}})
+		if held != "" {
+			right = m.fitRight(left, []seg{{held + "  ", dim}, {app, dim}}, []seg{{held, dim}}, nil)
+		} else {
+			right = m.fitRight(left, []seg{{app, dim}})
+		}
 	default:
+		var tasks []seg
+		if held != "" {
+			tasks = []seg{{held + "  ", dim}}
+		}
 		var badge, mark []seg
 		if b := reviewBadge(r.Review); b != "" {
 			badge = []seg{{b + " ", fg(pal.Accent)}}
@@ -957,16 +966,17 @@ func (m model) entryLine(e entry, how rowMark) string {
 			state += " " + age
 		}
 		right = m.fitRight(left,
-			append(slices.Clip(badge), seg{state, wordStyle}),
-			append(slices.Clip(badge), seg{word, wordStyle}),
-			append(slices.Clip(mark), seg{word, wordStyle}),
+			slices.Concat(tasks, badge, []seg{{state, wordStyle}}),
+			slices.Concat(tasks, badge, []seg{{word, wordStyle}}),
+			slices.Concat(tasks, mark, []seg{{word, wordStyle}}),
+			slices.Concat(tasks, []seg{{word, wordStyle}}),
 			[]seg{{word, wordStyle}},
 			nil)
 	}
 	return m.line(left, right, false, how)
 }
 
-// nameMin is the fewest cells of a row's name, or a workstream's title,
+// nameMin is the fewest cells of a row's name, or a task's title,
 // that the list keeps before it cuts the name further for what goes on
 // the right. Below it a name stops being readable.
 const nameMin = 10
@@ -986,8 +996,9 @@ func nameRoom(left []seg) int {
 // So the right side gives way in the order the choices list, and the
 // name is cut below nameMin only once the last choice is reached. A
 // session drops its age, then its review badge's words ("✎2 reply"
-// becomes "✎2"), then the badge, then its state word, which its mark
-// still shows; a workstream drops its priority, then its status.
+// becomes "✎2"), then the badge, then its tasks' labels, then its state
+// word, which its mark still shows; an issue drops its priority, then its
+// status.
 func (m model) fitRight(left []seg, choices ...[]seg) []seg {
 	keep := nameRoom(left)
 	for _, c := range choices {
@@ -1002,18 +1013,29 @@ func (m model) fitRight(left []seg, choices ...[]seg) []seg {
 }
 
 // agentsNote is what the agents list says of a session, which is where
-// the list has it: the project it is listed in, and the task it works on
-// there, as "#6", "" for none. The agents are in no project's section, so
-// a task's number alone would not say whose task it is. A session another
-// app runs on no task has that app for its place, app.
+// the list has it: its project, and the tasks it holds as labelText
+// gives them, "" for none. The agents are in no project's section, so the
+// project says whose numbers they are. A session another app runs has
+// that app for its place, app.
 func agentsNote(e entry, app string) (place, ref string) {
-	switch st := e.sess.Primary(); {
-	case st != nil:
-		return st.Project.Name, "#" + strconv.Itoa(st.ID)
-	case e.sess.Host != nil:
-		return app, ""
+	ref = labelText(labels(e.sess, e.sess.Project))
+	if e.sess.Host != nil {
+		return app, ref
 	}
-	return e.sess.Project.Name, ""
+	return e.sess.Project.Name, ref
+}
+
+// maxLabels is how many of a session's tasks its row names before it
+// counts the rest.
+const maxLabels = 2
+
+// labelText is the labels of a session's tasks as its row shows them:
+// the first maxLabels, then "+n" for the rest, "" for none.
+func labelText(ls []string) string {
+	if len(ls) > maxLabels {
+		ls = append(ls[:maxLabels:maxLabels], "+"+strconv.Itoa(len(ls)-maxLabels))
+	}
+	return strings.Join(ls, " ")
 }
 
 type detailCache struct {
@@ -1369,7 +1391,7 @@ func (m model) entryHints(e entry, ok bool) []hint {
 	}
 	enter := m.enterHint(e)
 	switch e.kind {
-	case workstreamEntry:
+	case issueEntry:
 		return slices.Concat(enter, s, []hint{c, t, {"m", "mark"}, {"n", "next"}, help})
 	case terminalEntry:
 		return slices.Concat(enter, s, []hint{c, t, {"x", "close"}, help})
@@ -1381,6 +1403,9 @@ func (m model) entryHints(e entry, ok bool) []hint {
 		return slices.Concat(enter, s, []hint{c, t}, x, []hint{{"a", "add"}, help})
 	}
 	hs := slices.Concat(enter, s, []hint{c, t, {"v", "review"}})
+	if e.focus() != nil {
+		hs = append(hs, hint{"m", "mark"})
+	}
 	if e.sess.Background() {
 		hs = append(hs, hint{"x", "stop"})
 	}
