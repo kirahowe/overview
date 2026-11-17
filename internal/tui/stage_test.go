@@ -1784,7 +1784,7 @@ func TestAnEmptyPinnedProjectHasAPlaceholder(t *testing.T) {
 		t.Fatalf("spawned %+v", f.spawned)
 	}
 	// x asks first, and anything but y leaves it pinned.
-	m, cmd = press(m, "esc", "g", "x")
+	m, _ = press(m, "esc", "g", "x")
 	if m.confirm != "project:/code/empty" || !strings.Contains(ansi.Strip(m.View()), "Unpin /code/empty?") {
 		t.Fatalf("x on the placeholder: confirm %q", m.confirm)
 	}
@@ -1968,7 +1968,7 @@ func TestALateAttachDoesNotTakeTheKeyboard(t *testing.T) {
 	m = pressSettled(t, m, "g")
 	m, spawned := press(m, "enter")
 	m = pressSettled(t, m, "j", "j")
-	m = settle(t, m, spawned)
+	_ = settle(t, m, spawned)
 	if len(f.spawned) != 1 || len(f.selects) != 0 || !f.staged(paneWithTTY(f, "ttys011")) {
 		t.Fatalf("spawned %d, selects %v, list in %s", len(f.spawned), f.selects, f.stage())
 	}

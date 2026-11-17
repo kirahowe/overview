@@ -141,7 +141,8 @@ func pickParents(roots []string) []string {
 // with what was typed after its last slash, ignoring case, hidden ones only
 // when that starts with a dot, and sorts by name.
 func pickMatches(query, home string, paths []string, shown map[string]bool, short func(string) string) []string {
-	keep, by := func(string) bool { return false }, short
+	var keep func(string) bool
+	by := short
 	if isPathQuery(query) {
 		_, prefix := splitPathQuery(query, home)
 		lp := strings.ToLower(prefix)

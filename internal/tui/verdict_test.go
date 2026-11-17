@@ -98,7 +98,7 @@ func TestMarkingAnIssueInTheIssuesCard(t *testing.T) {
 	m = resized(t, m, 150, 40)
 	m = pressSettled(t, m, "o", "tab", "j", "j")
 	_, picked, _ := m.picked()
-	m = pressSettled(t, m, "m", "a", "enter")
+	_ = pressSettled(t, m, "m", "a", "enter")
 	if want := [][]string{{"--dir", "/code/app", "approve", "8"}}; picked.ID != 8 || !slices.EqualFunc(*calls, want, slices.Equal) {
 		t.Fatalf("picked #%d, calls %v", picked.ID, *calls)
 	}

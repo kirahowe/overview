@@ -423,14 +423,6 @@ func genTranscript() *rapid.Generator[genTr] {
 	})
 }
 
-func mustTime(s string) time.Time {
-	at, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		panic(err)
-	}
-	return at
-}
-
 // factsOf is what a file's lines have added up to, without the file.
 func factsOf(f *tfile) Facts {
 	g := f.fold

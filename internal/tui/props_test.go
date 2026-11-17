@@ -52,14 +52,6 @@ func listWorld(rows []fleet.Row, panes []tmux.Pane, pinned []string, ts map[stri
 	return &w
 }
 
-// fakeProject is the name of the project of cwd.
-func fakeProject(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-	return path.Clean(cwd)
-}
-
 func phrase(t *rapid.T, label string) string {
 	n := rapid.IntRange(0, 3).Draw(t, label+"n")
 	ws := make([]string, n)

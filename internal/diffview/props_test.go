@@ -26,7 +26,7 @@ var pieces = []string{
 	"\x1b[31m", "\x1b[2J", "\x1b]0;title\x07", "\x1b", "\x00", "\x07", "\x08", "\x7f",
 	"\u0085", "\u009b", "\r", "\xff", "\xc3", "\xe6\x97",
 	"日", "本語", "😀", "👨‍👩‍👧", "☺️", "️", "é", "́", "̈",
-	"‮", "⁦", "‏", "‍", "­", " ",
+	"\u202e", "\u2066", "\u200f", "\u200d", "\u00ad", " ",
 	strings.Repeat("long", 40),
 }
 
@@ -398,7 +398,7 @@ func TestCleanCases(t *testing.T) {
 		{"\x00\x7f", "␀␡"},
 		{"c1\u009b", "c1�"},
 		{"bad\xffbyte", "bad�byte"},
-		{"rtl‮evil", "rtl�evil"},
+		{"rtl\u202eevil", "rtl�evil"},
 	}
 	for _, c := range cases {
 		if got, _ := clean(c.in); got != c.want {

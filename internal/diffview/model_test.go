@@ -645,7 +645,7 @@ func TestResize(t *testing.T) {
 	f.panes = &fakePanes{}
 	cfg.Self = "%3"
 	m := open(t, f, cfg, 100, 30)
-	m = press(t, m, "z", "z", "z", "z")
+	_ = press(t, m, "z", "z", "z", "z")
 	want := []string{"resize %3 80%", "zoom %3", "zoom %3", "resize %3 45%", "resize %3 80%"}
 	if !slices.Equal(f.panes.calls, want) {
 		t.Errorf("calls %q, want %q", f.panes.calls, want)

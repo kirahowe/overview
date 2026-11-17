@@ -496,7 +496,7 @@ func TestAStrayAgentsPaneCloses(t *testing.T) {
 	if f.find(stray.ID) >= 0 || m.apart() {
 		t.Fatalf("the stray pane is still there: %+v", f.panes)
 	}
-	m = relist(t, m, f)
+	_ = relist(t, m, f)
 	if p := agentsPaneOf(f); p.ID == "" || p.Window != f.stage() || len(f.unders) != 2 {
 		t.Fatalf("no new pane under the list: %+v, started %d", p, len(f.unders))
 	}

@@ -47,6 +47,7 @@ var ours = map[string]bool{"fleet": true, "issues": true, "review": true, "tmux"
 
 func TestArchDeriveIsPure(t *testing.T) {
 	fset := token.NewFileSet()
+	//lint:ignore SA1019 these tests read one package's non-test files, which carry no build tags
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
 	if err != nil {
 		t.Fatal(err)

@@ -288,10 +288,6 @@ func runAll(cmd tea.Cmd, out chan<- tea.Msg) {
 
 func tracked(id string, list ...issues.Issue) tracker { return tracker{id: id, issues: list} }
 
-func issue(id int, status, title string) issues.Issue {
-	return issues.Issue{ID: id, Status: status, Title: title, Priority: "p2"}
-}
-
 // taskModel runs in the fake tmux with two sessions in /code/app, which
 // tracks its issues: #6 is in progress, and #4 is in review, waiting on you.
 func taskModel(t *testing.T, f *fakeMux) model {

@@ -57,13 +57,6 @@ func newPalette(t tui.Theme) palette {
 	return p
 }
 
-// over is st with the background of bg, for code drawn on a changed
-// line.
-func (st Style) over(bg Style) Style {
-	st.Bg = bg.Bg
-	return st
-}
-
 // tokenStyle is the colour chroma's style gives a token type, on base.
 func (p palette) tokenStyle(tt chroma.TokenType, base Style) Style {
 	if p.syntax == nil {
