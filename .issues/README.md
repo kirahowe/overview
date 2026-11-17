@@ -8,6 +8,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [1](1-resume-a-session-from-overview.md) | Resume a session from overview | feature | P2 |
+| [6](6-fix-testpanelsmode-flaking-in-a-full-e2e-run.md) | Fix TestPanelsMode flaking in a full e2e run | bug | P2 |
 
 ### Ready
 

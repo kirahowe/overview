@@ -1,0 +1,11 @@
+{:id 6
+ :title "Fix TestPanelsMode flaking in a full e2e run"
+ :status :inbox
+ :type :bug
+ :priority :p2
+ :created "2026-11-17"
+ :updated "2026-11-17"
+ :tags #{"e2e" "flaky"}
+ :blocked-by #{}
+ :related #{}
+ :details "6-fix-testpanelsmode-flaking-in-a-full-e2e-run.md"}
