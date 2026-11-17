@@ -36,7 +36,7 @@ type fakeMux struct {
 	moves   []string          // the size each move asked for
 	follows []string          // the panes Follow took the list beside
 	fits    []string          // the panes FitWindow was asked for, and before which move
-	held    bool              // FitWindow leaves windows as they are, as tmux does with two clients
+	held    bool              // FitWindow leaves windows as they are, as tmux does with a size held by hand
 	widths  []int             // the widths SetWidth gave the list
 	layouts []string          // the windows whose layout was read
 	set     map[string]string // the layouts set, by window
@@ -374,7 +374,7 @@ func (f *fakeMux) Follow(list, target, size string, with tmux.Carried) error {
 }
 
 // FitWindow gives pane's window the size of the window shown, as tmux
-// does with one client attached.
+// does unless the window's size is held by hand.
 func (f *fakeMux) FitWindow(pane string) error {
 	i := f.find(pane)
 	if i < 0 {
@@ -1139,10 +1139,9 @@ func (f *fakeMux) beside() string {
 // when they were last shown. tmux snaps each to the terminal's width, which
 // takes the difference out of the list, and before the view kept its width
 // a few moves took it to a column, where the view panicked and its pane
-// closed. The next listing gives the list its width back. With one client
-// attached the view has tmux size such a window before the list goes in,
-// so this is what is left with two, when tmux leaves the window as the
-// other client had it.
+// closed. The next listing gives the list its width back. The view has
+// tmux size such a window before the list goes in, so this is what is
+// left when that fails, or when the window's size is held by hand.
 func TestASqueezedListGetsItsWidthBack(t *testing.T) {
 	f := newFakeMux()
 	f.held = true

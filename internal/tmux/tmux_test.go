@@ -1658,8 +1658,9 @@ func windowSize(t *testing.T, s Server, pane string) string {
 // When the terminal changes size, tmux resizes the window it shows and
 // leaves the others until they are shown. FitWindow gives one of those
 // its size at once, and leaves no hold on it. A window whose size is held
-// by hand is left alone, and so is every window while two clients are
-// attached.
+// by hand is left alone. With two clients of different sizes, a window
+// gets the size of the window shown, which follows the client that typed
+// last.
 func TestFitWindowGivesAWindowTheSizeItIsDue(t *testing.T) {
 	sock := tmuxtest.New(t, "")
 	s := At(sock.Path, "/dev/null")
@@ -1714,14 +1715,20 @@ func TestFitWindowGivesAWindowTheSizeItIsDue(t *testing.T) {
 	}
 	must(t)(s.run("set-option", "-w", "-u", "-t", other, "window-size"))
 
-	// Two clients.
-	term.Must("new-window", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
+	// Two clients, the second smaller and typing in the window shown,
+	// which follows it. The other keeps the first client's size.
+	term.Must("new-session", "-d", "-s", "far", "-x", "150", "-y", "36", "env", "-u", "TMUX", "tmux", "-S", sock.Path, "attach-session", "-t", "=ov")
 	clients(2)
+	term.Must("send-keys", "-t", "=far:", "x")
+	tmuxtest.Wait(t, "the window shown to follow the second client", func() (bool, string) {
+		now := windowSize(t, s, shown)
+		return strings.HasPrefix(now, "150x"), now
+	})
 	if err := s.FitWindow(other); err != nil {
 		t.Fatal(err)
 	}
-	if got := windowSize(t, s, other); got != was || held() != "" {
-		t.Fatalf("with two clients the window went from %s to %s, with %q set on it", was, got, held())
+	if got, want := windowSize(t, s, other), windowSize(t, s, shown); got != want || held() != "" {
+		t.Fatalf("with two clients the window is %s with %q set on it, want %s and no hold", got, held(), want)
 	}
 }
 
@@ -1761,6 +1768,52 @@ func TestAMoveIntoAFittedWindowReportsNoSize(t *testing.T) {
 	c.settle()
 	c.since("into a fitted window", at, "list", "focus-out", "focus-in", fmt.Sprintf("size-%dx%d", c.lastWidth, h))
 	c.since("into a fitted window", at, "agents", fmt.Sprintf("size-%dx6", c.lastWidth))
+}
+
+// With two clients of different sizes attached, as when one is on
+// another machine over ssh and the other was left open here, each window
+// keeps the size of the client that last showed it. The list moving into
+// one that the other client showed last would be resized with it, and
+// draw again. Fitted first, the window has the size of the one shown, and
+// neither pane of the column hears of a resize.
+func TestAMoveWithTwoClientsReportsNoSize(t *testing.T) {
+	c := newColumn(t)
+	c.lastWidth = 40
+	c.move(c.b, false)
+	c.move(c.a, false)
+	c.settle()
+	// A second, smaller client attaches and types, and the window shown
+	// follows it. b's window was last shown to the first.
+	shown := windowSize(t, c.s, c.list)
+	c.term.Must("new-session", "-d", "-s", "far", "-x", "170", "-y", "44", "env", "-u", "TMUX", "tmux", "-S", c.sock.Path, "attach-session", "-t", "=ov")
+	tmuxtest.Wait(t, "the second client to attach", func() (bool, string) {
+		out, _ := c.sock.Run("list-clients", "-F", "#{client_tty}")
+		return len(strings.Fields(out)) == 2, out
+	})
+	c.term.Must("send-keys", "-t", "=far:", "x")
+	tmuxtest.Wait(t, "the window shown to follow the second client", func() (bool, string) {
+		now := windowSize(t, c.s, c.list)
+		return now != shown && strings.HasPrefix(now, "170x"), now
+	})
+	if err := c.s.Resize(c.agents.ID, "6"); err != nil {
+		t.Fatal(err)
+	}
+	at := c.settle()
+	h := byID(t, c.s)[c.list].H
+	if stale, due := windowSize(t, c.s, c.b.ID), windowSize(t, c.s, c.list); stale == due {
+		t.Fatalf("b's window, not shown, is %s already", due)
+	}
+
+	if err := c.s.FitWindow(c.b.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.move(c.b, false)
+	if ps := byID(t, c.s); ps[c.list].Window != c.b.Window || ps[c.list].W != c.lastWidth || ps[c.list].H != h || ps[c.agents.ID].H != 6 {
+		t.Fatalf("the column is list %+v over agents %+v, want it beside %s, %d wide and the list %d high", ps[c.list], ps[c.agents.ID], c.b.ID, c.lastWidth, h)
+	}
+	c.settle()
+	c.since("with two clients", at, "list", "focus-out", "focus-in", fmt.Sprintf("size-%dx%d", c.lastWidth, h))
+	c.since("with two clients", at, "agents", fmt.Sprintf("size-%dx6", c.lastWidth))
 }
 
 // A move that fails halfway leaves none of its empty panes behind:
@@ -1819,30 +1872,43 @@ func TestAMoveThatFailsLeavesNoEmptyPane(t *testing.T) {
 // command. With one, the column is made of two empty panes, the second
 // split off whichever the first made, and the two change places with
 // them in one more command, which shows the window and closes the empty
-// panes. The pane with the keyboard is the one made active.
+// panes. The pane with the keyboard is the one made active. The window
+// is shown through the client of target's session typed in last, and
+// selected when no client shows that session.
 func TestMoveRunsTheSwapsAsOneCommand(t *testing.T) {
 	var got []string
+	clients := ""
 	s := Server{run: func(args ...string) (string, error) {
-		got = append(got, strings.Join(args, " "))
-		if args[0] == "split-window" {
+		switch args[0] {
+		case "list-clients":
+			return clients, nil
+		case "split-window":
+			got = append(got, strings.Join(args, " "))
 			return "%8\n%9\n", nil
 		}
+		got = append(got, strings.Join(args, " "))
 		return "", nil
 	}}
 	cells := "split-window -h -b -f -l 40 -t %5 -P -F #{pane_id}  ; split-window -d -v -l 6 -P -F #{pane_id} "
+	swaps := "swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; "
 	for _, c := range []struct {
-		with Carried
-		want []string
+		clients string
+		with    Carried
+		want    []string
 	}{
-		{Carried{}, []string{"join-pane -h -b -f -l 40 -s %0 -t %5"}},
-		{Carried{Pane: "%2", Lines: 6}, []string{cells,
-			"swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; select-pane -t %0 ; select-window -t %0 ; kill-pane -t %8 ; kill-pane -t %9"}},
-		{Carried{Pane: "%2", Lines: 6, Focus: true}, []string{cells,
-			"swap-pane -d -s %2 -t %9 ; swap-pane -d -s %0 -t %8 ; select-pane -t %2 ; select-window -t %2 ; kill-pane -t %8 ; kill-pane -t %9"}},
+		{"", Carried{}, []string{"join-pane -d -h -b -f -l 40 -s %0 -t %5 ; select-pane -t %0 ; select-window -t %0"}},
+		{"", Carried{Pane: "%2", Lines: 6}, []string{cells,
+			swaps + "select-pane -t %0 ; select-window -t %0 ; kill-pane -t %8 ; kill-pane -t %9"}},
+		{"", Carried{Pane: "%2", Lines: 6, Focus: true}, []string{cells,
+			swaps + "select-pane -t %2 ; select-window -t %2 ; kill-pane -t %8 ; kill-pane -t %9"}},
+		{"20\t/dev/ttys1\n30\t/dev/ttys2\n10\t/dev/ttys3", Carried{},
+			[]string{"join-pane -d -h -b -f -l 40 -s %0 -t %5 ; select-pane -t %0 ; switch-client -c /dev/ttys2 -t %0"}},
+		{"30\t/dev/ttys1\n20\t/dev/ttys2", Carried{Pane: "%2", Lines: 6, Focus: true}, []string{cells,
+			swaps + "select-pane -t %2 ; switch-client -c /dev/ttys1 -t %2 ; kill-pane -t %8 ; kill-pane -t %9"}},
 	} {
-		got = nil
+		got, clients = nil, c.clients
 		if err := s.Move("%0", "%5", "40", c.with); err != nil || !slices.Equal(got, c.want) {
-			t.Errorf("Move with %+v ran %q, %v, want %q", c.with, got, err, c.want)
+			t.Errorf("Move with %+v and clients %q ran %q, %v, want %q", c.with, c.clients, got, err, c.want)
 		}
 	}
 }

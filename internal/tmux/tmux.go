@@ -534,23 +534,57 @@ func (s Server) LatestClient() (int, error) {
 // latestClient reads LatestClient's list-clients output, a line of
 // activity and pid for each client. Malformed lines are skipped.
 func latestClient(out string) int {
+	pid, _ := strconv.Atoi(latest(out, func(f string) bool {
+		p, err := strconv.Atoi(f)
+		return err == nil && p > 0
+	}))
+	return pid
+}
+
+// latest reads list-clients output, a line of activity and one other
+// field for each client, and gives that field for the client used last:
+// of clients used in the same second, the last listed. Lines that are
+// malformed, or whose field is not valid, are skipped.
+func latest(out string, valid func(string) bool) string {
 	var at int64
-	pid := 0
+	field := ""
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 2 {
 			continue
 		}
-		a, err1 := strconv.ParseInt(f[0], 10, 64)
-		p, err2 := strconv.Atoi(f[1])
-		if err1 != nil || err2 != nil || p <= 0 {
+		a, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil || !valid(f[1]) {
 			continue
 		}
-		if pid == 0 || a >= at {
-			at, pid = a, p
+		if field == "" || a >= at {
+			at, field = a, f[1]
 		}
 	}
-	return pid
+	return field
+}
+
+// typing is the name of the client the user typed in last of those that
+// show pane's session, and "" when none does.
+func (s Server) typing(pane string) string {
+	out, err := s.run("list-clients", "-t", pane, "-F", "#{client_activity}\t#{client_name}")
+	if err != nil {
+		return ""
+	}
+	return latest(out, func(f string) bool { return f != "" })
+}
+
+// show is the command that makes pane's window the one its session shows,
+// through client when there is one. tmux sizes a window as it is shown,
+// to the client that last typed in that window, which for one not shown
+// since another client was used is that other client. A client that
+// switches to the window is its latest at once, so the window keeps the
+// size of the one it replaces, which FitWindow gave it.
+func show(pane, client string) []string {
+	if client == "" {
+		return []string{"select-window", "-t", pane}
+	}
+	return []string{"switch-client", "-c", client, "-t", pane}
 }
 
 // PaneSet is a pane option to set: its pane, name and value.
@@ -625,9 +659,14 @@ type Carried struct {
 // tmux says so of any active pane that changes window, and no other pane
 // is told anything. tmux runs the swaps as one command, which also closes
 // the empty panes, so no client draws a window with them in it.
+//
+// The window is shown through the client typed in last, as show says.
 func (s Server) Move(list, target, size string, with Carried) error {
+	client := s.typing(target)
 	if with.Pane == "" {
-		_, err := s.run("join-pane", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target)
+		args := []string{"join-pane", "-d", "-h", "-b", "-f", "-l", size, "-s", list, "-t", target, ";",
+			"select-pane", "-t", list, ";"}
+		_, err := s.run(append(args, show(list, client)...)...)
 		return err
 	}
 	// The second split names no pane: a command that follows one which
@@ -643,10 +682,11 @@ func (s Server) Move(list, target, size string, with Carried) error {
 		if with.Focus {
 			active = with.Pane
 		}
-		_, err = s.run("swap-pane", "-d", "-s", with.Pane, "-t", cells[1], ";",
+		args := []string{"swap-pane", "-d", "-s", with.Pane, "-t", cells[1], ";",
 			"swap-pane", "-d", "-s", list, "-t", cells[0], ";",
-			"select-pane", "-t", active, ";", "select-window", "-t", active, ";",
-			"kill-pane", "-t", cells[0], ";", "kill-pane", "-t", cells[1])
+			"select-pane", "-t", active, ";"}
+		args = append(args, show(active, client)...)
+		_, err = s.run(append(args, ";", "kill-pane", "-t", cells[0], ";", "kill-pane", "-t", cells[1])...)
 	}
 	if err != nil {
 		// tmux stops at the first command that fails, so an empty pane
@@ -705,24 +745,37 @@ func (s Server) Follow(list, target, size string, with Carried) error {
 	return err
 }
 
-// fitDue is the format that says whether a window is due the size of its
-// session's one client: one client is attached, and the window's size is
-// not held by hand.
-const fitDue = "#{&&:#{==:#{session_attached},1},#{!=:#{window-size},manual}}"
-
-// FitWindow gives pane's window the size its session's client calls for,
-// now. When the terminal changes size, tmux resizes the window it shows
-// and leaves each of the others until it is shown. A window that the
-// list has moved into is then resized with the list's column in it,
-// which takes its share of the change. Sized first, the window has
-// nothing left to change when it is shown. resize-window holds the size
-// by hand from then on, so the hold comes off again and the window goes
-// on following the terminal. With more clients than one, a window has
-// the size of the client that typed in it last, and with a size held by
-// hand it has that one: both are left as they are.
+// FitWindow gives pane's window the size of the window its session shows,
+// now. tmux sizes a window only while a client shows it: it leaves each of
+// the others at the size it had when last shown, and resizes it once it
+// is shown again. A window that the list has moved into is then resized
+// with the list's column in it, which takes its share of the change, and
+// every program in the window draws again. That happens when the terminal
+// changed size, and on every move while two clients of different sizes
+// are attached, the one on another machine over ssh and the one left
+// open here: each window keeps the size of the client that last showed
+// it. Sized first, the window has nothing left to change when it is
+// shown.
+//
+// The window shown has the size of the client that typed last, which is
+// the one moving the list. resize-window holds the size by hand from then
+// on, so the hold comes off again and the window goes on following the
+// clients. A window whose size is held by hand is left as it is.
 func (s Server) FitWindow(pane string) error {
-	_, err := s.run("if-shell", "-F", "-t", pane, fitDue,
-		"resize-window -A -t "+pane+" ; set-option -w -u -t "+pane+" window-size")
+	out, err := s.run("display-message", "-p", "-t", pane,
+		"#{window-size} #{W:#{?window_active,#{window_width} #{window_height},}}")
+	if err != nil {
+		return err
+	}
+	f := strings.Fields(out)
+	if len(f) != 3 {
+		return fmt.Errorf("tmux display-message: unexpected output %q", out)
+	}
+	if f[0] == "manual" {
+		return nil
+	}
+	_, err = s.run("resize-window", "-t", pane, "-x", f[1], "-y", f[2], ";",
+		"set-option", "-w", "-u", "-t", pane, "window-size")
 	return err
 }
 

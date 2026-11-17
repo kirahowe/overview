@@ -216,18 +216,26 @@ to the cursor's entry.
   on, and then passes on only where they ended. So a size that came and
   went shows when moves are a moment apart and not while a key repeats,
   and a test that wants to see every size has to wait the hold out.
-- When the terminal changes size, tmux resizes the window it shows and
-  leaves each of the others until it is shown. A window the list has
+- tmux sizes a window only while a client shows it, and leaves each of
+  the others at the size it had when last shown. A window the list has
   just moved into is then resized with the column in it, and the column
   takes its share: the list's width and the agents' pane's height
-  change, and the view puts them back a step at a time. So when the
+  change, and the view puts them back a step at a time. This happens
+  when the terminal changed size, and on every move while two clients
+  of different sizes share the session, as when one attaches over ssh
+  and the other was left open on the machine itself. So when the
   window the list is going to is not the size of the one it is in,
-  `stageCmd` first has `tmux.FitWindow` size it with `resize-window -A`,
-  which takes the size from the session's client, and then takes off
-  the hold that command leaves on the size. tmux does this only with
-  one client attached and no hold there already. With two clients a
-  window has the size of whichever typed in it last, and the list still
-  gets its width back from `keepWidth` afterwards.
+  `stageCmd` first has `tmux.FitWindow` give it the size of the window
+  the session shows, and then takes off the hold that `resize-window`
+  leaves on the size. A window whose size is held by hand is left
+  alone, and the list gets its width back from `keepWidth` afterwards.
+- tmux also keeps, for each window, the client that last typed in it,
+  and on showing a window resizes it to that client. For a window last
+  shown to the other client, that undoes the fit until the next key.
+  So `tmux.Move` shows the window with `switch-client -c` for the
+  client of the session typed in last, which makes that client the
+  window's own at once. It falls back to `select-window` when no client
+  shows the session.
 - tmux tells the active pane of a window that the keyboard went and came
   back whenever that pane changes window. `tmux.Move` swaps both panes
   with `-d` and makes active only the one that had the keys, so the
